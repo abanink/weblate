@@ -67,8 +67,18 @@ URL_PREFIX = settings.URL_PREFIX
 if URL_PREFIX:
     URL_PREFIX = URL_PREFIX.strip("/") + "/"
 
+# support csrf_exempt on redirect vieew
+from django.views.decorators.csrf import csrf_exempt
+
 real_patterns = [
     path("", weblate.trans.views.dashboard.home, name="home"),
+    # Redirect calls to /owa to /owa/
+    re_path(r"^owa$", csrf_exempt(RedirectView.as_view(url = "/owa/"))),
+    path(
+        "owa/",
+        weblate.trans.views.basic.owa_server,
+        name="owa_server"
+    ),
     path("projects/", weblate.trans.views.basic.list_projects, name="projects"),
     # Object display
     path(

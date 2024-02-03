@@ -18,10 +18,16 @@ from django.utils.http import escape_leading_slashes
 from django.utils.translation import gettext_lazy
 
 from weblate.lang.models import Language
-from weblate.trans.models import Change, Component, Project
+from weblate.trans.models import Change, Component, Project, OwaVerification
 from weblate.utils.errors import report_error
 from weblate.utils.site import get_site_url
 from weblate.utils.views import parse_path
+
+from weblate.logger import LOGGER
+from django.db.models.functions import Now
+from datetime import timedelta
+from urllib.parse import urlparse, urlsplit, urlunsplit, urlencode, parse_qs
+from django.http import HttpResponseRedirect
 
 CSP_TEMPLATE = (
     "default-src 'self'; style-src {0}; img-src {1}; script-src {2}; "
@@ -352,3 +358,109 @@ class SecurityMiddleware:
         response["Permissions-Policy"] = "interest-cohort=()"
 
         return response
+   
+class AttemptOpenWebAuthentication:
+    def __init__(self, get_response=None):
+        self.get_response = get_response
+        
+    def __call__(self, request):
+       
+        LOGGER.info("Hit AttemptOpenWebAuthentication") 
+        
+        zid = request.GET.get('zid')
+        if zid:
+            LOGGER.info(f"Found user handle {zid}")
+            domain = zid.rpartition('@')[2]
+           
+            # Create a new URL equal to the current request, but remove the zid query parameter 
+            abs_uri = request.build_absolute_uri()
+            LOGGER.debug(f"This request's absolute URI: {abs_uri}")
+            (scheme, netloc, path, query, fragment) = urlsplit(abs_uri)
+            param_dict = parse_qs(query)
+            del(param_dict['zid'])
+            new_query = urlencode(param_dict, True)
+            # Force the scheme to https
+            # I had to do this as my test env was using http behind an SSL terminating reverse proxy
+            remote_dest = urlunsplit(('https', netloc, path, new_query, fragment))
+            LOGGER.debug(f"Remote destination = {remote_dest}")
+            
+            remote_url = f"https://{domain}/magic?f=&owa=1&bdest={remote_dest.encode('utf-8').hex()}"
+            
+            LOGGER.debug(f"Redirecting to {remote_url}")
+            return HttpResponseRedirect(remote_url)
+            
+            
+        return self.get_response(request)
+     
+class ValidateOpenWebAuthentication:
+    """Middleware to process the owt query parameter and log the user in if the token can be verified"""
+
+    def __init__(self, get_response=None):
+        self.get_response = get_response
+
+    def purge_tokens(self):
+        # purge tokens older than 3 minutes
+        nb_purged, _ = OwaVerification.objects.filter(created_at__lte = Now()-timedelta(minutes=3)).delete()
+        LOGGER.debug(f"{nb_purged} token(s) purged")
+        return        
+
+    def __call__(self, request):
+        LOGGER.info("in Middleware ValidateOpenWebAuth")
+        
+        # detect owt tag
+        owt = request.GET.get('owt')
+        if owt is None:
+            response = self.get_response(request)
+            return response
+
+        LOGGER.info(f"Found OpenWebAuth token {owt}")
+        
+        # purge older tokens
+        self.purge_tokens() 
+        
+        # match it in the DB
+        try:
+            match = OwaVerification.objects.get(token=owt)
+            user_url = match.remote_url
+            LOGGER.info(f"owt token found. Remote profile = {user_url}")
+
+		    # https://codeberg.org/streams/streams/src/branch/dev/spec/OpenWebAuth/Home.md
+		    #  The OpenWebAuth token service MUST discard tokens after first use and SHOULD discard unused tokens within a few minutes of generation.
+            match.delete()
+
+            # TODO find the user from the token
+            
+            # This could be used to explicitely set the user to authenticate
+            # It should be picked up by RemoteUserMiddleware to create and log in the user based on the trusted REMOTE_USER meta header in the request
+            # as long as RemoteUserMiddleware comes after this middleware
+            # I also had to move the messageMiddleware before the authentication middleware to avoid an exception which said
+            # "django.contrib.messages.api.MessageFailure: You cannot add messages without installing django.contrib.messages.middleware.MessageMiddleware"
+            # but after that: yeah!
+            # next: get the email address from the webfinger and set it as user email address + avatar
+            request.META['REMOTE_USER'] = user_url
+            
+            # This call will try all authentication backends, including RemoteUserBackend, and so return a new or existing remote user based on the REMOTE_USER
+         #   LOGGER.info("Starting authentication")
+         #   user = authenticate(request, username=user_url) 
+            
+         #   if user is None:
+                # TODO investigate why user is None?
+                # does it check the RemoteUserBackend? (which should create a new user)
+                # if it checks RemoteUserBackend, what happens; how to debug?
+         #       LOGGER.info("User is None :(")
+         #       response = self.get_response(request)
+         #       return response
+            
+         #   LOGGER.info(f"Logging in {user.username}")
+         #   LOGGER.debug(f"User object: {user}")
+         #   login(request, user=user)
+            
+         #   LOGGER.info("Login OK, proceeding")
+            response = self.get_response(request)
+            return response
+            
+
+        except OwaVerification.DoesNotExist:
+            response = self.get_response(request)
+            return response
+

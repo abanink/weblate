@@ -8,7 +8,7 @@ import re
 
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.html import format_html
 from django.utils.http import urlencode
@@ -69,7 +69,20 @@ from weblate.utils.views import (
     show_form_errors,
     try_set_language,
 )
-
+from weblate.logger import LOGGER
+import json
+from asgiref.sync import async_to_sync
+from django.views.decorators.csrf import csrf_exempt
+from urllib.parse import urlparse, urlunparse
+from bovine.crypto.signature_checker import SignatureChecker
+from bovine.crypto.types import CryptographicIdentifier
+from bovine.clients import lookup_uri_with_webfinger_raw
+from aiohttp import ClientSession
+import string
+import random
+from weblate.trans.models.owa_verification import OwaVerification
+import rsa
+import base64
 
 @never_cache
 def list_projects(request):
@@ -785,7 +798,175 @@ def guide(request, path):
         },
     )
 
+@csrf_exempt
+@async_to_sync
+async def owa_server(request):
+    
+    ret_response = { "success": "false" }
+    LOGGER.info('Hit OWA endpoint')
+   
+    public_key = ""
+    
+    def urlToString(url):
+        return str(url)
 
+    async def key_retriever(url):
+        nonlocal public_key
+        LOGGER.debug("key retriever called")
+        
+        # First check if we have it in our cache
+        # TODO
+        
+        # not found => perform webfinger lookup
+        
+        # extract domain from url
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc
+        LOGGER.info(f"Performing webfinger lookup for url {url} on domain {domain}")
+        # Creating a new aiohttp.ClientSession() here, this is overhead
+        # would be better to reuse an already existing ClientSession or instantiate it only once and reuse (in __init__.py ?)
+        wf_result, _ = await lookup_uri_with_webfinger_raw(ClientSession(), url, domain)
+        
+        LOGGER.debug(f"Webfinger result = {wf_result}")
+        # extract public key from webfinger result
+        public_key = None
+        pubkey_property = "https://w3id.org/security/v1#publicKeyPem"
+        # TODO also return None if the public key is not a valid format?
+        if wf_result.properties is None or wf_result.properties[pubkey_property] is None:
+            LOGGER.info(f"Unable to retrieve public key from webfinger for url {url}")
+            return None
+            
+        public_key = wf_result.properties[pubkey_property]
+        LOGGER.debug(f"Public key retrieved: {public_key}") 
+
+        # extract remote user address from webfinger
+        # it could be in the subject or in the aliases
+        address = None
+        subject = wf_result.subject
+        if subject is not None:
+            subject = urlToString(subject)
+            if subject.startswith('acct:'):
+                address = subject.removeprefix('acct:')
+            
+        aliases = wf_result.aliases
+        if aliases is not None and isinstance(wf_result.aliases, list):
+            for a in wf_result.aliases:
+                a = urlToString(a)
+                if a.startswith('acct:'):
+                    address = a.removeprefix('acct:')
+                    break
+
+        if address is None:
+            LOGGER.info(f"Unable to retrieve address from webfinger for url {url}")
+            return None
+        
+        LOGGER.debug(f"Found address {address} from webfinger")
+        
+        # TODO if we didn't know the remote user before, or we have reason to believe the avatar might have changed, request the avatar to the original site
+        # This can be done fire-and-forget (no need to await)
+        # There is an "avatar" cache foreseen in weblate/settings.py => how to use it to store remote user's avatars?
+
+        return CryptographicIdentifier.from_pem(public_key, address)
+
+    def get_data():
+        return request.prepare().body    
+    
+    def generate_token(length = 32):
+        # TODO this should be run through a whirlpool hash but "pip install whirlpool" failed compilation so I skipped that
+        characters = string.ascii_letters + string.digits
+        return ''.join(random.choice(characters) for i in range(length))
+        
+    # Using bovine library for signature checking
+    req = {
+        "method": request.method,
+        
+        # problem is that the incoming request was redirected from /owa to /owa/ in urls.py
+        # so the signature does not check out any more with the sent url ("/owa") if the incoming url is "/owa/"
+        # TODO: check if the wrapper @no_append_slash would help
+        
+        # "url": request.get_full_path(),
+        "url": "/owa",
+        "headers": request.headers,
+        "get_data": get_data,
+    }
+    LOGGER.info(f"req = {req}")
+
+    # logging for bovine enabled in file weblate/settings.py:
+    # $ grep bovine weblate/settings.py 
+        # "bovine": {"handlers": [DEFAULT_LOG], "level": DEFAULT_LOGLEVEL},
+    result = await SignatureChecker(key_retriever).validate_signature(req["method"], req["url"], req["headers"], req["get_data"])
+
+    LOGGER.info(f"Signature checker result = {result}")
+    if result is None:
+        LOGGER.info("Signature check failed - bailing out")
+        return JsonResponse(ret_response)
+    
+    # generate and store the OWA token
+    token = generate_token()
+    owa_verification = OwaVerification(token = token, remote_url = result)
+    await owa_verification.asave()
+    
+    # encrypt the token with the public key of the remote user
+    rsaPubKey = rsa.PublicKey.load_pkcs1_openssl_pem(public_key)
+    encrypted_token = base64.b64encode(rsa.encrypt(token.encode(), rsaPubKey)).decode()
+    
+    ret_response["success"] = "true"
+    ret_response["encrypted_token"] = encrypted_token
+    
+    return JsonResponse(ret_response)
+    
+    # Below code is not executed - keeping it as backup in case I want to port the php code instead of using a library
+    # see https://github.com/pixelfed/pixelfed/pull/4825/files
+    
+    def parse_sigheader(header):
+        ret = {}
+        
+        m = re.search(r'keyId="(.*?)"', header)
+        if m is not None:
+            ret["keyId"] = m.group(1)
+            
+        m = re.search(r'created=([0-9]*)', header)
+        if m is not None:
+            ret["created"] = m.group(1)
+            
+        # TODO for expires, algorithm, headers and signature
+        
+        if (ret.get("signature") and ret.get("algorithm") and not ret.get("headers")):
+            ret["headers"] = ["date"]
+            
+        LOGGER.info(f"parse_sigheader: returning {ret}")
+        return ret
+    
+    auth_header = request.headers.get("Authorization", None)
+    if auth_header is None:
+        LOGGER.info(f"No Auth header present. all headers: {request.headers}")
+        return JsonResponse(ret_response)
+    LOGGER.info(f"Auth header: {auth_header}")
+    
+    if not auth_header.strip().startswith('Signature'):
+        LOGGER.info('Missing Signature in Authorization header!')
+        return JsonResponse(ret_response)
+    
+    sig_block = parse_sigheader(auth_header)
+    keyId = sig_block.get("keyId")
+    if keyId:
+        LOGGER.info(f"Found keyId = {keyId}")
+        keyId = re.sub("acct:", "", keyId)
+        
+        # strip all fragments and query parameters from keyId
+        parsed = urlparse(keyId)
+        if parsed.scheme.startswith("http"):
+            parsed._replace(query='', fragment='')
+            keyId = urlunparse(parsed)
+            
+        LOGGER.info(f"cleaned keyId = {keyId}")
+        
+        # now find the user with this keyId
+        # r = find record including user's public key
+        r = None
+        if r is None:
+            LOGGER.info("keyID not found - performing webfinger lookup now")
+           
 class ProjectLanguageRedirectView(RedirectView):
     permanent = True
     query_string = True
