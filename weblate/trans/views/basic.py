@@ -83,6 +83,9 @@ import random
 from weblate.trans.models.owa_verification import OwaVerification
 import rsa
 import base64
+from weblate.accounts.avatar import get_avatar_cache_key
+from django.core.cache import InvalidCacheBackendError, caches
+from weblate.utils.requests import request as weblate_request
 
 @never_cache
 def list_projects(request):
@@ -805,13 +808,14 @@ async def owa_server(request):
     ret_response = { "success": "false" }
     LOGGER.info('Hit OWA endpoint')
    
-    public_key = ""
+    public_key = None 
+    avatar_link = None
     
     def urlToString(url):
         return str(url)
 
     async def key_retriever(url):
-        nonlocal public_key
+        nonlocal public_key, avatar_link
         LOGGER.debug("key retriever called")
         
         # First check if we have it in our cache
@@ -829,7 +833,6 @@ async def owa_server(request):
         
         LOGGER.debug(f"Webfinger result = {wf_result}")
         # extract public key from webfinger result
-        public_key = None
         pubkey_property = "https://w3id.org/security/v1#publicKeyPem"
         # TODO also return None if the public key is not a valid format?
         if wf_result.properties is None or wf_result.properties[pubkey_property] is None:
@@ -849,8 +852,8 @@ async def owa_server(request):
                 address = subject.removeprefix('acct:')
             
         aliases = wf_result.aliases
-        if aliases is not None and isinstance(wf_result.aliases, list):
-            for a in wf_result.aliases:
+        if aliases is not None and isinstance(aliases, list):
+            for a in aliases:
                 a = urlToString(a)
                 if a.startswith('acct:'):
                     address = a.removeprefix('acct:')
@@ -862,9 +865,14 @@ async def owa_server(request):
         
         LOGGER.debug(f"Found address {address} from webfinger")
         
-        # TODO if we didn't know the remote user before, or we have reason to believe the avatar might have changed, request the avatar to the original site
-        # This can be done fire-and-forget (no need to await)
-        # There is an "avatar" cache foreseen in weblate/settings.py => how to use it to store remote user's avatars?
+        # read the avatar from the webfinger link http://webfinger.net/rel/avatar
+        avatar_link = None
+        links = wf_result.links
+        if links is not None and isinstance(links, list):
+            for l in links:
+                if l.rel == "http://webfinger.net/rel/avatar":
+                    avatar_link = l.href
+                    break
 
         return CryptographicIdentifier.from_pem(public_key, address)
 
@@ -910,6 +918,23 @@ async def owa_server(request):
     rsaPubKey = rsa.PublicKey.load_pkcs1_openssl_pem(public_key)
     encrypted_token = base64.b64encode(rsa.encrypt(token.encode(), rsaPubKey)).decode()
     
+    LOGGER.debug(f"Avatar link: {avatar_link}")
+    if avatar_link is not None:
+        # store the avatar in the cache, it will be retrieved when logged in
+        # TODO make sure all sizes in weblate/accounts/views.py => "user_avatar" are supported. 
+        avatar_cache_key = get_avatar_cache_key(result, 24)
+        
+        # Try using avatar specific cache if available
+        try:
+            cache = caches["avatar"]
+        except InvalidCacheBackendError:
+            cache = caches["default"]
+        
+        LOGGER.info(f"Requesting avatar on {avatar_link}")    
+        avatar_image = weblate_request("get", avatar_link)
+        cache.set(avatar_cache_key, avatar_image)
+        LOGGER.info(f"Stored avatar in cache at key {avatar_cache_key}")
+
     ret_response["success"] = "true"
     ret_response["encrypted_token"] = encrypted_token
     

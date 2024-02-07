@@ -364,7 +364,6 @@ class AttemptOpenWebAuthentication:
         self.get_response = get_response
         
     def __call__(self, request):
-       
         LOGGER.info("Hit AttemptOpenWebAuthentication") 
         
         zid = request.GET.get('zid')
@@ -428,37 +427,16 @@ class ValidateOpenWebAuthentication:
 		    #  The OpenWebAuth token service MUST discard tokens after first use and SHOULD discard unused tokens within a few minutes of generation.
             match.delete()
 
-            # TODO find the user from the token
-            
             # This could be used to explicitely set the user to authenticate
             # It should be picked up by RemoteUserMiddleware to create and log in the user based on the trusted REMOTE_USER meta header in the request
             # as long as RemoteUserMiddleware comes after this middleware
             # I also had to move the messageMiddleware before the authentication middleware to avoid an exception which said
             # "django.contrib.messages.api.MessageFailure: You cannot add messages without installing django.contrib.messages.middleware.MessageMiddleware"
             # but after that: yeah!
-            # next: get the email address from the webfinger and set it as user email address + avatar
             request.META['REMOTE_USER'] = user_url
             
-            # This call will try all authentication backends, including RemoteUserBackend, and so return a new or existing remote user based on the REMOTE_USER
-         #   LOGGER.info("Starting authentication")
-         #   user = authenticate(request, username=user_url) 
-            
-         #   if user is None:
-                # TODO investigate why user is None?
-                # does it check the RemoteUserBackend? (which should create a new user)
-                # if it checks RemoteUserBackend, what happens; how to debug?
-         #       LOGGER.info("User is None :(")
-         #       response = self.get_response(request)
-         #       return response
-            
-         #   LOGGER.info(f"Logging in {user.username}")
-         #   LOGGER.debug(f"User object: {user}")
-         #   login(request, user=user)
-            
-         #   LOGGER.info("Login OK, proceeding")
             response = self.get_response(request)
             return response
-            
 
         except OwaVerification.DoesNotExist:
             response = self.get_response(request)
