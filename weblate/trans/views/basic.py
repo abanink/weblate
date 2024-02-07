@@ -810,19 +810,13 @@ async def owa_server(request):
    
     public_key = None 
     avatar_link = None
+    keyId = None
+    remote_user_cache = caches["default"]
     
     def urlToString(url):
         return str(url)
 
-    async def key_retriever(url):
-        nonlocal public_key, avatar_link
-        LOGGER.debug("key retriever called")
-        
-        # First check if we have it in our cache
-        # TODO
-        
-        # not found => perform webfinger lookup
-        
+    async def perform_webfinger(url):
         # extract domain from url
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
@@ -832,16 +826,20 @@ async def owa_server(request):
         wf_result, _ = await lookup_uri_with_webfinger_raw(ClientSession(), url, domain)
         
         LOGGER.debug(f"Webfinger result = {wf_result}")
+        return wf_result 
+    
+    def extract_publickey_from_webfinger(wf_result):
         # extract public key from webfinger result
         pubkey_property = "https://w3id.org/security/v1#publicKeyPem"
         # TODO also return None if the public key is not a valid format?
         if wf_result.properties is None or wf_result.properties[pubkey_property] is None:
             LOGGER.info(f"Unable to retrieve public key from webfinger for url {url}")
-            return None
             
         public_key = wf_result.properties[pubkey_property]
         LOGGER.debug(f"Public key retrieved: {public_key}") 
-
+        return public_key
+    
+    def extract_address_from_webfinger(wf_result):
         # extract remote user address from webfinger
         # it could be in the subject or in the aliases
         address = None
@@ -864,7 +862,9 @@ async def owa_server(request):
             return None
         
         LOGGER.debug(f"Found address {address} from webfinger")
-        
+        return address
+    
+    def extract_avatar_from_webfinger(wf_result):
         # read the avatar from the webfinger link http://webfinger.net/rel/avatar
         avatar_link = None
         links = wf_result.links
@@ -873,7 +873,48 @@ async def owa_server(request):
                 if l.rel == "http://webfinger.net/rel/avatar":
                     avatar_link = l.href
                     break
+        return avatar_link
+    
+    def create_cache_key_from_remote_user(remote_user):
+        return f"remote_user_{remote_user}"
+        
+    def store_remote_user_in_cache(key, wf_result):
+        public_key = extract_publickey_from_webfinger(wf_result)
+        address = extract_address_from_webfinger(wf_result)
+        avatar_link = extract_avatar_from_webfinger(wf_result)
+        remote_user = { 
+                       "pubkey": public_key,
+                       "address": address,
+                       "avatar_link": avatar_link
+                       }
+        remote_user_cache.set(create_cache_key_from_remote_user(key), remote_user)
+        return remote_user
 
+    async def key_retriever(url):
+        nonlocal remote_user_cache, avatar_link, public_key, keyId
+        LOGGER.debug(f"key retriever called, url = {url}")
+        
+        # was retrieved from signature header by SignatureChecker.validate_signature
+        # stored here in keyId for later use
+        keyId = url
+        
+        # First check if we have it in our cache
+        remote_user_from_cache = remote_user_cache.get(create_cache_key_from_remote_user(url))
+        if remote_user_from_cache is None:
+            wf_result = await perform_webfinger(url)
+            if wf_result:
+                remote_user_from_cache = store_remote_user_in_cache(url, wf_result)
+        else:
+            LOGGER.info(f"Remote user {url} found in cache!")
+          
+        if remote_user_from_cache is None:
+            return None
+          
+        # set for later use 
+        public_key = remote_user_from_cache["pubkey"]
+        address = remote_user_from_cache["address"]
+        avatar_link = remote_user_from_cache["avatar_link"]
+        
         return CryptographicIdentifier.from_pem(public_key, address)
 
     def get_data():
@@ -906,8 +947,20 @@ async def owa_server(request):
 
     LOGGER.info(f"Signature checker result = {result}")
     if result is None:
-        LOGGER.info("Signature check failed - bailing out")
-        return JsonResponse(ret_response)
+        LOGGER.info("Signature check failed - retrying with fresh public key")
+       
+        if keyId: 
+            # remove cached user - it's outdated
+            remote_user_cache.delete(create_cache_key_from_remote_user(keyId))
+            result = await SignatureChecker(key_retriever).validate_signature(req["method"], req["url"], req["headers"], req["get_data"])
+            
+            if result is None:
+                LOGGER.info("Signature check failed for refreshed public key - bailing out")
+                return JsonResponse(ret_response)
+        else:
+            LOGGER.info("Key ID could not be determined - FAIL")
+            return JsonResponse(ret_response)
+   
     
     # generate and store the OWA token
     token = generate_token()
@@ -929,11 +982,13 @@ async def owa_server(request):
             cache = caches["avatar"]
         except InvalidCacheBackendError:
             cache = caches["default"]
-        
-        LOGGER.info(f"Requesting avatar on {avatar_link}")    
-        avatar_image = weblate_request("get", avatar_link)
-        cache.set(avatar_cache_key, avatar_image)
-        LOGGER.info(f"Stored avatar in cache at key {avatar_cache_key}")
+       
+        avatar_image = cache.get(avatar_cache_key)
+        if avatar_image is None: 
+            LOGGER.info(f"Requesting avatar on {avatar_link}")    
+            avatar_image = weblate_request("get", avatar_link)
+            cache.set(avatar_cache_key, avatar_image)
+            LOGGER.info(f"Stored avatar in cache at key {avatar_cache_key}")
 
     ret_response["success"] = "true"
     ret_response["encrypted_token"] = encrypted_token
