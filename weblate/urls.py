@@ -69,14 +69,14 @@ if URL_PREFIX:
 
 # support csrf_exempt on redirect vieew
 from django.views.decorators.csrf import csrf_exempt
+# support exception to APPEND_SLASH policy
+from django.views.decorators.common import no_append_slash
 
 real_patterns = [
     path("", weblate.trans.views.dashboard.home, name="home"),
-    # Redirect calls to /owa to /owa/
-    re_path(r"^owa$", csrf_exempt(RedirectView.as_view(url = "/owa/"))),
     path(
-        "owa/",
-        weblate.trans.views.basic.owa_server,
+        "owa",
+        no_append_slash(csrf_exempt(weblate.trans.views.basic.owa_server)),
         name="owa_server"
     ),
     path("projects/", weblate.trans.views.basic.list_projects, name="projects"),

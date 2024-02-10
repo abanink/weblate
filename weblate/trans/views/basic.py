@@ -801,7 +801,6 @@ def guide(request, path):
         },
     )
 
-@csrf_exempt
 @async_to_sync
 async def owa_server(request):
     
@@ -928,13 +927,7 @@ async def owa_server(request):
     # Using bovine library for signature checking
     req = {
         "method": request.method,
-        
-        # problem is that the incoming request was redirected from /owa to /owa/ in urls.py
-        # so the signature does not check out any more with the sent url ("/owa") if the incoming url is "/owa/"
-        # TODO: check if the wrapper @no_append_slash would help
-        
-        # "url": request.get_full_path(),
-        "url": "/owa",
+        "url": request.get_full_path(),
         "headers": request.headers,
         "get_data": get_data,
     }
