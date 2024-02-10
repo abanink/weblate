@@ -8,13 +8,13 @@ import re
 
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, HttpResponseNotFound
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.html import format_html
 from django.utils.http import urlencode
 from django.utils.translation import gettext
 from django.views.decorators.cache import never_cache
-from django.views.generic import RedirectView
+from django.views.generic import View, RedirectView
 
 from weblate.formats.models import EXPORTERS
 from weblate.lang.models import Language
@@ -86,6 +86,7 @@ import base64
 from weblate.accounts.avatar import get_avatar_cache_key
 from django.core.cache import InvalidCacheBackendError, caches
 from weblate.utils.requests import request as weblate_request
+from django.conf import settings
 
 @never_cache
 def list_projects(request):
@@ -833,7 +834,7 @@ async def owa_server(request):
         pubkey_property = "https://w3id.org/security/v1#publicKeyPem"
         # TODO also return None if the public key is not a valid format?
         if wf_result.properties is None or wf_result.properties[pubkey_property] is None:
-            LOGGER.info(f"Unable to retrieve public key from webfinger for url {url}")
+            LOGGER.info(f"Unable to retrieve public key from webfinger")
             
         public_key = wf_result.properties[pubkey_property]
         LOGGER.debug(f"Public key retrieved: {public_key}") 
@@ -858,7 +859,7 @@ async def owa_server(request):
                     break
 
         if address is None:
-            LOGGER.info(f"Unable to retrieve address from webfinger for url {url}")
+            LOGGER.info(f"Unable to retrieve address from webfinger")
             return None
         
         LOGGER.debug(f"Found address {address} from webfinger")
@@ -1046,6 +1047,68 @@ async def owa_server(request):
         r = None
         if r is None:
             LOGGER.info("keyID not found - performing webfinger lookup now")
+ 
+class Webfinger(View):
+    def get(self, request, *args, **kwargs):
+        # TODO activate when testing on a https url
+      #  if request.method != "https":
+      #      return HttpResponse(status=500, reason="Webfinger requires HTTPS")
+            
+        query_string = request.GET.keys()
+        LOGGER.debug(f"Hit Webfinger, query string = {query_string}")
+       
+        resource = request.GET.get("resource")
+        LOGGER.debug(f"Resource = {resource}")
+        if not resource:
+            return HttpResponseNotFound()
+        
+        # determine if it is a request for the site actor
+        # if yes, supported
+        # if no, TODO
+        
+        if (
+            resource == f"https://{settings.SITE_DOMAIN}" or
+            resource == f"acct:sys@{settings.SITE_DOMAIN}"
+            ):
+          
+            # TODO this is just a sample key for testing, replace by an actual site actor priv/public key pair 
+            sample_pubkey = """-----BEGIN PUBLIC KEY-----
+MFswDQYJKoZIhvcNAQEBBQADSgAwRwJAXWRPQyGlEY+SXz8Uslhe+MLjTgWd8lf/
+nA0hgCm9JFKC1tq1S73cQ9naClNXsMqY7pwPt1bSY8jYRqHHbdoUvwIDAQAB
+-----END PUBLIC KEY-----
+"""
+
+# The corresponding private key is:
+            sample_privkey = """-----BEGIN RSA PRIVATE KEY-----
+MIIBOQIBAAJAXWRPQyGlEY+SXz8Uslhe+MLjTgWd8lf/nA0hgCm9JFKC1tq1S73c
+Q9naClNXsMqY7pwPt1bSY8jYRqHHbdoUvwIDAQABAkAfJkz1pCwtfkig8iZSEf2j
+VUWBiYgUA9vizdJlsAZBLceLrdk8RZF2YOYCWHrpUtZVea37dzZJe99Dr53K0UZx
+AiEAtyHQBGoCVHfzPM//a+4tv2ba3tx9at+3uzGR86YNMzcCIQCCjWHcLW/+sQTW
+OXeXRrtxqHPp28ir8AVYuNX0nT1+uQIgJm158PMtufvRlpkux78a6mby1oD98Ecx
+jp5AOhhF/NECICyHsQN69CJ5mt6/R01wMOt5u9/eubn76rbyhPgk0h7xAiEAjn6m
+EmLwkIYD9VnZfp9+2UoWSh0qZiTIHyNwFpJH78o=
+-----END RSA PRIVATE KEY-----
+"""
+
+            response = {
+                "subject": resource,
+                "properties": {
+                    "https://w3id.org/security/v1#publicKeyPem": sample_pubkey
+                },
+                "links": [
+                {
+                       "rel": "http://purl.org/openwebauth/v1",
+                       "type": "application/x-nomad+json",
+                       "href": f"https://{settings.SITE_DOMAIN}/owa"
+                }
+                ]
+            }
+            LOGGER.debug(f"Sending response: {response}")
+        else:
+            LOGGER.info("Webfinger request for non-site actor resource not supported")   
+            return HttpResponseNotFound()
+            
+        return JsonResponse(response)
            
 class ProjectLanguageRedirectView(RedirectView):
     permanent = True

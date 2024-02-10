@@ -9,7 +9,7 @@ from django.conf import settings
 from django.urls import include, path, re_path
 from django.views.decorators.cache import cache_control, cache_page
 from django.views.decorators.vary import vary_on_cookie
-from django.views.generic import RedirectView, TemplateView
+from django.views.generic import View, RedirectView, TemplateView
 
 import weblate.accounts.urls
 import weblate.accounts.views
@@ -69,6 +69,7 @@ if URL_PREFIX:
 
 # support csrf_exempt on redirect vieew
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.common import no_append_slash
 
 real_patterns = [
     path("", weblate.trans.views.dashboard.home, name="home"),
@@ -78,6 +79,11 @@ real_patterns = [
         "owa/",
         weblate.trans.views.basic.owa_server,
         name="owa_server"
+    ),
+    path(
+        ".well-known/webfinger",
+        csrf_exempt(no_append_slash(weblate.trans.views.basic.Webfinger.as_view())),
+        name="webfinger"
     ),
     path("projects/", weblate.trans.views.basic.list_projects, name="projects"),
     # Object display
