@@ -9,16 +9,20 @@ from __future__ import annotations
 import os
 import tempfile
 from copy import copy
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from django.utils.functional import cached_property
 from django.utils.translation import gettext
 from weblate_language_data.countries import DEFAULT_LANGS
 
-from weblate.trans.util import get_string
+from weblate.trans.util import get_string, join_plural
 from weblate.utils.errors import add_breadcrumb
 from weblate.utils.hash import calculate_hash
 from weblate.utils.state import STATE_TRANSLATED
+
+if TYPE_CHECKING:
+    from django_stubs_ext import StrOrPromise
+
 
 EXPAND_LANGS = {code[:2]: f"{code[:2]}_{code[3:].upper()}" for code in DEFAULT_LANGS}
 
@@ -242,7 +246,7 @@ class TranslationUnit:
 class TranslationFormat:
     """Generic object defining file format loader."""
 
-    name: str = ""
+    name: StrOrPromise = ""
     format_id: str = ""
     monolingual: bool | None = None
     check_flags: tuple[str, ...] = ()
@@ -255,7 +259,7 @@ class TranslationFormat:
     new_translation: str | bytes | None = None
     autoaddon: dict[str, dict[str, str]] = {}
     create_empty_bilingual: bool = False
-    bilingual_class = None
+    bilingual_class: type[TranslationFormat] | None = None
     create_style = "create"
     has_multiple_strings: bool = False
     supports_explanation: bool = False
@@ -362,7 +366,9 @@ class TranslationFormat:
         except KeyError:
             return None
 
-    def _find_unit_monolingual(self, context: str, source: str) -> tuple[Any, bool]:
+    def _find_unit_monolingual(
+        self, context: str, source: str
+    ) -> tuple[TranslationUnit, bool]:
         # We search by ID when using template
         id_hash = self._calculate_string_hash(context, source)
         try:
@@ -388,14 +394,16 @@ class TranslationFormat:
             self.has_template or self.is_template, get_string(source), context
         )
 
-    def _find_unit_bilingual(self, context: str, source: str) -> tuple[Any, bool]:
+    def _find_unit_bilingual(
+        self, context: str, source: str
+    ) -> tuple[TranslationUnit, bool]:
         id_hash = self._calculate_string_hash(context, source)
         try:
             return (self._unit_index[id_hash], False)
         except KeyError:
             raise UnitNotFoundError(context, source)
 
-    def find_unit(self, context: str, source: str | None = None) -> tuple[Any, bool]:
+    def find_unit(self, context: str, source: str) -> tuple[TranslationUnit, bool]:
         """
         Find unit by context and source.
 
@@ -659,7 +667,9 @@ class TranslationFormat:
             if self.is_template:
                 template_unit = unit
             else:
-                template_unit = self._find_unit_monolingual(key, source)
+                template_unit = self._find_unit_monolingual(
+                    key, join_plural(source) if isinstance(source, list) else source
+                )[0]
         else:
             template_unit = None
         result = self.unit_class(self, unit, template_unit)
@@ -716,7 +726,7 @@ class TranslationFormat:
         self._invalidate_units()
         return result
 
-    def cleanup_blank(self) -> list[str]:
+    def cleanup_blank(self) -> list[str] | None:
         """
         Removes strings without translations.
 

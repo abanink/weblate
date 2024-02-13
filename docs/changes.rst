@@ -21,6 +21,8 @@ Not yet released.
 * File downloads now honor :http:header:`If-Modified-Since`.
 * :ref:`num-words` support for CJK languages.
 * :ref:`addon-weblate.discovery.discovery` now preserves :ref:`componentlists`.
+* Nicer formatting of :ref:`glossary` tooltips.
+* :http:get:`/api/components/(string:project)/(string:component)/` now includes information about linked component.
 
 **Bug fixes**
 
@@ -31,7 +33,8 @@ Not yet released.
 
 **Compatibility**
 
-* Last changed timestamp now reflects changes outside Weblate as well. This affects both :ref:`api` and user interface.
+* Last changed timestamp now reflects changes outside Weblate as well. This affects both :ref:`api` and the user interface.
+* Releases are signed by Sigstore instead of PGP, see :ref:`verify`.
 
 **Upgrading**
 

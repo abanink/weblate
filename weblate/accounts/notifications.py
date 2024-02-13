@@ -40,6 +40,8 @@ from weblate.utils.version import USER_AGENT
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from django_stubs_ext import StrOrPromise
+
 FREQ_NONE = 0
 FREQ_INSTANT = 1
 FREQ_DAILY = 2
@@ -72,7 +74,7 @@ NOTIFICATIONS = []
 NOTIFICATIONS_ACTIONS = {}
 
 
-def get_email_headers(notification: str) -> dict[str:str]:
+def get_email_headers(notification: str) -> dict[str, str]:
     return {
         "X-Mailer": "Weblate" if settings.HIDE_VERSION else USER_AGENT,
         "X-Weblate-Notification": notification,
@@ -91,7 +93,7 @@ def register_notification(handler):
 
 class Notification:
     actions: Iterable[int] = ()
-    verbose: str = ""
+    verbose: StrOrPromise = ""
     template_name: str = ""
     digest_template: str = "digest"
     filter_languages: bool = False
@@ -273,7 +275,7 @@ class Notification:
             result["changes"] = changes
         if subscription is not None:
             result["unsubscribe_url"] = "{}?i={}".format(
-                reverse("unsubscribe"), TimestampSigner().sign(subscription.pk)
+                reverse("unsubscribe"), TimestampSigner().sign(f"{subscription.pk}")
             )
             result["subscription_user"] = subscription.user
         else:
@@ -688,9 +690,7 @@ class NewAlertNotificaton(Notification):
             fake.project = fake.component.project
             return bool(list(self.get_users(FREQ_INSTANT, fake, users=[user.pk])))
         if change.alert.obj.project_wide:
-            first_component = change.component.project.component_set.order_by(
-                "id"
-            ).first()
+            first_component = change.component.project.component_set.order_by("id")[0]
             # Notify for the first component
             if change.component.id == first_component.id:
                 return True

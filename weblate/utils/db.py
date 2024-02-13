@@ -4,8 +4,11 @@
 
 """Database specific code to extend Django."""
 
+from __future__ import annotations
+
+import time
+
 from django.db import connections, models
-from django.db.models import Case, IntegerField, Sum, When
 from django.db.models.lookups import PatternLookup, Regex
 
 from .inv_regex import invert_re
@@ -17,11 +20,6 @@ PG_DROP = "DROP INDEX {0}_{1}_fulltext"
 
 MY_FTX = "CREATE FULLTEXT INDEX {0}_{1}_fulltext ON trans_{0}({1})"
 MY_DROP = "ALTER TABLE trans_{0} DROP INDEX {0}_{1}_fulltext"
-
-
-def conditional_sum(value=1, **cond):
-    """Wrapper to generate SUM on boolean/enum values."""
-    return Sum(Case(When(then=value, **cond), default=0, output_field=IntegerField()))
 
 
 def using_postgresql():
@@ -76,6 +74,16 @@ def count_alnum(string):
 
 
 class PostgreSQLFallbackLookupMixin:
+    """
+    Mixin to block PostgreSQL from using trigram index.
+
+    It is ineffective for very short strings as these produce a lot of matches
+    which need to be rechecked and full table scan is more effecive in that
+    case.
+
+    It is performed by concatenating empty string which will prevent index usage.
+    """
+
     def process_lhs(self, compiler, connection, lhs=None):
         if self._needs_fallback:
             lhs_sql, params = super().process_lhs(compiler, connection, lhs)
@@ -137,7 +145,7 @@ class PostgreSQLSubstringLookup(PostgreSQLFallbackLookup):
         return "ILIKE %s" % rhs
 
 
-def re_escape(pattern):
+def re_escape(pattern: str) -> str:
     """
     Escape for use in database regexp match.
 
@@ -150,3 +158,11 @@ def re_escape(pattern):
         elif char in ESCAPED:
             string[i] = "\\" + char
     return "".join(string)
+
+
+def measure_database_latency() -> float:
+    from weblate.trans.models import Project
+
+    start = time.monotonic()
+    Project.objects.exists()
+    return round(1000 * (time.monotonic() - start))

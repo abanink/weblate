@@ -21,7 +21,7 @@ from weblate.trans.mixins import UserDisplayMixin
 from weblate.trans.models.alert import ALERTS
 from weblate.trans.models.project import Project
 from weblate.utils.pii import mask_email
-from weblate.utils.state import STATE_LOOKUP
+from weblate.utils.state import StringState
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -118,8 +118,7 @@ class ChangeQuerySet(models.QuerySet):
             "translation__plural",
         )
 
-    @staticmethod
-    def preload_list(results, skip: str | None = None):
+    def preload_list(self, results, skip: str | None = None):
         """Companion for prefetch to fill in nested references."""
         for item in results:
             if item.component and skip != "component":
@@ -130,7 +129,12 @@ class ChangeQuerySet(models.QuerySet):
                 item.unit.translation = item.translation
         return results
 
-    def authors_list(self, date_range=None):
+    def authors_list(
+        self,
+        date_range: tuple[datetime, datetime] | None = None,
+        *,
+        values_list: tuple[str, ...] = (),
+    ):
         """Return list of authors."""
         authors = self.content()
         if date_range is not None:
@@ -139,7 +143,9 @@ class ChangeQuerySet(models.QuerySet):
             authors.exclude(author__isnull=True)
             .values("author")
             .annotate(change_count=Count("id"))
-            .values_list("author__email", "author__full_name", "change_count")
+            .values_list(
+                "author__email", "author__full_name", "change_count", *values_list
+            )
         )
 
     def order(self):
@@ -689,9 +695,9 @@ class Change(models.Model, UserDisplayMixin):
 
     def get_state_display(self):
         state = self.details.get("state")
-        if not state:
+        if state is None:
             return ""
-        return STATE_LOOKUP[state]
+        return StringState(state).label
 
     def is_merge_failure(self):
         return self.action in self.ACTIONS_MERGE_FAILURE

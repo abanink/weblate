@@ -5,6 +5,8 @@
 
 """File format specific behavior."""
 
+from __future__ import annotations
+
 import os.path
 import shutil
 from io import BytesIO
@@ -14,7 +16,7 @@ from lxml import etree
 from translate.storage.po import pofile
 
 from weblate.formats.auto import AutodetectFormat, detect_filename, try_load
-from weblate.formats.base import UpdateError
+from weblate.formats.base import TranslationFormat, UpdateError
 from weblate.formats.ttkit import (
     AndroidFormat,
     CSVFormat,
@@ -156,30 +158,32 @@ class AutoLoadTest(TestCase):
 
 
 class BaseFormatTest(FixtureTestCase, TempDirMixin):
-    FORMAT = None
+    FORMAT: type[TranslationFormat] = TranslationFormat
     FILE = TEST_PO
     BASE = TEST_POT
     TEMPLATE = None
     MIME = "text/x-gettext-catalog"
     EXT = "po"
     COUNT = 4
-    MATCH = "msgid_plural"
+    MATCH: str | bytes | None = "msgid_plural"
     MASK = "po/*.po"
     EXPECTED_PATH = "po/cs_CZ.po"
     FIND = "Hello, world!\n"
     FIND_CONTEXT = ""
     FIND_MATCH = "Ahoj světe!\n"
-    NEW_UNIT_MATCH = b'\nmsgctxt "key"\nmsgid "Source string"\n'
+    NEW_UNIT_MATCH: str | bytes | tuple[bytes, ...] | tuple[
+        str, ...
+    ] | None = b'\nmsgctxt "key"\nmsgid "Source string"\n'
     NEW_UNIT_KEY = "key"
     SUPPORTS_FLAG = True
-    EXPECTED_FLAGS = "c-format, max-length:100"
+    EXPECTED_FLAGS: str | list[str] = "c-format, max-length:100"
     EDIT_OFFSET = 0
-    EDIT_TARGET = "Nazdar, svete!\n"
+    EDIT_TARGET: str | list[str] = "Nazdar, svete!\n"
     MONOLINGUAL = False
 
     @classmethod
     def setUpClass(cls):
-        if cls.FORMAT is None:
+        if cls.FORMAT is TranslationFormat:
             raise SkipTest("Base test class not intended for execution.")
         super().setUpClass()
 
@@ -416,7 +420,7 @@ class PoFormatTest(BaseFormatTest):
 
 
 class PropertiesFormatTest(BaseFormatTest):
-    FORMAT = PropertiesFormat
+    FORMAT: type[TranslationFormat] = PropertiesFormat
     FILE = TEST_PROPERTIES
     MIME = "text/plain"
     COUNT = 12
@@ -497,7 +501,7 @@ class JSONFormatTest(BaseFormatTest):
     MATCH = "{}\n"
     BASE = ""
     NEW_UNIT_MATCH = b'\n    "Source string": ""\n'
-    EXPECTED_FLAGS = ""
+    EXPECTED_FLAGS: str | list[str] = ""
 
     def assert_same(self, newdata, testdata):
         self.assertJSONEqual(newdata.decode(), testdata.decode())
@@ -966,7 +970,7 @@ class XWikiPropertiesFormatTest(PropertiesFormatTest):
         self.FORMAT.add_language(out, language, self.BASE)
         template_storage = self.parse_file(self.FILE)
         new_language = self.FORMAT(out, template_storage, language.code)
-        unit, add = new_language.find_unit("job.status.success")
+        unit, add = new_language.find_unit("job.status.success", "")
         self.assertTrue(add)
         unit.set_target("Fait")
         new_language.add_unit(unit.unit)

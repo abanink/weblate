@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import sentry_sdk
 from django.conf import settings
@@ -47,11 +47,11 @@ from weblate.utils.hash import calculate_hash, hash_to_checksum
 from weblate.utils.search import parse_query
 from weblate.utils.state import (
     STATE_APPROVED,
-    STATE_CHOICES,
     STATE_EMPTY,
     STATE_FUZZY,
     STATE_READONLY,
     STATE_TRANSLATED,
+    StringState,
 )
 
 if TYPE_CHECKING:
@@ -110,10 +110,18 @@ class UnitQuerySet(models.QuerySet):
             "translation__component__source_language",
         )
 
+    def prefetch_all_checks(self):
+        return self.prefetch_related(
+            models.Prefetch(
+                "check_set",
+                to_attr="all_checks",
+            ),
+        )
+
     def prefetch_full(self):
         from weblate.trans.models import Component
 
-        return self.prefetch_related(
+        return self.prefetch_all_checks().prefetch_related(
             "source_unit",
             "source_unit__translation",
             models.Prefetch(
@@ -122,7 +130,6 @@ class UnitQuerySet(models.QuerySet):
             ),
             "source_unit__translation__component__source_language",
             "source_unit__translation__component__project",
-            "check_set",
             "labels",
             models.Prefetch(
                 "suggestion_set",
@@ -344,8 +351,10 @@ class Unit(models.Model, LoggerMixin):
     source = models.TextField()
     previous_source = models.TextField(default="", blank=True)
     target = models.TextField(default="", blank=True)
-    state = models.IntegerField(default=STATE_EMPTY, choices=STATE_CHOICES)
-    original_state = models.IntegerField(default=STATE_EMPTY, choices=STATE_CHOICES)
+    state = models.IntegerField(default=STATE_EMPTY, choices=StringState.choices)
+    original_state = models.IntegerField(
+        default=STATE_EMPTY, choices=StringState.choices
+    )
     details = models.JSONField(default=dict)
 
     position = models.IntegerField()
@@ -384,7 +393,9 @@ class Unit(models.Model, LoggerMixin):
     )
     labels = LabelsField("Label", verbose_name=gettext_lazy("Labels"), blank=True)
 
-    source_unit = models.ForeignKey(
+    # The type annotation hides that field can be None because
+    # save() updates it to non-None immediatelly.
+    source_unit: Unit = models.ForeignKey(
         "Unit", on_delete=models.deletion.CASCADE, blank=True, null=True
     )
 
@@ -498,12 +509,13 @@ class Unit(models.Model, LoggerMixin):
         self.trigger_update_variants = True
         self.fixups = []
         # Data for machinery integration
-        self.machinery = None
+        self.machinery = {}
         # PluralMapper integration
         self.plural_map = None
         # Data for glossary integration
         self.glossary_terms = None
-        self.glossary_positions = None
+        self.glossary_positions: tuple[tuple[int, int], ...] = ()
+        self.import_data: dict[str, Any] = None
         # Store original attributes for change tracking
         self.old_unit = None
         if "state" in self.__dict__ and "source" in self.__dict__:

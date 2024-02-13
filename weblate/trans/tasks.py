@@ -14,8 +14,9 @@ from pathlib import Path
 from celery import current_task
 from celery.schedules import crontab
 from django.conf import settings
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, F
 from django.http import Http404
 from django.utils import timezone
@@ -392,23 +393,39 @@ def category_removal(pk, uid):
     category.delete()
 
 
+@app.task(
+    trail=False,
+    autoretry_for=(IntegrityError,),
+    retry_backoff=600,
+    retry_backoff_max=3600,
+)
+def actual_project_removal(pk: int, uid: int | None):
+    """
+    Remove project.
+
+    This is separated from project_removal to allow retry on integrity errors.
+    """
+    with transaction.atomic():
+        user = get_anonymous() if uid is None else User.objects.get(pk=uid)
+        try:
+            project = Project.objects.get(pk=pk)
+        except Project.DoesNotExist:
+            return
+        Change.objects.create(
+            action=Change.ACTION_REMOVE_PROJECT,
+            target=project.slug,
+            user=user,
+            author=user,
+        )
+        project.delete()
+        transaction.on_commit(project.stats.update_parents)
+
+
 @app.task(trail=False)
-@transaction.atomic
 def project_removal(pk: int, uid: int | None):
-    user = get_anonymous() if uid is None else User.objects.get(pk=uid)
-    try:
-        project = Project.objects.get(pk=pk)
-    except Project.DoesNotExist:
-        return
+    """Backup project and schedule actual removal."""
     create_project_backup(pk)
-    Change.objects.create(
-        action=Change.ACTION_REMOVE_PROJECT,
-        target=project.slug,
-        user=user,
-        author=user,
-    )
-    project.delete()
-    transaction.on_commit(project.stats.update_parents)
+    actual_project_removal.delay(pk, uid)
 
 
 @app.task(
@@ -514,7 +531,11 @@ def auto_translate_component(
 def create_component(copy_from=None, copy_addons=False, in_task=False, **kwargs):
     kwargs["project"] = Project.objects.get(pk=kwargs["project"])
     kwargs["source_language"] = Language.objects.get(pk=kwargs["source_language"])
-    component = Component.objects.create(**kwargs)
+    component = Component(**kwargs)
+    # Perform validation to avoid creating duplicate components via background
+    # tasks in discovery
+    component.full_clean()
+    component.save(force_insert=True)
     component.change_set.create(action=Change.ACTION_CREATE_COMPONENT)
     if copy_from:
         # Copy non-automatic component lists
@@ -549,17 +570,18 @@ def update_checks(pk: int, update_token: str, update_state: bool = False):
         return
 
     component.batch_checks = True
-    for translation in component.translation_set.exclude(
-        pk=component.source_translation.pk
-    ).prefetch():
-        for unit in translation.unit_set.prefetch():
+    # Source translation as last
+    translations = (
+        *component.translation_set.exclude(
+            pk=component.source_translation.pk
+        ).prefetch(),
+        component.source_translation,
+    )
+    for translation in translations:
+        for unit in translation.unit_set.prefetch().prefetch_all_checks():
             if update_state:
                 unit.update_state()
             unit.run_checks()
-    for unit in component.source_translation.unit_set.prefetch():
-        if update_state:
-            unit.update_state()
-        unit.run_checks()
     component.run_batched_checks()
     component.invalidate_cache()
 
@@ -584,9 +606,11 @@ def daily_update_checks():
 
 @app.task(trail=False)
 def cleanup_project_backups():
+    from weblate.trans.backups import PROJECTBACKUP_PREFIX
+
     # This intentionally does not use Project objects to remove stale backups
     # for removed projects as well.
-    rootdir = data_dir("projectbackups")
+    rootdir = data_dir(PROJECTBACKUP_PREFIX)
     backup_cutoff = timezone.now() - timedelta(days=settings.PROJECT_BACKUP_KEEP_DAYS)
     for projectdir in glob(os.path.join(rootdir, "*")):
         if not os.path.isdir(projectdir):
@@ -627,6 +651,25 @@ def create_project_backup(pk):
 
     project = Project.objects.get(pk=pk)
     ProjectBackup().backup_project(project)
+
+
+@app.task(trail=False)
+def remove_project_backup_download(name: str):
+    if staticfiles_storage.exists(name):
+        staticfiles_storage.delete(name)
+
+
+@app.task(trail=False)
+def cleanup_project_backup_download():
+    from weblate.trans.backups import PROJECTBACKUP_PREFIX
+
+    if not staticfiles_storage.exists(PROJECTBACKUP_PREFIX):
+        return
+    cutoff = timezone.now() - timedelta(hours=2)
+    for name in staticfiles_storage.listdir(PROJECTBACKUP_PREFIX)[1]:
+        full_name = os.path.join(PROJECTBACKUP_PREFIX, name)
+        if staticfiles_storage.get_created_time(full_name) < cutoff:
+            staticfiles_storage.delete(full_name)
 
 
 @app.task(trail=False)
@@ -677,4 +720,9 @@ def setup_periodic_tasks(sender, **kwargs):
         crontab(hour=2, minute=30),
         cleanup_project_backups.s(),
         name="cleanup-project-backups",
+    )
+    sender.add_periodic_task(
+        3600,
+        cleanup_project_backup_download.s(),
+        name="cleanup-project-backup-download",
     )

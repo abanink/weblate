@@ -13,13 +13,14 @@ const LIGHT_BACKGROUND = '#ffffff';
 const INHERIT = 'inherit';
 const SUBMIT_COLOR = 'rgba(108, 95, 199, 1)';
 const LIGHT_THEME = {
-  fontFamily: "'Helvetica Neue', Arial, sans-serif",
+  fontFamily: "system-ui, 'Helvetica Neue', Arial, sans-serif",
   fontSize: '14px',
 
   background: LIGHT_BACKGROUND,
   backgroundHover: '#f6f6f7',
   foreground: '#2b2233',
   border: '1.5px solid rgba(41, 35, 47, 0.13)',
+  borderRadius: '12px',
   boxShadow: '0px 4px 24px 0px rgba(43, 34, 51, 0.12)',
 
   success: '#268d75',
@@ -43,6 +44,9 @@ const LIGHT_THEME = {
   inputForeground: INHERIT,
   inputBorder: 'var(--border)',
   inputOutlineFocus: SUBMIT_COLOR,
+
+  formBorderRadius: '20px',
+  formContentBorderRadius: '6px',
 };
 
 const DEFAULT_THEME = {
@@ -302,7 +306,7 @@ function createActorStyles(d) {
   align-items: center;
   gap: 8px;
 
-  border-radius: 12px;
+  border-radius: var(--border-radius);
   cursor: pointer;
   font-size: 14px;
   font-weight: 600;
@@ -384,7 +388,7 @@ function createDialogStyles(d) {
   top: var(--top);
 
   border: var(--border);
-  border-radius: 20px;
+  border-radius: var(--form-border-radius);
   background-color: var(--background);
   color: var(--foreground);
 
@@ -459,7 +463,7 @@ function createDialogStyles(d) {
   background-color: var(--input-background);
   box-sizing: border-box;
   border: var(--input-border);
-  border-radius: 6px;
+  border-radius: var(--form-content-border-radius);
   color: var(--input-foreground);
   font-size: 14px;
   font-weight: 500;
@@ -484,7 +488,7 @@ function createDialogStyles(d) {
 .btn {
   line-height: inherit;
   border: var(--cancel-border);
-  border-radius: 6px;
+  border-radius: var(--form-content-border-radius);
   cursor: pointer;
   font-size: 14px;
   font-weight: 600;
@@ -524,7 +528,7 @@ function createDialogStyles(d) {
 .success-message {
   background-color: var(--background);
   border: var(--border);
-  border-radius: 12px;
+  border-radius: var(--border-radius);
   box-shadow: var(--box-shadow);
   font-weight: 600;
   color: var(--success);
@@ -553,6 +557,7 @@ function getThemedCssVariables(theme) {
   --error: ${theme.error};
   --success: ${theme.success};
   --border: ${theme.border};
+  --border-radius: ${theme.borderRadius};
   --box-shadow: ${theme.boxShadow};
 
   --submit-background: ${theme.submitBackground};
@@ -573,6 +578,9 @@ function getThemedCssVariables(theme) {
   --input-foreground: ${theme.inputForeground};
   --input-border: ${theme.inputBorder};
   --input-outline-focus: ${theme.inputOutlineFocus};
+
+  --form-border-radius: ${theme.formBorderRadius};
+  --form-content-border-radius: ${theme.formContentBorderRadius};
   `;
 }
 
@@ -1089,8 +1097,13 @@ function Logo({ colorScheme }) {
   const defs = createElementNS('defs');
   const style = createElementNS('style');
 
+  style.textContent = `
+    path {
+      fill: ${colorScheme === 'dark' ? '#fff' : '#362d59'};
+    }`;
+
   if (colorScheme === 'system') {
-    style.textContent = `
+    style.textContent += `
     @media (prefers-color-scheme: dark) {
       path: {
         fill: '#fff';
@@ -1098,11 +1111,6 @@ function Logo({ colorScheme }) {
     }
     `;
   }
-
-  style.textContent = `
-    path {
-      fill: ${colorScheme === 'dark' ? '#fff' : '#362d59'};
-    }`;
 
   defs.append(style);
   svg.append(defs);
@@ -1573,10 +1581,17 @@ function createWidget({
 
 const doc = WINDOW.document;
 
+const feedbackIntegration = ((options) => {
+  // eslint-disable-next-line deprecation/deprecation
+  return new Feedback(options);
+}) ;
+
 /**
  * Feedback integration. When added as an integration to the SDK, it will
  * inject a button in the bottom-right corner of the window that opens a
  * feedback modal when clicked.
+ *
+ * @deprecated Use `feedbackIntegration()` instead.
  */
 class Feedback  {
   /**
@@ -1646,7 +1661,7 @@ class Feedback  {
     onSubmitError,
     onSubmitSuccess,
   } = {}) {
-    // Initializations
+    // eslint-disable-next-line deprecation/deprecation
     this.name = Feedback.id;
 
     // tsc fails if these are not initialized explicitly constructor, e.g. can't call `_initialize()`
@@ -1922,10 +1937,11 @@ class Feedback  {
 } Feedback.__initStatic();
 
 exports.Feedback = Feedback;
+exports.feedbackIntegration = feedbackIntegration;
 exports.sendFeedback = sendFeedback;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],2:[function(require,module,exports){
+},{"@sentry/core":67,"@sentry/utils":135}],2:[function(require,module,exports){
 var {
     _optionalChain
 } = require('@sentry/utils');
@@ -2131,10 +2147,27 @@ var CanvasContext = /* @__PURE__ */ ((CanvasContext2) => {
   return CanvasContext2;
 })(CanvasContext || {});
 
+let errorHandler;
+function registerErrorHandler(handler) {
+    errorHandler = handler;
+}
 const callbackWrapper = (cb) => {
-    {
+    if (!errorHandler) {
         return cb;
     }
+    const rrwebWrapped = ((...rest) => {
+        try {
+            return cb(...rest);
+        }
+        catch (error) {
+            if (errorHandler && errorHandler(error) === true) {
+                return () => {
+                };
+            }
+            throw error;
+        }
+    });
+    return rrwebWrapped;
 };
 
 /*
@@ -2467,10 +2500,13 @@ class CanvasManager {
             }
             this.pendingCanvasMutations.get(target).push(mutation);
         };
-        const { sampling = 'all', win, blockClass, blockSelector, unblockSelector, recordCanvas, dataURLOptions, } = options;
+        const { sampling = 'all', win, blockClass, blockSelector, unblockSelector, recordCanvas, dataURLOptions, errorHandler, } = options;
         this.mutationCb = options.mutationCb;
         this.mirror = options.mirror;
         this.options = options;
+        if (errorHandler) {
+            registerErrorHandler(errorHandler);
+        }
         if (options.enableManualSnapshot) {
             return;
         }
@@ -2669,10 +2705,8 @@ const CANVAS_QUALITY = {
 
 const INTEGRATION_NAME = 'ReplayCanvas';
 
-/**
- * An integration to add canvas recording to replay.
- */
-const replayCanvasIntegration = ((options = {}) => {
+/** Exported only for type safe tests. */
+const _replayCanvasIntegration = ((options = {}) => {
   const _canvasOptions = {
     quality: options.quality || 'medium',
     enableManualSnapshot: options.enableManualSnapshot,
@@ -2706,16 +2740,24 @@ const replayCanvasIntegration = ((options = {}) => {
   };
 }) ;
 
-// TODO(v8)
+/**
+ * Add this in addition to `replayIntegration()` to enable canvas recording.
+ */
+const replayCanvasIntegration = core.defineIntegration(_replayCanvasIntegration);
+
+/**
+ * @deprecated Use `replayCanvasIntegration()` instead
+ */
 // eslint-disable-next-line deprecation/deprecation
 const ReplayCanvas = core.convertIntegrationFnToClass(INTEGRATION_NAME, replayCanvasIntegration)
 
 ;
 
 exports.ReplayCanvas = ReplayCanvas;
+exports.replayCanvasIntegration = replayCanvasIntegration;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],3:[function(require,module,exports){
+},{"@sentry/core":67,"@sentry/utils":135}],3:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -2758,7 +2800,406 @@ function registerBackgroundTabDetection() {
 exports.registerBackgroundTabDetection = registerBackgroundTabDetection;
 
 
-},{"../common/debug-build.js":22,"./types.js":10,"@sentry/core":66,"@sentry/utils":131}],4:[function(require,module,exports){
+},{"../common/debug-build.js":23,"./types.js":11,"@sentry/core":67,"@sentry/utils":135}],4:[function(require,module,exports){
+Object.defineProperty(exports, '__esModule', { value: true });
+
+const core = require('@sentry/core');
+const utils = require('@sentry/utils');
+const debugBuild = require('../common/debug-build.js');
+const backgroundtab = require('./backgroundtab.js');
+const index = require('./metrics/index.js');
+const request = require('./request.js');
+const types = require('./types.js');
+
+const BROWSER_TRACING_INTEGRATION_ID = 'BrowserTracing';
+
+/** Options for Browser Tracing integration */
+
+const DEFAULT_BROWSER_TRACING_OPTIONS = {
+  ...core.TRACING_DEFAULTS,
+  instrumentNavigation: true,
+  instrumentPageLoad: true,
+  markBackgroundSpan: true,
+  enableLongTask: true,
+  _experiments: {},
+  ...request.defaultRequestInstrumentationOptions,
+};
+
+/**
+ * The Browser Tracing integration automatically instruments browser pageload/navigation
+ * actions as transactions, and captures requests, metrics and errors as spans.
+ *
+ * The integration can be configured with a variety of options, and can be extended to use
+ * any routing library. This integration uses {@see IdleTransaction} to create transactions.
+ *
+ * We explicitly export the proper type here, as this has to be extended in some cases.
+ */
+const browserTracingIntegration = ((_options = {}) => {
+  const _hasSetTracePropagationTargets = debugBuild.DEBUG_BUILD
+    ? !!(
+        // eslint-disable-next-line deprecation/deprecation
+        (_options.tracePropagationTargets || _options.tracingOrigins)
+      )
+    : false;
+
+  core.addTracingExtensions();
+
+  // TODO (v8): remove this block after tracingOrigins is removed
+  // Set tracePropagationTargets to tracingOrigins if specified by the user
+  // In case both are specified, tracePropagationTargets takes precedence
+  // eslint-disable-next-line deprecation/deprecation
+  if (!_options.tracePropagationTargets && _options.tracingOrigins) {
+    // eslint-disable-next-line deprecation/deprecation
+    _options.tracePropagationTargets = _options.tracingOrigins;
+  }
+
+  const options = {
+    ...DEFAULT_BROWSER_TRACING_OPTIONS,
+    ..._options,
+  };
+
+  const _collectWebVitals = index.startTrackingWebVitals();
+
+  if (options.enableLongTask) {
+    index.startTrackingLongTasks();
+  }
+  if (options._experiments.enableInteractions) {
+    index.startTrackingInteractions();
+  }
+
+  let latestRouteName;
+  let latestRouteSource;
+
+  /** Create routing idle transaction. */
+  function _createRouteTransaction(context) {
+    // eslint-disable-next-line deprecation/deprecation
+    const hub = core.getCurrentHub();
+
+    const { beforeStartSpan, idleTimeout, finalTimeout, heartbeatInterval } = options;
+
+    const isPageloadTransaction = context.op === 'pageload';
+
+    let expandedContext;
+    if (isPageloadTransaction) {
+      const sentryTrace = isPageloadTransaction ? getMetaContent('sentry-trace') : '';
+      const baggage = isPageloadTransaction ? getMetaContent('baggage') : undefined;
+      const { traceId, dsc, parentSpanId, sampled } = utils.propagationContextFromHeaders(sentryTrace, baggage);
+      expandedContext = {
+        traceId,
+        parentSpanId,
+        parentSampled: sampled,
+        ...context,
+        metadata: {
+          // eslint-disable-next-line deprecation/deprecation
+          ...context.metadata,
+          dynamicSamplingContext: dsc,
+        },
+        trimEnd: true,
+      };
+    } else {
+      expandedContext = {
+        trimEnd: true,
+        ...context,
+      };
+    }
+
+    const finalContext = beforeStartSpan ? beforeStartSpan(expandedContext) : expandedContext;
+
+    // If `beforeStartSpan` set a custom name, record that fact
+    // eslint-disable-next-line deprecation/deprecation
+    finalContext.metadata =
+      finalContext.name !== expandedContext.name
+        ? // eslint-disable-next-line deprecation/deprecation
+          { ...finalContext.metadata, source: 'custom' }
+        : // eslint-disable-next-line deprecation/deprecation
+          finalContext.metadata;
+
+    latestRouteName = finalContext.name;
+    latestRouteSource = getSource(finalContext);
+
+    if (finalContext.sampled === false) {
+      debugBuild.DEBUG_BUILD && utils.logger.log(`[Tracing] Will not send ${finalContext.op} transaction because of beforeNavigate.`);
+    }
+
+    debugBuild.DEBUG_BUILD && utils.logger.log(`[Tracing] Starting ${finalContext.op} transaction on scope`);
+
+    const { location } = types.WINDOW;
+
+    const idleTransaction = core.startIdleTransaction(
+      hub,
+      finalContext,
+      idleTimeout,
+      finalTimeout,
+      true,
+      { location }, // for use in the tracesSampler
+      heartbeatInterval,
+      isPageloadTransaction, // should wait for finish signal if it's a pageload transaction
+    );
+
+    if (isPageloadTransaction) {
+      types.WINDOW.document.addEventListener('readystatechange', () => {
+        if (['interactive', 'complete'].includes(types.WINDOW.document.readyState)) {
+          idleTransaction.sendAutoFinishSignal();
+        }
+      });
+
+      if (['interactive', 'complete'].includes(types.WINDOW.document.readyState)) {
+        idleTransaction.sendAutoFinishSignal();
+      }
+    }
+
+    idleTransaction.registerBeforeFinishCallback(transaction => {
+      _collectWebVitals();
+      index.addPerformanceEntries(transaction);
+    });
+
+    return idleTransaction ;
+  }
+
+  return {
+    name: BROWSER_TRACING_INTEGRATION_ID,
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    setupOnce: () => {},
+    afterAllSetup(client) {
+      const clientOptions = client.getOptions();
+
+      const { markBackgroundSpan, traceFetch, traceXHR, shouldCreateSpanForRequest, enableHTTPTimings, _experiments } =
+        options;
+
+      const clientOptionsTracePropagationTargets = clientOptions && clientOptions.tracePropagationTargets;
+      // There are three ways to configure tracePropagationTargets:
+      // 1. via top level client option `tracePropagationTargets`
+      // 2. via BrowserTracing option `tracePropagationTargets`
+      // 3. via BrowserTracing option `tracingOrigins` (deprecated)
+      //
+      // To avoid confusion, favour top level client option `tracePropagationTargets`, and fallback to
+      // BrowserTracing option `tracePropagationTargets` and then `tracingOrigins` (deprecated).
+      // This is done as it minimizes bundle size (we don't have to have undefined checks).
+      //
+      // If both 1 and either one of 2 or 3 are set (from above), we log out a warning.
+      // eslint-disable-next-line deprecation/deprecation
+      const tracePropagationTargets = clientOptionsTracePropagationTargets || options.tracePropagationTargets;
+      if (debugBuild.DEBUG_BUILD && _hasSetTracePropagationTargets && clientOptionsTracePropagationTargets) {
+        utils.logger.warn(
+          '[Tracing] The `tracePropagationTargets` option was set in the BrowserTracing integration and top level `Sentry.init`. The top level `Sentry.init` value is being used.',
+        );
+      }
+
+      let activeSpan;
+      let startingUrl = types.WINDOW.location.href;
+
+      if (client.on) {
+        client.on('startNavigationSpan', (context) => {
+          if (activeSpan) {
+            debugBuild.DEBUG_BUILD && utils.logger.log(`[Tracing] Finishing current transaction with op: ${core.spanToJSON(activeSpan).op}`);
+            // If there's an open transaction on the scope, we need to finish it before creating an new one.
+            activeSpan.end();
+          }
+          activeSpan = _createRouteTransaction({
+            op: 'navigation',
+            ...context,
+          });
+        });
+
+        client.on('startPageLoadSpan', (context) => {
+          if (activeSpan) {
+            debugBuild.DEBUG_BUILD && utils.logger.log(`[Tracing] Finishing current transaction with op: ${core.spanToJSON(activeSpan).op}`);
+            // If there's an open transaction on the scope, we need to finish it before creating an new one.
+            activeSpan.end();
+          }
+          activeSpan = _createRouteTransaction({
+            op: 'pageload',
+            ...context,
+          });
+        });
+      }
+
+      if (options.instrumentPageLoad && client.emit) {
+        const context = {
+          name: types.WINDOW.location.pathname,
+          // pageload should always start at timeOrigin (and needs to be in s, not ms)
+          startTimestamp: utils.browserPerformanceTimeOrigin ? utils.browserPerformanceTimeOrigin / 1000 : undefined,
+          origin: 'auto.pageload.browser',
+          attributes: {
+            [core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE]: 'url',
+          },
+        };
+        startBrowserTracingPageLoadSpan(client, context);
+      }
+
+      if (options.instrumentNavigation && client.emit) {
+        utils.addHistoryInstrumentationHandler(({ to, from }) => {
+          /**
+           * This early return is there to account for some cases where a navigation transaction starts right after
+           * long-running pageload. We make sure that if `from` is undefined and a valid `startingURL` exists, we don't
+           * create an uneccessary navigation transaction.
+           *
+           * This was hard to duplicate, but this behavior stopped as soon as this fix was applied. This issue might also
+           * only be caused in certain development environments where the usage of a hot module reloader is causing
+           * errors.
+           */
+          if (from === undefined && startingUrl && startingUrl.indexOf(to) !== -1) {
+            startingUrl = undefined;
+            return;
+          }
+
+          if (from !== to) {
+            startingUrl = undefined;
+            const context = {
+              name: types.WINDOW.location.pathname,
+              origin: 'auto.navigation.browser',
+              attributes: {
+                [core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE]: 'url',
+              },
+            };
+
+            startBrowserTracingNavigationSpan(client, context);
+          }
+        });
+      }
+
+      if (markBackgroundSpan) {
+        backgroundtab.registerBackgroundTabDetection();
+      }
+
+      if (_experiments.enableInteractions) {
+        registerInteractionListener(options, latestRouteName, latestRouteSource);
+      }
+
+      request.instrumentOutgoingRequests({
+        traceFetch,
+        traceXHR,
+        tracePropagationTargets,
+        shouldCreateSpanForRequest,
+        enableHTTPTimings,
+      });
+    },
+    // TODO v8: Remove this again
+    // This is private API that we use to fix converted BrowserTracing integrations in Next.js & SvelteKit
+    options,
+  };
+}) ;
+
+/**
+ * Manually start a page load span.
+ * This will only do something if the BrowserTracing integration has been setup.
+ */
+function startBrowserTracingPageLoadSpan(client, spanOptions) {
+  if (!client.emit) {
+    return;
+  }
+
+  client.emit('startPageLoadSpan', spanOptions);
+
+  const span = core.getActiveSpan();
+  const op = span && core.spanToJSON(span).op;
+  return op === 'pageload' ? span : undefined;
+}
+
+/**
+ * Manually start a navigation span.
+ * This will only do something if the BrowserTracing integration has been setup.
+ */
+function startBrowserTracingNavigationSpan(client, spanOptions) {
+  if (!client.emit) {
+    return;
+  }
+
+  client.emit('startNavigationSpan', spanOptions);
+
+  const span = core.getActiveSpan();
+  const op = span && core.spanToJSON(span).op;
+  return op === 'navigation' ? span : undefined;
+}
+
+/** Returns the value of a meta tag */
+function getMetaContent(metaName) {
+  // Can't specify generic to `getDomElement` because tracing can be used
+  // in a variety of environments, have to disable `no-unsafe-member-access`
+  // as a result.
+  const metaTag = utils.getDomElement(`meta[name=${metaName}]`);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+  return metaTag ? metaTag.getAttribute('content') : undefined;
+}
+
+/** Start listener for interaction transactions */
+function registerInteractionListener(
+  options,
+  latestRouteName,
+  latestRouteSource,
+) {
+  let inflightInteractionTransaction;
+  const registerInteractionTransaction = () => {
+    const { idleTimeout, finalTimeout, heartbeatInterval } = options;
+    const op = 'ui.action.click';
+
+    // eslint-disable-next-line deprecation/deprecation
+    const currentTransaction = core.getActiveTransaction();
+    if (currentTransaction && currentTransaction.op && ['navigation', 'pageload'].includes(currentTransaction.op)) {
+      debugBuild.DEBUG_BUILD &&
+        utils.logger.warn(
+          `[Tracing] Did not create ${op} transaction because a pageload or navigation transaction is in progress.`,
+        );
+      return undefined;
+    }
+
+    if (inflightInteractionTransaction) {
+      inflightInteractionTransaction.setFinishReason('interactionInterrupted');
+      inflightInteractionTransaction.end();
+      inflightInteractionTransaction = undefined;
+    }
+
+    if (!latestRouteName) {
+      debugBuild.DEBUG_BUILD && utils.logger.warn(`[Tracing] Did not create ${op} transaction because _latestRouteName is missing.`);
+      return undefined;
+    }
+
+    const { location } = types.WINDOW;
+
+    const context = {
+      name: latestRouteName,
+      op,
+      trimEnd: true,
+      data: {
+        [core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE]: latestRouteSource || 'url',
+      },
+    };
+
+    inflightInteractionTransaction = core.startIdleTransaction(
+      // eslint-disable-next-line deprecation/deprecation
+      core.getCurrentHub(),
+      context,
+      idleTimeout,
+      finalTimeout,
+      true,
+      { location }, // for use in the tracesSampler
+      heartbeatInterval,
+    );
+  };
+
+  ['click'].forEach(type => {
+    addEventListener(type, registerInteractionTransaction, { once: false, capture: true });
+  });
+}
+
+function getSource(context) {
+  const sourceFromAttributes = context.attributes && context.attributes[core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE];
+  // eslint-disable-next-line deprecation/deprecation
+  const sourceFromData = context.data && context.data[core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE];
+  // eslint-disable-next-line deprecation/deprecation
+  const sourceFromMetadata = context.metadata && context.metadata.source;
+
+  return sourceFromAttributes || sourceFromData || sourceFromMetadata;
+}
+
+exports.BROWSER_TRACING_INTEGRATION_ID = BROWSER_TRACING_INTEGRATION_ID;
+exports.browserTracingIntegration = browserTracingIntegration;
+exports.getMetaContent = getMetaContent;
+exports.startBrowserTracingNavigationSpan = startBrowserTracingNavigationSpan;
+exports.startBrowserTracingPageLoadSpan = startBrowserTracingPageLoadSpan;
+
+
+},{"../common/debug-build.js":23,"./backgroundtab.js":3,"./metrics/index.js":7,"./request.js":9,"./types.js":11,"@sentry/core":67,"@sentry/utils":135}],5:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -2791,6 +3232,8 @@ const DEFAULT_BROWSER_TRACING_OPTIONS = {
  *
  * The integration can be configured with a variety of options, and can be extended to use
  * any routing library. This integration uses {@see IdleTransaction} to create transactions.
+ *
+ * @deprecated Use `browserTracingIntegration()` instead.
  */
 class BrowserTracing  {
   // This class currently doesn't have a static `id` field like the other integration classes, because it prevented
@@ -2932,23 +3375,29 @@ class BrowserTracing  {
 
     const isPageloadTransaction = context.op === 'pageload';
 
-    const sentryTrace = isPageloadTransaction ? getMetaContent('sentry-trace') : '';
-    const baggage = isPageloadTransaction ? getMetaContent('baggage') : '';
-    const { traceparentData, dynamicSamplingContext, propagationContext } = utils.tracingContextFromHeaders(
-      sentryTrace,
-      baggage,
-    );
-
-    const expandedContext = {
-      ...context,
-      ...traceparentData,
-      metadata: {
-        // eslint-disable-next-line deprecation/deprecation
-        ...context.metadata,
-        dynamicSamplingContext: traceparentData && !dynamicSamplingContext ? {} : dynamicSamplingContext,
-      },
-      trimEnd: true,
-    };
+    let expandedContext;
+    if (isPageloadTransaction) {
+      const sentryTrace = isPageloadTransaction ? getMetaContent('sentry-trace') : '';
+      const baggage = isPageloadTransaction ? getMetaContent('baggage') : undefined;
+      const { traceId, dsc, parentSpanId, sampled } = utils.propagationContextFromHeaders(sentryTrace, baggage);
+      expandedContext = {
+        traceId,
+        parentSpanId,
+        parentSampled: sampled,
+        ...context,
+        metadata: {
+          // eslint-disable-next-line deprecation/deprecation
+          ...context.metadata,
+          dynamicSamplingContext: dsc,
+        },
+        trimEnd: true,
+      };
+    } else {
+      expandedContext = {
+        trimEnd: true,
+        ...context,
+      };
+    }
 
     const modifiedContext = typeof beforeNavigate === 'function' ? beforeNavigate(expandedContext) : expandedContext;
 
@@ -2966,13 +3415,7 @@ class BrowserTracing  {
           finalContext.metadata;
 
     this._latestRouteName = finalContext.name;
-
-    // eslint-disable-next-line deprecation/deprecation
-    const sourceFromData = context.data && context.data[core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE];
-    // eslint-disable-next-line deprecation/deprecation
-    const sourceFromMetadata = finalContext.metadata && finalContext.metadata.source;
-
-    this._latestRouteSource = sourceFromData || sourceFromMetadata;
+    this._latestRouteSource = getSource(finalContext);
 
     // eslint-disable-next-line deprecation/deprecation
     if (finalContext.sampled === false) {
@@ -3004,24 +3447,6 @@ class BrowserTracing  {
       if (['interactive', 'complete'].includes(types.WINDOW.document.readyState)) {
         idleTransaction.sendAutoFinishSignal();
       }
-    }
-
-    // eslint-disable-next-line deprecation/deprecation
-    const scope = hub.getScope();
-
-    // If it's a pageload and there is a meta tag set
-    // use the traceparentData as the propagation context
-    if (isPageloadTransaction && traceparentData) {
-      scope.setPropagationContext(propagationContext);
-    } else {
-      // Navigation transactions should set a new propagation context based on the
-      // created idle transaction.
-      scope.setPropagationContext({
-        traceId: idleTransaction.spanContext().traceId,
-        spanId: idleTransaction.spanContext().spanId,
-        parentSpanId: idleTransaction.parentSpanId,
-        sampled: core.spanIsSampled(idleTransaction),
-      });
     }
 
     idleTransaction.registerBeforeFinishCallback(transaction => {
@@ -3104,12 +3529,22 @@ function getMetaContent(metaName) {
   return metaTag ? metaTag.getAttribute('content') : undefined;
 }
 
+function getSource(context) {
+  const sourceFromAttributes = context.attributes && context.attributes[core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE];
+  // eslint-disable-next-line deprecation/deprecation
+  const sourceFromData = context.data && context.data[core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE];
+  // eslint-disable-next-line deprecation/deprecation
+  const sourceFromMetadata = context.metadata && context.metadata.source;
+
+  return sourceFromAttributes || sourceFromData || sourceFromMetadata;
+}
+
 exports.BROWSER_TRACING_INTEGRATION_ID = BROWSER_TRACING_INTEGRATION_ID;
 exports.BrowserTracing = BrowserTracing;
 exports.getMetaContent = getMetaContent;
 
 
-},{"../common/debug-build.js":22,"./backgroundtab.js":3,"./metrics/index.js":6,"./request.js":8,"./router.js":9,"./types.js":10,"@sentry/core":66,"@sentry/utils":131}],5:[function(require,module,exports){
+},{"../common/debug-build.js":23,"./backgroundtab.js":3,"./metrics/index.js":7,"./request.js":9,"./router.js":10,"./types.js":11,"@sentry/core":67,"@sentry/utils":135}],6:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -3129,17 +3564,29 @@ let _previousLcp;
 /**
  * Add a callback that will be triggered when a CLS metric is available.
  * Returns a cleanup callback which can be called to remove the instrumentation handler.
+ *
+ * Pass `stopOnCallback = true` to stop listening for CLS when the cleanup callback is called.
+ * This will lead to the CLS being finalized and frozen.
  */
-function addClsInstrumentationHandler(callback) {
-  return addMetricObserver('cls', callback, instrumentCls, _previousCls);
+function addClsInstrumentationHandler(
+  callback,
+  stopOnCallback = false,
+) {
+  return addMetricObserver('cls', callback, instrumentCls, _previousCls, stopOnCallback);
 }
 
 /**
  * Add a callback that will be triggered when a LCP metric is available.
  * Returns a cleanup callback which can be called to remove the instrumentation handler.
+ *
+ * Pass `stopOnCallback = true` to stop listening for LCP when the cleanup callback is called.
+ * This will lead to the LCP being finalized and frozen.
  */
-function addLcpInstrumentationHandler(callback) {
-  return addMetricObserver('lcp', callback, instrumentLcp, _previousLcp);
+function addLcpInstrumentationHandler(
+  callback,
+  stopOnCallback = false,
+) {
+  return addMetricObserver('lcp', callback, instrumentLcp, _previousLcp, stopOnCallback);
 }
 
 /**
@@ -3191,7 +3638,7 @@ function triggerHandlers(type, data) {
 }
 
 function instrumentCls() {
-  getCLS.onCLS(metric => {
+  return getCLS.onCLS(metric => {
     triggerHandlers('cls', {
       metric,
     });
@@ -3200,7 +3647,7 @@ function instrumentCls() {
 }
 
 function instrumentFid() {
-  getFID.onFID(metric => {
+  return getFID.onFID(metric => {
     triggerHandlers('fid', {
       metric,
     });
@@ -3209,7 +3656,7 @@ function instrumentFid() {
 }
 
 function instrumentLcp() {
-  getLCP.onLCP(metric => {
+  return getLCP.onLCP(metric => {
     triggerHandlers('lcp', {
       metric,
     });
@@ -3222,11 +3669,14 @@ function addMetricObserver(
   callback,
   instrumentFn,
   previousValue,
+  stopOnCallback = false,
 ) {
   addHandler(type, callback);
 
+  let stopListening;
+
   if (!instrumented[type]) {
-    instrumentFn();
+    stopListening = instrumentFn();
     instrumented[type] = true;
   }
 
@@ -3234,7 +3684,7 @@ function addMetricObserver(
     callback({ metric: previousValue });
   }
 
-  return getCleanupCallback(type, callback);
+  return getCleanupCallback(type, callback, stopOnCallback ? stopListening : undefined);
 }
 
 function instrumentPerformanceObserver(type) {
@@ -3260,8 +3710,16 @@ function addHandler(type, handler) {
 }
 
 // Get a callback which can be called to remove the instrumentation handler
-function getCleanupCallback(type, callback) {
+function getCleanupCallback(
+  type,
+  callback,
+  stopListening,
+) {
   return () => {
+    if (stopListening) {
+      stopListening();
+    }
+
     const typeHandlers = handlers[type];
 
     if (!typeHandlers) {
@@ -3281,7 +3739,7 @@ exports.addLcpInstrumentationHandler = addLcpInstrumentationHandler;
 exports.addPerformanceInstrumentationHandler = addPerformanceInstrumentationHandler;
 
 
-},{"../common/debug-build.js":22,"./web-vitals/getCLS.js":11,"./web-vitals/getFID.js":12,"./web-vitals/getLCP.js":13,"./web-vitals/lib/observe.js":20,"@sentry/utils":131}],6:[function(require,module,exports){
+},{"../common/debug-build.js":23,"./web-vitals/getCLS.js":12,"./web-vitals/getFID.js":13,"./web-vitals/getLCP.js":14,"./web-vitals/lib/observe.js":21,"@sentry/utils":135}],7:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -3314,7 +3772,8 @@ let _lcpEntry;
 let _clsEntry;
 
 /**
- * Start tracking web vitals
+ * Start tracking web vitals.
+ * The callback returned by this function can be used to stop tracking & ensure all measurements are final & captured.
  *
  * @returns A function that forces web vitals collection
  */
@@ -3404,7 +3863,7 @@ function startTrackingInteractions() {
 /** Starts tracking the Cumulative Layout Shift on the current page. */
 function _trackCLS() {
   return instrument.addClsInstrumentationHandler(({ metric }) => {
-    const entry = metric.entries.pop();
+    const entry = metric.entries[metric.entries.length - 1];
     if (!entry) {
       return;
     }
@@ -3412,13 +3871,13 @@ function _trackCLS() {
     debugBuild.DEBUG_BUILD && utils.logger.log('[Measurements] Adding CLS');
     _measurements['cls'] = { value: metric.value, unit: '' };
     _clsEntry = entry ;
-  });
+  }, true);
 }
 
 /** Starts tracking the Largest Contentful Paint on the current page. */
 function _trackLCP() {
   return instrument.addLcpInstrumentationHandler(({ metric }) => {
-    const entry = metric.entries.pop();
+    const entry = metric.entries[metric.entries.length - 1];
     if (!entry) {
       return;
     }
@@ -3426,13 +3885,13 @@ function _trackLCP() {
     debugBuild.DEBUG_BUILD && utils.logger.log('[Measurements] Adding LCP');
     _measurements['lcp'] = { value: metric.value, unit: 'millisecond' };
     _lcpEntry = entry ;
-  });
+  }, true);
 }
 
 /** Starts tracking the First Input Delay on the current page. */
 function _trackFID() {
   return instrument.addFidInstrumentationHandler(({ metric }) => {
-    const entry = metric.entries.pop();
+    const entry = metric.entries[metric.entries.length - 1];
     if (!entry) {
       return;
     }
@@ -3514,24 +3973,7 @@ function addPerformanceEntries(transaction) {
 
   // Measurements are only available for pageload transactions
   if (op === 'pageload') {
-    // Generate TTFB (Time to First Byte), which measured as the time between the beginning of the transaction and the
-    // start of the response in milliseconds
-    if (typeof responseStartTimestamp === 'number' && transactionStartTime) {
-      debugBuild.DEBUG_BUILD && utils.logger.log('[Measurements] Adding TTFB');
-      _measurements['ttfb'] = {
-        value: (responseStartTimestamp - transactionStartTime) * 1000,
-        unit: 'millisecond',
-      };
-
-      if (typeof requestStartTimestamp === 'number' && requestStartTimestamp <= responseStartTimestamp) {
-        // Capture the time spent making the request and receiving the first byte of the response.
-        // This is the time between the start of the request and the start of the response in milliseconds.
-        _measurements['ttfb.requestTime'] = {
-          value: (responseStartTimestamp - requestStartTimestamp) * 1000,
-          unit: 'millisecond',
-        };
-      }
-    }
+    _addTtfbToMeasurements(_measurements, responseStartTimestamp, requestStartTimestamp, transactionStartTime);
 
     ['fcp', 'fp', 'lcp'].forEach(name => {
       if (!_measurements[name] || !transactionStartTime || timeOrigin >= transactionStartTime) {
@@ -3814,15 +4256,54 @@ function setResourceEntrySizeData(
   }
 }
 
+/**
+ * Add ttfb information to measurements
+ *
+ * Exported for tests
+ */
+function _addTtfbToMeasurements(
+  _measurements,
+  responseStartTimestamp,
+  requestStartTimestamp,
+  transactionStartTime,
+) {
+  // Generate TTFB (Time to First Byte), which measured as the time between the beginning of the transaction and the
+  // start of the response in milliseconds
+  if (typeof responseStartTimestamp === 'number' && transactionStartTime) {
+    debugBuild.DEBUG_BUILD && utils.logger.log('[Measurements] Adding TTFB');
+    _measurements['ttfb'] = {
+      // As per https://developer.mozilla.org/en-US/docs/Web/API/PerformanceResourceTiming/responseStart,
+      // responseStart can be 0 if the request is coming straight from the cache.
+      // This might lead us to calculate a negative ttfb if we don't use Math.max here.
+      //
+      // This logic is the same as what is in the web-vitals library to calculate ttfb
+      // https://github.com/GoogleChrome/web-vitals/blob/2301de5015e82b09925238a228a0893635854587/src/onTTFB.ts#L92
+      // TODO(abhi): We should use the web-vitals library instead of this custom calculation.
+      value: Math.max(responseStartTimestamp - transactionStartTime, 0) * 1000,
+      unit: 'millisecond',
+    };
+
+    if (typeof requestStartTimestamp === 'number' && requestStartTimestamp <= responseStartTimestamp) {
+      // Capture the time spent making the request and receiving the first byte of the response.
+      // This is the time between the start of the request and the start of the response in milliseconds.
+      _measurements['ttfb.requestTime'] = {
+        value: (responseStartTimestamp - requestStartTimestamp) * 1000,
+        unit: 'millisecond',
+      };
+    }
+  }
+}
+
 exports._addMeasureSpans = _addMeasureSpans;
 exports._addResourceSpans = _addResourceSpans;
+exports._addTtfbToMeasurements = _addTtfbToMeasurements;
 exports.addPerformanceEntries = addPerformanceEntries;
 exports.startTrackingInteractions = startTrackingInteractions;
 exports.startTrackingLongTasks = startTrackingLongTasks;
 exports.startTrackingWebVitals = startTrackingWebVitals;
 
 
-},{"../../common/debug-build.js":22,"../instrument.js":5,"../types.js":10,"../web-vitals/lib/getVisibilityWatcher.js":18,"./utils.js":7,"@sentry/core":66,"@sentry/utils":131}],7:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"../instrument.js":6,"../types.js":11,"../web-vitals/lib/getVisibilityWatcher.js":19,"./utils.js":8,"@sentry/core":67,"@sentry/utils":135}],8:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -3858,7 +4339,7 @@ exports._startChild = _startChild;
 exports.isMeasurementValue = isMeasurementValue;
 
 
-},{}],8:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -4060,7 +4541,7 @@ function xhrCallback(
 
     const span = spans[spanId];
     if (span && sentryXhrData.status_code !== undefined) {
-      span.setHttpStatus(sentryXhrData.status_code);
+      core.setHttpStatus(span, sentryXhrData.status_code);
       span.end();
 
       // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
@@ -4070,43 +4551,43 @@ function xhrCallback(
   }
 
   const scope = core.getCurrentScope();
-  const parentSpan = core.getActiveSpan();
+  const isolationScope = core.getIsolationScope();
 
-  const span =
-    shouldCreateSpanResult && parentSpan
-      ? // eslint-disable-next-line deprecation/deprecation
-        parentSpan.startChild({
-          data: {
-            type: 'xhr',
-            'http.method': sentryXhrData.method,
-            url: sentryXhrData.url,
-          },
-          description: `${sentryXhrData.method} ${sentryXhrData.url}`,
-          op: 'http.client',
-          origin: 'auto.http.browser',
-        })
-      : undefined;
+  const span = shouldCreateSpanResult
+    ? core.startInactiveSpan({
+        name: `${sentryXhrData.method} ${sentryXhrData.url}`,
+        onlyIfParent: true,
+        attributes: {
+          type: 'xhr',
+          'http.method': sentryXhrData.method,
+          url: sentryXhrData.url,
+          [core.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN]: 'auto.http.browser',
+        },
+        op: 'http.client',
+      })
+    : undefined;
 
   if (span) {
     xhr.__sentry_xhr_span_id__ = span.spanContext().spanId;
     spans[xhr.__sentry_xhr_span_id__] = span;
   }
 
-  if (xhr.setRequestHeader && shouldAttachHeaders(sentryXhrData.url)) {
-    if (span) {
-      const transaction = span && core.getRootSpan(span);
-      const dynamicSamplingContext = transaction && core.getDynamicSamplingContextFromSpan(transaction);
-      const sentryBaggageHeader = utils.dynamicSamplingContextToSentryBaggageHeader(dynamicSamplingContext);
-      setHeaderOnXhr(xhr, core.spanToTraceHeader(span), sentryBaggageHeader);
-    } else {
-      const client = core.getClient();
-      const { traceId, sampled, dsc } = scope.getPropagationContext();
-      const sentryTraceHeader = utils.generateSentryTraceHeader(traceId, undefined, sampled);
-      const dynamicSamplingContext =
-        dsc || (client ? core.getDynamicSamplingContextFromClient(traceId, client, scope) : undefined);
-      const sentryBaggageHeader = utils.dynamicSamplingContextToSentryBaggageHeader(dynamicSamplingContext);
-      setHeaderOnXhr(xhr, sentryTraceHeader, sentryBaggageHeader);
-    }
+  const client = core.getClient();
+
+  if (xhr.setRequestHeader && shouldAttachHeaders(sentryXhrData.url) && client) {
+    const { traceId, spanId, sampled, dsc } = {
+      ...isolationScope.getPropagationContext(),
+      ...scope.getPropagationContext(),
+    };
+
+    const sentryTraceHeader = span ? core.spanToTraceHeader(span) : utils.generateSentryTraceHeader(traceId, spanId, sampled);
+
+    const sentryBaggageHeader = utils.dynamicSamplingContextToSentryBaggageHeader(
+      dsc ||
+        (span ? core.getDynamicSamplingContextFromSpan(span) : core.getDynamicSamplingContextFromClient(traceId, client, scope)),
+    );
+
+    setHeaderOnXhr(xhr, sentryTraceHeader, sentryBaggageHeader);
   }
 
   return span;
@@ -4140,7 +4621,7 @@ exports.shouldAttachHeaders = shouldAttachHeaders;
 exports.xhrCallback = xhrCallback;
 
 
-},{"../common/fetch.js":23,"./instrument.js":5,"@sentry/core":66,"@sentry/utils":131}],9:[function(require,module,exports){
+},{"../common/fetch.js":24,"./instrument.js":6,"@sentry/core":67,"@sentry/utils":135}],10:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -4211,7 +4692,7 @@ function instrumentRoutingWithDefaults(
 exports.instrumentRoutingWithDefaults = instrumentRoutingWithDefaults;
 
 
-},{"../common/debug-build.js":22,"./types.js":10,"@sentry/utils":131}],10:[function(require,module,exports){
+},{"../common/debug-build.js":23,"./types.js":11,"@sentry/utils":135}],11:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -4221,7 +4702,7 @@ const WINDOW = utils.GLOBAL_OBJ ;
 exports.WINDOW = WINDOW;
 
 
-},{"@sentry/utils":131}],11:[function(require,module,exports){
+},{"@sentry/utils":135}],12:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const bindReporter = require('./lib/bindReporter.js');
@@ -4330,7 +4811,7 @@ const onCLS = (onReport) => {
 exports.onCLS = onCLS;
 
 
-},{"./lib/bindReporter.js":14,"./lib/initMetric.js":19,"./lib/observe.js":20,"./lib/onHidden.js":21}],12:[function(require,module,exports){
+},{"./lib/bindReporter.js":15,"./lib/initMetric.js":20,"./lib/observe.js":21,"./lib/onHidden.js":22}],13:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const bindReporter = require('./lib/bindReporter.js');
@@ -4397,7 +4878,7 @@ const onFID = (onReport) => {
 exports.onFID = onFID;
 
 
-},{"./lib/bindReporter.js":14,"./lib/getVisibilityWatcher.js":18,"./lib/initMetric.js":19,"./lib/observe.js":20,"./lib/onHidden.js":21}],13:[function(require,module,exports){
+},{"./lib/bindReporter.js":15,"./lib/getVisibilityWatcher.js":19,"./lib/initMetric.js":20,"./lib/observe.js":21,"./lib/onHidden.js":22}],14:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const bindReporter = require('./lib/bindReporter.js');
@@ -4486,7 +4967,7 @@ const onLCP = (onReport) => {
 exports.onLCP = onLCP;
 
 
-},{"./lib/bindReporter.js":14,"./lib/getActivationStart.js":16,"./lib/getVisibilityWatcher.js":18,"./lib/initMetric.js":19,"./lib/observe.js":20,"./lib/onHidden.js":21}],14:[function(require,module,exports){
+},{"./lib/bindReporter.js":15,"./lib/getActivationStart.js":17,"./lib/getVisibilityWatcher.js":19,"./lib/initMetric.js":20,"./lib/observe.js":21,"./lib/onHidden.js":22}],15:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const bindReporter = (
@@ -4518,7 +4999,7 @@ const bindReporter = (
 exports.bindReporter = bindReporter;
 
 
-},{}],15:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /*
@@ -4549,7 +5030,7 @@ const generateUniqueID = () => {
 exports.generateUniqueID = generateUniqueID;
 
 
-},{}],16:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const getNavigationEntry = require('./getNavigationEntry.js');
@@ -4578,7 +5059,7 @@ const getActivationStart = () => {
 exports.getActivationStart = getActivationStart;
 
 
-},{"./getNavigationEntry.js":17}],17:[function(require,module,exports){
+},{"./getNavigationEntry.js":18}],18:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const types = require('../../types.js');
@@ -4635,7 +5116,7 @@ const getNavigationEntry = () => {
 exports.getNavigationEntry = getNavigationEntry;
 
 
-},{"../../types.js":10}],18:[function(require,module,exports){
+},{"../../types.js":11}],19:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const types = require('../../types.js');
@@ -4693,7 +5174,7 @@ const getVisibilityWatcher = (
 exports.getVisibilityWatcher = getVisibilityWatcher;
 
 
-},{"../../types.js":10,"./onHidden.js":21}],19:[function(require,module,exports){
+},{"../../types.js":11,"./onHidden.js":22}],20:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const types = require('../../types.js');
@@ -4743,7 +5224,7 @@ const initMetric = (name, value) => {
 exports.initMetric = initMetric;
 
 
-},{"../../types.js":10,"./generateUniqueID.js":15,"./getActivationStart.js":16,"./getNavigationEntry.js":17}],20:[function(require,module,exports){
+},{"../../types.js":11,"./generateUniqueID.js":16,"./getActivationStart.js":17,"./getNavigationEntry.js":18}],21:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -4784,7 +5265,7 @@ const observe = (
 exports.observe = observe;
 
 
-},{}],21:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const types = require('../../types.js');
@@ -4824,7 +5305,7 @@ const onHidden = (cb, once) => {
 exports.onHidden = onHidden;
 
 
-},{"../../types.js":10}],22:[function(require,module,exports){
+},{"../../types.js":11}],23:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -4837,7 +5318,7 @@ const DEBUG_BUILD = (typeof __SENTRY_DEBUG__ === 'undefined' || __SENTRY_DEBUG__
 exports.DEBUG_BUILD = DEBUG_BUILD;
 
 
-},{}],23:[function(require,module,exports){
+},{}],24:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -4868,7 +5349,7 @@ function instrumentFetchRequest(
     const span = spans[spanId];
     if (span) {
       if (handlerData.response) {
-        span.setHttpStatus(handlerData.response.status);
+        core.setHttpStatus(span, handlerData.response.status);
 
         const contentLength =
           handlerData.response && handlerData.response.headers && handlerData.response.headers.get('content-length');
@@ -4892,24 +5373,22 @@ function instrumentFetchRequest(
 
   const scope = core.getCurrentScope();
   const client = core.getClient();
-  const parentSpan = core.getActiveSpan();
 
   const { method, url } = handlerData.fetchData;
 
-  const span =
-    shouldCreateSpanResult && parentSpan
-      ? // eslint-disable-next-line deprecation/deprecation
-        parentSpan.startChild({
-          data: {
-            url,
-            type: 'fetch',
-            'http.method': method,
-          },
-          description: `${method} ${url}`,
-          op: 'http.client',
-          origin: spanOrigin,
-        })
-      : undefined;
+  const span = shouldCreateSpanResult
+    ? core.startInactiveSpan({
+        name: `${method} ${url}`,
+        onlyIfParent: true,
+        attributes: {
+          url,
+          type: 'fetch',
+          'http.method': method,
+          [core.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN]: spanOrigin,
+        },
+        op: 'http.client',
+      })
+    : undefined;
 
   if (span) {
     handlerData.fetchData.__span = span.spanContext().spanId;
@@ -4947,18 +5426,19 @@ function addTracingHeadersToFetchRequest(
   // eslint-disable-next-line deprecation/deprecation
   const span = requestSpan || scope.getSpan();
 
-  const transaction = span && core.getRootSpan(span);
+  const isolationScope = core.getIsolationScope();
 
-  const { traceId, sampled, dsc } = scope.getPropagationContext();
+  const { traceId, spanId, sampled, dsc } = {
+    ...isolationScope.getPropagationContext(),
+    ...scope.getPropagationContext(),
+  };
 
-  const sentryTraceHeader = span ? core.spanToTraceHeader(span) : utils.generateSentryTraceHeader(traceId, undefined, sampled);
-  const dynamicSamplingContext = transaction
-    ? core.getDynamicSamplingContextFromSpan(transaction)
-    : dsc
-      ? dsc
-      : core.getDynamicSamplingContextFromClient(traceId, client, scope);
+  const sentryTraceHeader = span ? core.spanToTraceHeader(span) : utils.generateSentryTraceHeader(traceId, spanId, sampled);
 
-  const sentryBaggageHeader = utils.dynamicSamplingContextToSentryBaggageHeader(dynamicSamplingContext);
+  const sentryBaggageHeader = utils.dynamicSamplingContextToSentryBaggageHeader(
+    dsc ||
+      (span ? core.getDynamicSamplingContextFromSpan(span) : core.getDynamicSamplingContextFromClient(traceId, client, scope)),
+  );
 
   const headers =
     options.headers ||
@@ -5014,7 +5494,7 @@ exports.addTracingHeadersToFetchRequest = addTracingHeadersToFetchRequest;
 exports.instrumentFetchRequest = instrumentFetchRequest;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],24:[function(require,module,exports){
+},{"@sentry/core":67,"@sentry/utils":135}],25:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -5087,7 +5567,7 @@ function addExtensionMethods() {
 exports.addExtensionMethods = addExtensionMethods;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],25:[function(require,module,exports){
+},{"@sentry/core":67,"@sentry/utils":135}],26:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -5101,6 +5581,7 @@ const graphql = require('./node/integrations/graphql.js');
 const apollo = require('./node/integrations/apollo.js');
 const lazy = require('./node/integrations/lazy.js');
 const browsertracing = require('./browser/browsertracing.js');
+const browserTracingIntegration = require('./browser/browserTracingIntegration.js');
 const request = require('./browser/request.js');
 const instrument = require('./browser/instrument.js');
 const fetch = require('./common/fetch.js');
@@ -5129,6 +5610,9 @@ exports.Apollo = apollo.Apollo;
 exports.lazyLoadedNodePerformanceMonitoringIntegrations = lazy.lazyLoadedNodePerformanceMonitoringIntegrations;
 exports.BROWSER_TRACING_INTEGRATION_ID = browsertracing.BROWSER_TRACING_INTEGRATION_ID;
 exports.BrowserTracing = browsertracing.BrowserTracing;
+exports.browserTracingIntegration = browserTracingIntegration.browserTracingIntegration;
+exports.startBrowserTracingNavigationSpan = browserTracingIntegration.startBrowserTracingNavigationSpan;
+exports.startBrowserTracingPageLoadSpan = browserTracingIntegration.startBrowserTracingPageLoadSpan;
 exports.defaultRequestInstrumentationOptions = request.defaultRequestInstrumentationOptions;
 exports.instrumentOutgoingRequests = request.instrumentOutgoingRequests;
 exports.addClsInstrumentationHandler = instrument.addClsInstrumentationHandler;
@@ -5140,7 +5624,7 @@ exports.instrumentFetchRequest = fetch.instrumentFetchRequest;
 exports.addExtensionMethods = extensions.addExtensionMethods;
 
 
-},{"./browser/browsertracing.js":4,"./browser/instrument.js":5,"./browser/request.js":8,"./common/fetch.js":23,"./extensions.js":24,"./node/integrations/apollo.js":26,"./node/integrations/express.js":27,"./node/integrations/graphql.js":28,"./node/integrations/lazy.js":29,"./node/integrations/mongo.js":30,"./node/integrations/mysql.js":31,"./node/integrations/postgres.js":32,"./node/integrations/prisma.js":33,"@sentry/core":66,"@sentry/utils":131}],26:[function(require,module,exports){
+},{"./browser/browserTracingIntegration.js":4,"./browser/browsertracing.js":5,"./browser/instrument.js":6,"./browser/request.js":9,"./common/fetch.js":24,"./extensions.js":25,"./node/integrations/apollo.js":27,"./node/integrations/express.js":28,"./node/integrations/graphql.js":29,"./node/integrations/lazy.js":30,"./node/integrations/mongo.js":31,"./node/integrations/mysql.js":32,"./node/integrations/postgres.js":33,"./node/integrations/prisma.js":34,"@sentry/core":67,"@sentry/utils":135}],27:[function(require,module,exports){
 var {
   _optionalChain
 } = require('@sentry/utils');
@@ -5330,7 +5814,7 @@ function wrapResolver(
 exports.Apollo = Apollo;
 
 
-},{"../../common/debug-build.js":22,"./utils/node-utils.js":34,"@sentry/utils":131}],27:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"./utils/node-utils.js":35,"@sentry/utils":135}],28:[function(require,module,exports){
 var {
   _optionalChain
 } = require('@sentry/utils');
@@ -5826,7 +6310,7 @@ exports.extractOriginalRoute = extractOriginalRoute;
 exports.preventDuplicateSegments = preventDuplicateSegments;
 
 
-},{"../../common/debug-build.js":22,"./utils/node-utils.js":34,"@sentry/core":66,"@sentry/utils":131}],28:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"./utils/node-utils.js":35,"@sentry/core":67,"@sentry/utils":135}],29:[function(require,module,exports){
 var {
   _optionalChain
 } = require('@sentry/utils');
@@ -5914,7 +6398,7 @@ class GraphQL  {
 exports.GraphQL = GraphQL;
 
 
-},{"../../common/debug-build.js":22,"./utils/node-utils.js":34,"@sentry/utils":131}],29:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"./utils/node-utils.js":35,"@sentry/utils":135}],30:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -5967,7 +6451,7 @@ const lazyLoadedNodePerformanceMonitoringIntegrations = [
 exports.lazyLoadedNodePerformanceMonitoringIntegrations = lazyLoadedNodePerformanceMonitoringIntegrations;
 
 
-},{"@sentry/utils":131}],30:[function(require,module,exports){
+},{"@sentry/utils":135}],31:[function(require,module,exports){
 var {
   _optionalChain
 } = require('@sentry/utils');
@@ -6231,7 +6715,7 @@ class Mongo  {
 exports.Mongo = Mongo;
 
 
-},{"../../common/debug-build.js":22,"./utils/node-utils.js":34,"@sentry/utils":131}],31:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"./utils/node-utils.js":35,"@sentry/utils":135}],32:[function(require,module,exports){
 var {
   _optionalChain
 } = require('@sentry/utils');
@@ -6368,7 +6852,7 @@ class Mysql  {
 exports.Mysql = Mysql;
 
 
-},{"../../common/debug-build.js":22,"./utils/node-utils.js":34,"@sentry/utils":131}],32:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"./utils/node-utils.js":35,"@sentry/utils":135}],33:[function(require,module,exports){
 var {
   _optionalChain
 } = require('@sentry/utils');
@@ -6500,7 +6984,7 @@ class Postgres  {
 exports.Postgres = Postgres;
 
 
-},{"../../common/debug-build.js":22,"./utils/node-utils.js":34,"@sentry/utils":131}],33:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"./utils/node-utils.js":35,"@sentry/utils":135}],34:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -6566,8 +7050,11 @@ class Prisma  {
         return core.startSpan(
           {
             name: model ? `${model} ${action}` : action,
+            onlyIfParent: true,
             op: 'db.prisma',
-            origin: 'auto.db.prisma',
+            attributes: {
+              [core.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN]: 'auto.db.prisma',
+            },
             data: { ...clientData, 'db.operation': action },
           },
           () => next(params),
@@ -6590,7 +7077,7 @@ class Prisma  {
 exports.Prisma = Prisma;
 
 
-},{"../../common/debug-build.js":22,"./utils/node-utils.js":34,"@sentry/core":66,"@sentry/utils":131}],34:[function(require,module,exports){
+},{"../../common/debug-build.js":23,"./utils/node-utils.js":35,"@sentry/core":67,"@sentry/utils":135}],35:[function(require,module,exports){
 var {
  _optionalChain
 } = require('@sentry/utils');
@@ -6614,7 +7101,7 @@ function shouldDisableAutoInstrumentation(getCurrentHub) {
 exports.shouldDisableAutoInstrumentation = shouldDisableAutoInstrumentation;
 
 
-},{"@sentry/utils":131}],35:[function(require,module,exports){
+},{"@sentry/utils":135}],36:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -6643,18 +7130,7 @@ class BrowserClient extends core.BaseClient {
    */
    constructor(options) {
     const sdkSource = helpers.WINDOW.SENTRY_SDK_SOURCE || utils.getSDKSource();
-
-    options._metadata = options._metadata || {};
-    options._metadata.sdk = options._metadata.sdk || {
-      name: 'sentry.javascript.browser',
-      packages: [
-        {
-          name: `${sdkSource}:@sentry/browser`,
-          version: core.SDK_VERSION,
-        },
-      ],
-      version: core.SDK_VERSION,
-    };
+    core.applySdkMetadata(options, 'browser', ['browser'], sdkSource);
 
     super(options);
 
@@ -6744,9 +7220,9 @@ class BrowserClient extends core.BaseClient {
 exports.BrowserClient = BrowserClient;
 
 
-},{"./debug-build.js":36,"./eventbuilder.js":37,"./helpers.js":38,"./userfeedback.js":56,"@sentry/core":66,"@sentry/utils":131}],36:[function(require,module,exports){
-arguments[4][22][0].apply(exports,arguments)
-},{"dup":22}],37:[function(require,module,exports){
+},{"./debug-build.js":37,"./eventbuilder.js":38,"./helpers.js":39,"./userfeedback.js":57,"@sentry/core":67,"@sentry/utils":135}],37:[function(require,module,exports){
+arguments[4][23][0].apply(exports,arguments)
+},{"dup":23}],38:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -7069,9 +7545,10 @@ exports.exceptionFromError = exceptionFromError;
 exports.parseStackFrames = parseStackFrames;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],38:[function(require,module,exports){
+},{"@sentry/core":67,"@sentry/utils":135}],39:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
+require('@sentry-internal/tracing');
 const core = require('@sentry/core');
 const utils = require('@sentry/utils');
 
@@ -7220,19 +7697,13 @@ function wrap(
   return sentryWrapped;
 }
 
-/**
- * All properties the report dialog supports
- *
- * @deprecated This type will be removed in the next major version of the Sentry SDK. `showReportDialog` will still be around, however the `eventId` option will now be required.
- */
-
 exports.WINDOW = WINDOW;
 exports.ignoreNextOnError = ignoreNextOnError;
 exports.shouldIgnoreOnError = shouldIgnoreOnError;
 exports.wrap = wrap;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],39:[function(require,module,exports){
+},{"@sentry-internal/tracing":26,"@sentry/core":67,"@sentry/utils":135}],40:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -7244,6 +7715,12 @@ const stackParsers = require('./stack-parsers.js');
 const eventbuilder = require('./eventbuilder.js');
 const userfeedback = require('./userfeedback.js');
 const sdk = require('./sdk.js');
+const breadcrumbs = require('./integrations/breadcrumbs.js');
+const dedupe = require('./integrations/dedupe.js');
+const globalhandlers = require('./integrations/globalhandlers.js');
+const httpcontext = require('./integrations/httpcontext.js');
+const linkederrors = require('./integrations/linkederrors.js');
+const trycatch = require('./integrations/trycatch.js');
 const index = require('./integrations/index.js');
 const replay = require('@sentry/replay');
 const replayCanvas = require('@sentry-internal/replay-canvas');
@@ -7252,12 +7729,6 @@ const tracing = require('@sentry-internal/tracing');
 const offline = require('./transports/offline.js');
 const hubextensions = require('./profiling/hubextensions.js');
 const integration = require('./profiling/integration.js');
-const globalhandlers = require('./integrations/globalhandlers.js');
-const trycatch = require('./integrations/trycatch.js');
-const breadcrumbs = require('./integrations/breadcrumbs.js');
-const linkederrors = require('./integrations/linkederrors.js');
-const httpcontext = require('./integrations/httpcontext.js');
-const dedupe = require('./integrations/dedupe.js');
 
 let windowIntegrations = {};
 
@@ -7266,6 +7737,7 @@ if (helpers.WINDOW.Sentry && helpers.WINDOW.Sentry.Integrations) {
   windowIntegrations = helpers.WINDOW.Sentry.Integrations;
 }
 
+/** @deprecated Import the integration function directly, e.g. `inboundFiltersIntegration()` instead of `new Integrations.InboundFilter(). */
 const INTEGRATIONS = {
   ...windowIntegrations,
   // eslint-disable-next-line deprecation/deprecation
@@ -7278,6 +7750,10 @@ exports.Hub = core.Hub;
 exports.InboundFilters = core.InboundFilters;
 exports.ModuleMetadata = core.ModuleMetadata;
 exports.SDK_VERSION = core.SDK_VERSION;
+exports.SEMANTIC_ATTRIBUTE_SENTRY_OP = core.SEMANTIC_ATTRIBUTE_SENTRY_OP;
+exports.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN = core.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN;
+exports.SEMANTIC_ATTRIBUTE_SENTRY_SAMPLE_RATE = core.SEMANTIC_ATTRIBUTE_SENTRY_SAMPLE_RATE;
+exports.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE = core.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE;
 exports.Scope = core.Scope;
 exports.addBreadcrumb = core.addBreadcrumb;
 exports.addEventProcessor = core.addEventProcessor;
@@ -7300,16 +7776,20 @@ exports.getClient = core.getClient;
 exports.getCurrentHub = core.getCurrentHub;
 exports.getCurrentScope = core.getCurrentScope;
 exports.getHubFromCarrier = core.getHubFromCarrier;
+exports.getSpanStatusFromHttpCode = core.getSpanStatusFromHttpCode;
 exports.inboundFiltersIntegration = core.inboundFiltersIntegration;
+exports.isInitialized = core.isInitialized;
 exports.lastEventId = core.lastEventId;
 exports.makeMain = core.makeMain;
 exports.makeMultiplexedTransport = core.makeMultiplexedTransport;
 exports.metrics = core.metrics;
 exports.moduleMetadataIntegration = core.moduleMetadataIntegration;
+exports.parameterize = core.parameterize;
 exports.setContext = core.setContext;
 exports.setCurrentClient = core.setCurrentClient;
 exports.setExtra = core.setExtra;
 exports.setExtras = core.setExtras;
+exports.setHttpStatus = core.setHttpStatus;
 exports.setMeasurement = core.setMeasurement;
 exports.setTag = core.setTag;
 exports.setTags = core.setTags;
@@ -7340,30 +7820,45 @@ exports.createUserFeedbackEnvelope = userfeedback.createUserFeedbackEnvelope;
 exports.captureUserFeedback = sdk.captureUserFeedback;
 exports.defaultIntegrations = sdk.defaultIntegrations;
 exports.forceLoad = sdk.forceLoad;
+exports.getDefaultIntegrations = sdk.getDefaultIntegrations;
 exports.init = sdk.init;
 exports.onLoad = sdk.onLoad;
 exports.showReportDialog = sdk.showReportDialog;
 exports.wrap = sdk.wrap;
+exports.Breadcrumbs = breadcrumbs.Breadcrumbs;
+exports.breadcrumbsIntegration = breadcrumbs.breadcrumbsIntegration;
+exports.Dedupe = dedupe.Dedupe;
+exports.dedupeIntegration = dedupe.dedupeIntegration;
+exports.GlobalHandlers = globalhandlers.GlobalHandlers;
+exports.globalHandlersIntegration = globalhandlers.globalHandlersIntegration;
+exports.HttpContext = httpcontext.HttpContext;
+exports.httpContextIntegration = httpcontext.httpContextIntegration;
+exports.LinkedErrors = linkederrors.LinkedErrors;
+exports.linkedErrorsIntegration = linkederrors.linkedErrorsIntegration;
+exports.TryCatch = trycatch.TryCatch;
+exports.browserApiErrorsIntegration = trycatch.browserApiErrorsIntegration;
 exports.Replay = replay.Replay;
+exports.getReplay = replay.getReplay;
+exports.replayIntegration = replay.replayIntegration;
 exports.ReplayCanvas = replayCanvas.ReplayCanvas;
+exports.replayCanvasIntegration = replayCanvas.replayCanvasIntegration;
 exports.Feedback = feedback.Feedback;
+exports.feedbackIntegration = feedback.feedbackIntegration;
 exports.sendFeedback = feedback.sendFeedback;
 exports.BrowserTracing = tracing.BrowserTracing;
+exports.browserTracingIntegration = tracing.browserTracingIntegration;
 exports.defaultRequestInstrumentationOptions = tracing.defaultRequestInstrumentationOptions;
 exports.instrumentOutgoingRequests = tracing.instrumentOutgoingRequests;
+exports.startBrowserTracingNavigationSpan = tracing.startBrowserTracingNavigationSpan;
+exports.startBrowserTracingPageLoadSpan = tracing.startBrowserTracingPageLoadSpan;
 exports.makeBrowserOfflineTransport = offline.makeBrowserOfflineTransport;
 exports.onProfilingStartRouteTransaction = hubextensions.onProfilingStartRouteTransaction;
 exports.BrowserProfilingIntegration = integration.BrowserProfilingIntegration;
-exports.GlobalHandlers = globalhandlers.GlobalHandlers;
-exports.TryCatch = trycatch.TryCatch;
-exports.Breadcrumbs = breadcrumbs.Breadcrumbs;
-exports.LinkedErrors = linkederrors.LinkedErrors;
-exports.HttpContext = httpcontext.HttpContext;
-exports.Dedupe = dedupe.Dedupe;
+exports.browserProfilingIntegration = integration.browserProfilingIntegration;
 exports.Integrations = INTEGRATIONS;
 
 
-},{"./client.js":35,"./eventbuilder.js":37,"./helpers.js":38,"./integrations/breadcrumbs.js":40,"./integrations/dedupe.js":41,"./integrations/globalhandlers.js":42,"./integrations/httpcontext.js":43,"./integrations/index.js":44,"./integrations/linkederrors.js":45,"./integrations/trycatch.js":46,"./profiling/hubextensions.js":47,"./profiling/integration.js":48,"./sdk.js":50,"./stack-parsers.js":51,"./transports/fetch.js":52,"./transports/offline.js":53,"./transports/xhr.js":55,"./userfeedback.js":56,"@sentry-internal/feedback":1,"@sentry-internal/replay-canvas":2,"@sentry-internal/tracing":25,"@sentry/core":66,"@sentry/replay":111}],40:[function(require,module,exports){
+},{"./client.js":36,"./eventbuilder.js":38,"./helpers.js":39,"./integrations/breadcrumbs.js":41,"./integrations/dedupe.js":42,"./integrations/globalhandlers.js":43,"./integrations/httpcontext.js":44,"./integrations/index.js":45,"./integrations/linkederrors.js":46,"./integrations/trycatch.js":47,"./profiling/hubextensions.js":48,"./profiling/integration.js":49,"./sdk.js":51,"./stack-parsers.js":52,"./transports/fetch.js":53,"./transports/offline.js":54,"./transports/xhr.js":56,"./userfeedback.js":57,"@sentry-internal/feedback":1,"@sentry-internal/replay-canvas":2,"@sentry-internal/tracing":26,"@sentry/core":67,"@sentry/replay":115}],41:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -7378,7 +7873,7 @@ const MAX_ALLOWED_STRING_LENGTH = 1024;
 
 const INTEGRATION_NAME = 'Breadcrumbs';
 
-const breadcrumbsIntegration = ((options = {}) => {
+const _breadcrumbsIntegration = ((options = {}) => {
   const _options = {
     console: true,
     dom: true,
@@ -7416,8 +7911,12 @@ const breadcrumbsIntegration = ((options = {}) => {
   };
 }) ;
 
+const breadcrumbsIntegration = core.defineIntegration(_breadcrumbsIntegration);
+
 /**
  * Default Breadcrumbs instrumentations
+ *
+ * @deprecated Use `breadcrumbsIntegration()` instead.
  */
 // eslint-disable-next-line deprecation/deprecation
 const Breadcrumbs = core.convertIntegrationFnToClass(INTEGRATION_NAME, breadcrumbsIntegration)
@@ -7697,9 +8196,10 @@ function _isEvent(event) {
 }
 
 exports.Breadcrumbs = Breadcrumbs;
+exports.breadcrumbsIntegration = breadcrumbsIntegration;
 
 
-},{"../debug-build.js":36,"../helpers.js":38,"@sentry/core":66,"@sentry/utils":131}],41:[function(require,module,exports){
+},{"../debug-build.js":37,"../helpers.js":39,"@sentry/core":67,"@sentry/utils":135}],42:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -7708,7 +8208,7 @@ const debugBuild = require('../debug-build.js');
 
 const INTEGRATION_NAME = 'Dedupe';
 
-const dedupeIntegration = (() => {
+const _dedupeIntegration = (() => {
   let previousEvent;
 
   return {
@@ -7735,7 +8235,12 @@ const dedupeIntegration = (() => {
   };
 }) ;
 
-/** Deduplication filter */
+const dedupeIntegration = core.defineIntegration(_dedupeIntegration);
+
+/**
+ * Deduplication filter.
+ * @deprecated Use `dedupeIntegration()` instead.
+ */
 // eslint-disable-next-line deprecation/deprecation
 const Dedupe = core.convertIntegrationFnToClass(INTEGRATION_NAME, dedupeIntegration)
 
@@ -7893,9 +8398,10 @@ function _getFramesFromEvent(event) {
 }
 
 exports.Dedupe = Dedupe;
+exports.dedupeIntegration = dedupeIntegration;
 
 
-},{"../debug-build.js":36,"@sentry/core":66,"@sentry/utils":131}],42:[function(require,module,exports){
+},{"../debug-build.js":37,"@sentry/core":67,"@sentry/utils":135}],43:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -7908,7 +8414,7 @@ const helpers = require('../helpers.js');
 
 const INTEGRATION_NAME = 'GlobalHandlers';
 
-const globalHandlersIntegration = ((options = {}) => {
+const _globalHandlersIntegration = ((options = {}) => {
   const _options = {
     onerror: true,
     onunhandledrejection: true,
@@ -7933,7 +8439,12 @@ const globalHandlersIntegration = ((options = {}) => {
   };
 }) ;
 
-/** Global handlers */
+const globalHandlersIntegration = core.defineIntegration(_globalHandlersIntegration);
+
+/**
+ * Global handlers.
+ * @deprecated Use `globalHandlersIntegration()` instead.
+ */
 // eslint-disable-next-line deprecation/deprecation
 const GlobalHandlers = core.convertIntegrationFnToClass(
   INTEGRATION_NAME,
@@ -8126,9 +8637,10 @@ function getOptions() {
 }
 
 exports.GlobalHandlers = GlobalHandlers;
+exports.globalHandlersIntegration = globalHandlersIntegration;
 
 
-},{"../debug-build.js":36,"../eventbuilder.js":37,"../helpers.js":38,"@sentry/core":66,"@sentry/utils":131}],43:[function(require,module,exports){
+},{"../debug-build.js":37,"../eventbuilder.js":38,"../helpers.js":39,"@sentry/core":67,"@sentry/utils":135}],44:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -8136,7 +8648,7 @@ const helpers = require('../helpers.js');
 
 const INTEGRATION_NAME = 'HttpContext';
 
-const httpContextIntegration = (() => {
+const _httpContextIntegration = (() => {
   return {
     name: INTEGRATION_NAME,
     // TODO v8: Remove this
@@ -8164,16 +8676,22 @@ const httpContextIntegration = (() => {
   };
 }) ;
 
-/** HttpContext integration collects information about HTTP request headers */
+const httpContextIntegration = core.defineIntegration(_httpContextIntegration);
+
+/**
+ * HttpContext integration collects information about HTTP request headers.
+ * @deprecated Use `httpContextIntegration()` instead.
+ */
 // eslint-disable-next-line deprecation/deprecation
 const HttpContext = core.convertIntegrationFnToClass(INTEGRATION_NAME, httpContextIntegration)
 
 ;
 
 exports.HttpContext = HttpContext;
+exports.httpContextIntegration = httpContextIntegration;
 
 
-},{"../helpers.js":38,"@sentry/core":66}],44:[function(require,module,exports){
+},{"../helpers.js":39,"@sentry/core":67}],45:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const globalhandlers = require('./globalhandlers.js');
@@ -8183,7 +8701,7 @@ const linkederrors = require('./linkederrors.js');
 const httpcontext = require('./httpcontext.js');
 const dedupe = require('./dedupe.js');
 
-
+/* eslint-disable deprecation/deprecation */
 
 exports.GlobalHandlers = globalhandlers.GlobalHandlers;
 exports.TryCatch = trycatch.TryCatch;
@@ -8193,7 +8711,7 @@ exports.HttpContext = httpcontext.HttpContext;
 exports.Dedupe = dedupe.Dedupe;
 
 
-},{"./breadcrumbs.js":40,"./dedupe.js":41,"./globalhandlers.js":42,"./httpcontext.js":43,"./linkederrors.js":45,"./trycatch.js":46}],45:[function(require,module,exports){
+},{"./breadcrumbs.js":41,"./dedupe.js":42,"./globalhandlers.js":43,"./httpcontext.js":44,"./linkederrors.js":46,"./trycatch.js":47}],46:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -8205,7 +8723,7 @@ const DEFAULT_LIMIT = 5;
 
 const INTEGRATION_NAME = 'LinkedErrors';
 
-const linkedErrorsIntegration = ((options = {}) => {
+const _linkedErrorsIntegration = ((options = {}) => {
   const limit = options.limit || DEFAULT_LIMIT;
   const key = options.key || DEFAULT_KEY;
 
@@ -8230,16 +8748,22 @@ const linkedErrorsIntegration = ((options = {}) => {
   };
 }) ;
 
-/** Aggregrate linked errors in an event. */
+const linkedErrorsIntegration = core.defineIntegration(_linkedErrorsIntegration);
+
+/**
+ * Aggregrate linked errors in an event.
+ * @deprecated Use `linkedErrorsIntegration()` instead.
+ */
 // eslint-disable-next-line deprecation/deprecation
 const LinkedErrors = core.convertIntegrationFnToClass(INTEGRATION_NAME, linkedErrorsIntegration)
 
 ;
 
 exports.LinkedErrors = LinkedErrors;
+exports.linkedErrorsIntegration = linkedErrorsIntegration;
 
 
-},{"../eventbuilder.js":37,"@sentry/core":66,"@sentry/utils":131}],46:[function(require,module,exports){
+},{"../eventbuilder.js":38,"@sentry/core":67,"@sentry/utils":135}],47:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -8282,7 +8806,7 @@ const DEFAULT_EVENT_TARGET = [
 
 const INTEGRATION_NAME = 'TryCatch';
 
-const browserApiErrorsIntegration = ((options = {}) => {
+const _browserApiErrorsIntegration = ((options = {}) => {
   const _options = {
     XMLHttpRequest: true,
     eventTarget: true,
@@ -8322,7 +8846,12 @@ const browserApiErrorsIntegration = ((options = {}) => {
   };
 }) ;
 
-/** Wrap timer functions and event targets to catch errors and provide better meta data */
+const browserApiErrorsIntegration = core.defineIntegration(_browserApiErrorsIntegration);
+
+/**
+ * Wrap timer functions and event targets to catch errors and provide better meta data.
+ * @deprecated Use `browserApiErrorsIntegration()` instead.
+ */
 // eslint-disable-next-line deprecation/deprecation
 const TryCatch = core.convertIntegrationFnToClass(
   INTEGRATION_NAME,
@@ -8515,9 +9044,10 @@ function _wrapEventTarget(target) {
 }
 
 exports.TryCatch = TryCatch;
+exports.browserApiErrorsIntegration = browserApiErrorsIntegration;
 
 
-},{"../helpers.js":38,"@sentry/core":66,"@sentry/utils":131}],47:[function(require,module,exports){
+},{"../helpers.js":39,"@sentry/core":67,"@sentry/utils":135}],48:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -8677,7 +9207,7 @@ exports.onProfilingStartRouteTransaction = onProfilingStartRouteTransaction;
 exports.startProfileForTransaction = startProfileForTransaction;
 
 
-},{"../debug-build.js":36,"../helpers.js":38,"./utils.js":49,"@sentry/core":66,"@sentry/utils":131}],48:[function(require,module,exports){
+},{"../debug-build.js":37,"../helpers.js":39,"./utils.js":50,"@sentry/core":67,"@sentry/utils":135}],49:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -8688,7 +9218,7 @@ const utils = require('./utils.js');
 
 const INTEGRATION_NAME = 'BrowserProfiling';
 
-const browserProfilingIntegration = (() => {
+const _browserProfilingIntegration = (() => {
   return {
     name: INTEGRATION_NAME,
     // TODO v8: Remove this
@@ -8772,6 +9302,8 @@ const browserProfilingIntegration = (() => {
   };
 }) ;
 
+const browserProfilingIntegration = core.defineIntegration(_browserProfilingIntegration);
+
 /**
  * Browser profiling integration. Stores any event that has contexts["profile"]["profile_id"]
  * This exists because we do not want to await async profiler.stop calls as transaction.finish is called
@@ -8780,6 +9312,7 @@ const browserProfilingIntegration = (() => {
  * integration less reliable as we might be dropping profiles when the cache is full.
  *
  * @experimental
+ * @deprecated Use `browserProfilingIntegration()` instead.
  */
 // eslint-disable-next-line deprecation/deprecation
 const BrowserProfilingIntegration = core.convertIntegrationFnToClass(
@@ -8787,10 +9320,13 @@ const BrowserProfilingIntegration = core.convertIntegrationFnToClass(
   browserProfilingIntegration,
 ) ;
 
+// eslint-disable-next-line deprecation/deprecation
+
 exports.BrowserProfilingIntegration = BrowserProfilingIntegration;
+exports.browserProfilingIntegration = browserProfilingIntegration;
 
 
-},{"../debug-build.js":36,"./hubextensions.js":47,"./utils.js":49,"@sentry/core":66,"@sentry/utils":131}],49:[function(require,module,exports){
+},{"../debug-build.js":37,"./hubextensions.js":48,"./utils.js":50,"@sentry/core":67,"@sentry/utils":135}],50:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -9394,7 +9930,7 @@ exports.startJSSelfProfile = startJSSelfProfile;
 exports.takeProfileFromGlobalCache = takeProfileFromGlobalCache;
 
 
-},{"../debug-build.js":36,"../helpers.js":38,"@sentry/core":66,"@sentry/utils":131}],50:[function(require,module,exports){
+},{"../debug-build.js":37,"../helpers.js":39,"@sentry/core":67,"@sentry/utils":135}],51:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -9402,28 +9938,36 @@ const utils = require('@sentry/utils');
 const client = require('./client.js');
 const debugBuild = require('./debug-build.js');
 const helpers = require('./helpers.js');
-const globalhandlers = require('./integrations/globalhandlers.js');
-const trycatch = require('./integrations/trycatch.js');
 const breadcrumbs = require('./integrations/breadcrumbs.js');
-const linkederrors = require('./integrations/linkederrors.js');
-const httpcontext = require('./integrations/httpcontext.js');
 const dedupe = require('./integrations/dedupe.js');
+const globalhandlers = require('./integrations/globalhandlers.js');
+const httpcontext = require('./integrations/httpcontext.js');
+const linkederrors = require('./integrations/linkederrors.js');
+const trycatch = require('./integrations/trycatch.js');
 const stackParsers = require('./stack-parsers.js');
 const fetch = require('./transports/fetch.js');
 const xhr = require('./transports/xhr.js');
 
-/* eslint-disable deprecation/deprecation */
+/** @deprecated Use `getDefaultIntegrations(options)` instead. */
 const defaultIntegrations = [
-  new core.InboundFilters(),
-  new core.FunctionToString(),
-  new trycatch.TryCatch(),
-  new breadcrumbs.Breadcrumbs(),
-  new globalhandlers.GlobalHandlers(),
-  new linkederrors.LinkedErrors(),
-  new dedupe.Dedupe(),
-  new httpcontext.HttpContext(),
+  core.inboundFiltersIntegration(),
+  core.functionToStringIntegration(),
+  trycatch.browserApiErrorsIntegration(),
+  breadcrumbs.breadcrumbsIntegration(),
+  globalhandlers.globalHandlersIntegration(),
+  linkederrors.linkedErrorsIntegration(),
+  dedupe.dedupeIntegration(),
+  httpcontext.httpContextIntegration(),
 ];
-/* eslint-enable deprecation/deprecation */
+
+/** Get the default integrations for the browser SDK. */
+function getDefaultIntegrations(_options) {
+  // We return a copy of the defaultIntegrations here to avoid mutating this
+  return [
+    // eslint-disable-next-line deprecation/deprecation
+    ...defaultIntegrations,
+  ];
+}
 
 /**
  * A magic string that build tooling can leverage in order to inject a release value into the SDK.
@@ -9488,7 +10032,7 @@ const defaultIntegrations = [
  */
 function init(options = {}) {
   if (options.defaultIntegrations === undefined) {
-    options.defaultIntegrations = defaultIntegrations;
+    options.defaultIntegrations = getDefaultIntegrations();
   }
   if (options.release === undefined) {
     // This allows build tooling to find-and-replace __SENTRY_RELEASE__ to inject a release value
@@ -9659,13 +10203,14 @@ function captureUserFeedback(feedback) {
 exports.captureUserFeedback = captureUserFeedback;
 exports.defaultIntegrations = defaultIntegrations;
 exports.forceLoad = forceLoad;
+exports.getDefaultIntegrations = getDefaultIntegrations;
 exports.init = init;
 exports.onLoad = onLoad;
 exports.showReportDialog = showReportDialog;
 exports.wrap = wrap;
 
 
-},{"./client.js":35,"./debug-build.js":36,"./helpers.js":38,"./integrations/breadcrumbs.js":40,"./integrations/dedupe.js":41,"./integrations/globalhandlers.js":42,"./integrations/httpcontext.js":43,"./integrations/linkederrors.js":45,"./integrations/trycatch.js":46,"./stack-parsers.js":51,"./transports/fetch.js":52,"./transports/xhr.js":55,"@sentry/core":66,"@sentry/utils":131}],51:[function(require,module,exports){
+},{"./client.js":36,"./debug-build.js":37,"./helpers.js":39,"./integrations/breadcrumbs.js":41,"./integrations/dedupe.js":42,"./integrations/globalhandlers.js":43,"./integrations/httpcontext.js":44,"./integrations/linkederrors.js":46,"./integrations/trycatch.js":47,"./stack-parsers.js":52,"./transports/fetch.js":53,"./transports/xhr.js":56,"@sentry/core":67,"@sentry/utils":135}],52:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -9843,7 +10388,7 @@ exports.opera11StackLineParser = opera11StackLineParser;
 exports.winjsStackLineParser = winjsStackLineParser;
 
 
-},{"@sentry/utils":131}],52:[function(require,module,exports){
+},{"@sentry/utils":135}],53:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -9911,7 +10456,7 @@ function makeFetchTransport(
 exports.makeFetchTransport = makeFetchTransport;
 
 
-},{"./utils.js":54,"@sentry/core":66,"@sentry/utils":131}],53:[function(require,module,exports){
+},{"./utils.js":55,"@sentry/core":67,"@sentry/utils":135}],54:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -10051,7 +10596,7 @@ exports.makeBrowserOfflineTransport = makeBrowserOfflineTransport;
 exports.pop = pop;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],54:[function(require,module,exports){
+},{"@sentry/core":67,"@sentry/utils":135}],55:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -10141,7 +10686,7 @@ exports.clearCachedFetchImplementation = clearCachedFetchImplementation;
 exports.getNativeFetchImplementation = getNativeFetchImplementation;
 
 
-},{"../debug-build.js":36,"../helpers.js":38,"@sentry/utils":131}],55:[function(require,module,exports){
+},{"../debug-build.js":37,"../helpers.js":39,"@sentry/utils":135}],56:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const core = require('@sentry/core');
@@ -10197,7 +10742,7 @@ function makeXHRTransport(options) {
 exports.makeXHRTransport = makeXHRTransport;
 
 
-},{"@sentry/core":66,"@sentry/utils":131}],56:[function(require,module,exports){
+},{"@sentry/core":67,"@sentry/utils":135}],57:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -10242,7 +10787,7 @@ function createUserFeedbackEnvelopeItem(feedback) {
 exports.createUserFeedbackEnvelope = createUserFeedbackEnvelope;
 
 
-},{"@sentry/utils":131}],57:[function(require,module,exports){
+},{"@sentry/utils":135}],58:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -10341,7 +10886,7 @@ exports.getEnvelopeEndpointWithUrlEncodedAuth = getEnvelopeEndpointWithUrlEncode
 exports.getReportDialogEndpoint = getReportDialogEndpoint;
 
 
-},{"@sentry/utils":131}],58:[function(require,module,exports){
+},{"@sentry/utils":135}],59:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -10505,8 +11050,11 @@ class BaseClient {
 
     let eventId = hint && hint.event_id;
 
+    const sdkProcessingMetadata = event.sdkProcessingMetadata || {};
+    const capturedSpanScope = sdkProcessingMetadata.capturedSpanScope;
+
     this._process(
-      this._captureEvent(event, hint, scope).then(result => {
+      this._captureEvent(event, hint, capturedSpanScope || scope).then(result => {
         eventId = result;
       }),
     );
@@ -10650,7 +11198,14 @@ class BaseClient {
    * @inheritDoc
    */
    addIntegration(integration$1) {
+    const isAlreadyInstalled = this._integrations[integration$1.name];
+
+    // This hook takes care of only installing if not already installed
     integration.setupIntegration(this, integration$1, this._integrations);
+    // Here we need to check manually to make sure to not run this multiple times
+    if (!isAlreadyInstalled) {
+      integration.afterSetupIntegrations(this, [integration$1]);
+    }
   }
 
   /**
@@ -10754,7 +11309,10 @@ class BaseClient {
 
   /** Setup integrations for this client. */
    _setupIntegrations() {
-    this._integrations = integration.setupIntegrations(this, this._options.integrations);
+    const { integrations } = this._options;
+    this._integrations = integration.setupIntegrations(this, integrations);
+    integration.afterSetupIntegrations(this, integrations);
+
     // TODO v8: We don't need this flag anymore
     this._integrationsInitialized = true;
   }
@@ -10860,13 +11418,14 @@ class BaseClient {
         return evt;
       }
 
-      // If a trace context is not set on the event, we use the propagationContext set on the event to
-      // generate a trace context. If the propagationContext does not have a dynamic sampling context, we
-      // also generate one for it.
-      const { propagationContext } = evt.sdkProcessingMetadata || {};
+      const propagationContext = {
+        ...isolationScope.getPropagationContext(),
+        ...(scope ? scope.getPropagationContext() : undefined),
+      };
+
       const trace = evt.contexts && evt.contexts.trace;
       if (!trace && propagationContext) {
-        const { traceId: trace_id, spanId, parentSpanId, dsc } = propagationContext ;
+        const { traceId: trace_id, spanId, parentSpanId, dsc } = propagationContext;
         evt.contexts = {
           trace: {
             trace_id,
@@ -10951,7 +11510,10 @@ class BaseClient {
 
     const dataCategory = eventType === 'replay_event' ? 'replay' : eventType;
 
-    return this._prepareEvent(event, hint, scope)
+    const sdkProcessingMetadata = event.sdkProcessingMetadata || {};
+    const capturedSpanIsolationScope = sdkProcessingMetadata.capturedSpanIsolationScope;
+
+    return this._prepareEvent(event, hint, scope, capturedSpanIsolationScope)
       .then(prepared => {
         if (prepared === null) {
           this.recordDroppedEvent('event_processor', dataCategory, event);
@@ -11137,7 +11699,7 @@ exports.BaseClient = BaseClient;
 exports.addEventProcessor = addEventProcessor;
 
 
-},{"./api.js":57,"./debug-build.js":61,"./envelope.js":62,"./exports.js":64,"./hub.js":65,"./integration.js":67,"./metrics/envelope.js":78,"./session.js":87,"./tracing/dynamicSamplingContext.js":89,"./utils/prepareEvent.js":108,"@sentry/utils":131}],59:[function(require,module,exports){
+},{"./api.js":58,"./debug-build.js":62,"./envelope.js":63,"./exports.js":65,"./hub.js":66,"./integration.js":68,"./metrics/envelope.js":79,"./session.js":89,"./tracing/dynamicSamplingContext.js":91,"./utils/prepareEvent.js":111,"@sentry/utils":135}],60:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -11185,7 +11747,7 @@ function createCheckInEnvelopeItem(checkIn) {
 exports.createCheckInEnvelope = createCheckInEnvelope;
 
 
-},{"@sentry/utils":131}],60:[function(require,module,exports){
+},{"@sentry/utils":135}],61:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const DEFAULT_ENVIRONMENT = 'production';
@@ -11193,9 +11755,9 @@ const DEFAULT_ENVIRONMENT = 'production';
 exports.DEFAULT_ENVIRONMENT = DEFAULT_ENVIRONMENT;
 
 
-},{}],61:[function(require,module,exports){
-arguments[4][22][0].apply(exports,arguments)
-},{"dup":22}],62:[function(require,module,exports){
+},{}],62:[function(require,module,exports){
+arguments[4][23][0].apply(exports,arguments)
+},{"dup":23}],63:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -11274,7 +11836,7 @@ exports.createEventEnvelope = createEventEnvelope;
 exports.createSessionEnvelope = createSessionEnvelope;
 
 
-},{"@sentry/utils":131}],63:[function(require,module,exports){
+},{"@sentry/utils":135}],64:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -11333,7 +11895,7 @@ exports.getGlobalEventProcessors = getGlobalEventProcessors;
 exports.notifyEventProcessors = notifyEventProcessors;
 
 
-},{"./debug-build.js":61,"@sentry/utils":131}],64:[function(require,module,exports){
+},{"./debug-build.js":62,"@sentry/utils":135}],65:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -11701,6 +12263,13 @@ function getClient() {
 }
 
 /**
+ * Returns true if Sentry has been properly initialized.
+ */
+function isInitialized() {
+  return !!getClient();
+}
+
+/**
  * Get the currently active scope.
  */
 function getCurrentScope() {
@@ -11816,6 +12385,7 @@ exports.endSession = endSession;
 exports.flush = flush;
 exports.getClient = getClient;
 exports.getCurrentScope = getCurrentScope;
+exports.isInitialized = isInitialized;
 exports.lastEventId = lastEventId;
 exports.setContext = setContext;
 exports.setExtra = setExtra;
@@ -11831,7 +12401,7 @@ exports.withMonitor = withMonitor;
 exports.withScope = withScope;
 
 
-},{"./constants.js":60,"./debug-build.js":61,"./hub.js":65,"./session.js":87,"./utils/prepareEvent.js":108,"@sentry/utils":131}],65:[function(require,module,exports){
+},{"./constants.js":61,"./debug-build.js":62,"./hub.js":66,"./session.js":89,"./utils/prepareEvent.js":111,"@sentry/utils":135}],66:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -11872,6 +12442,46 @@ class Hub  {
    * @param client bound to the hub.
    * @param scope bound to the hub.
    * @param version number, higher number means higher priority.
+   *
+   * @deprecated Instantiation of Hub objects is deprecated and the constructor will be removed in version 8 of the SDK.
+   *
+   * If you are currently using the Hub for multi-client use like so:
+   *
+   * ```
+   * // OLD
+   * const hub = new Hub();
+   * hub.bindClient(client);
+   * makeMain(hub)
+   * ```
+   *
+   * instead initialize the client as follows:
+   *
+   * ```
+   * // NEW
+   * Sentry.withIsolationScope(() => {
+   *    Sentry.setCurrentClient(client);
+   *    client.init();
+   * });
+   * ```
+   *
+   * If you are using the Hub to capture events like so:
+   *
+   * ```
+   * // OLD
+   * const client = new Client();
+   * const hub = new Hub(client);
+   * hub.captureException()
+   * ```
+   *
+   * instead capture isolated events as follows:
+   *
+   * ```
+   * // NEW
+   * const client = new Client();
+   * const scope = new Scope();
+   * scope.setClient(client);
+   * scope.captureException();
+   * ```
    */
    constructor(
     client,
@@ -12500,6 +13110,7 @@ function getGlobalHub(registry = getMainCarrier()) {
     // eslint-disable-next-line deprecation/deprecation
     getHubFromCarrier(registry).isOlderThan(API_VERSION)
   ) {
+    // eslint-disable-next-line deprecation/deprecation
     setHubOnCarrier(registry, new Hub());
   }
 
@@ -12525,6 +13136,7 @@ function ensureHubOnCarrier(carrier, parent = getGlobalHub()) {
     const scope = parent.getScope();
     // eslint-disable-next-line deprecation/deprecation
     const isolationScope = parent.getIsolationScope();
+    // eslint-disable-next-line deprecation/deprecation
     setHubOnCarrier(carrier, new Hub(client, scope.clone(), isolationScope.clone()));
   }
 }
@@ -12574,6 +13186,7 @@ function hasHubOnCarrier(carrier) {
  * @hidden
  */
 function getHubFromCarrier(carrier) {
+  // eslint-disable-next-line deprecation/deprecation
   return utils.getGlobalSingleton('hub', () => new Hub(), carrier);
 }
 
@@ -12603,7 +13216,7 @@ exports.setAsyncContextStrategy = setAsyncContextStrategy;
 exports.setHubOnCarrier = setHubOnCarrier;
 
 
-},{"./constants.js":60,"./debug-build.js":61,"./scope.js":83,"./session.js":87,"./version.js":110,"@sentry/utils":131}],66:[function(require,module,exports){
+},{"./constants.js":61,"./debug-build.js":62,"./scope.js":85,"./session.js":89,"./version.js":114,"@sentry/utils":135}],67:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const hubextensions = require('./tracing/hubextensions.js');
@@ -12638,8 +13251,10 @@ const checkin = require('./checkin.js');
 const hasTracingEnabled = require('./utils/hasTracingEnabled.js');
 const isSentryRequestUrl = require('./utils/isSentryRequestUrl.js');
 const handleCallbackErrors = require('./utils/handleCallbackErrors.js');
+const parameterize = require('./utils/parameterize.js');
 const spanUtils = require('./utils/spanUtils.js');
 const getRootSpan = require('./utils/getRootSpan.js');
+const sdkMetadata = require('./utils/sdkMetadata.js');
 const constants = require('./constants.js');
 const metadata = require('./integrations/metadata.js');
 const requestdata = require('./integrations/requestdata.js');
@@ -12657,7 +13272,6 @@ exports.startIdleTransaction = hubextensions.startIdleTransaction;
 exports.IdleTransaction = idletransaction.IdleTransaction;
 exports.TRACING_DEFAULTS = idletransaction.TRACING_DEFAULTS;
 exports.Span = span.Span;
-exports.spanStatusfromHttpCode = span.spanStatusfromHttpCode;
 exports.Transaction = transaction.Transaction;
 exports.extractTraceparentData = utils.extractTraceparentData;
 exports.getActiveTransaction = utils.getActiveTransaction;
@@ -12665,6 +13279,9 @@ Object.defineProperty(exports, 'SpanStatus', {
   enumerable: true,
   get: () => spanstatus.SpanStatus
 });
+exports.getSpanStatusFromHttpCode = spanstatus.getSpanStatusFromHttpCode;
+exports.setHttpStatus = spanstatus.setHttpStatus;
+exports.spanStatusfromHttpCode = spanstatus.spanStatusfromHttpCode;
 exports.continueTrace = trace.continueTrace;
 exports.getActiveSpan = trace.getActiveSpan;
 exports.startActiveSpan = trace.startActiveSpan;
@@ -12676,6 +13293,7 @@ exports.getDynamicSamplingContextFromClient = dynamicSamplingContext.getDynamicS
 exports.getDynamicSamplingContextFromSpan = dynamicSamplingContext.getDynamicSamplingContextFromSpan;
 exports.setMeasurement = measurement.setMeasurement;
 exports.SEMANTIC_ATTRIBUTE_SENTRY_OP = semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_OP;
+exports.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN = semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN;
 exports.SEMANTIC_ATTRIBUTE_SENTRY_SAMPLE_RATE = semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_SAMPLE_RATE;
 exports.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE = semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE;
 exports.createEventEnvelope = envelope.createEventEnvelope;
@@ -12692,6 +13310,7 @@ exports.endSession = exports$1.endSession;
 exports.flush = exports$1.flush;
 exports.getClient = exports$1.getClient;
 exports.getCurrentScope = exports$1.getCurrentScope;
+exports.isInitialized = exports$1.isInitialized;
 exports.lastEventId = exports$1.lastEventId;
 exports.setContext = exports$1.setContext;
 exports.setExtra = exports$1.setExtra;
@@ -12746,10 +13365,13 @@ exports.createCheckInEnvelope = checkin.createCheckInEnvelope;
 exports.hasTracingEnabled = hasTracingEnabled.hasTracingEnabled;
 exports.isSentryRequestUrl = isSentryRequestUrl.isSentryRequestUrl;
 exports.handleCallbackErrors = handleCallbackErrors.handleCallbackErrors;
+exports.parameterize = parameterize.parameterize;
 exports.spanIsSampled = spanUtils.spanIsSampled;
 exports.spanToJSON = spanUtils.spanToJSON;
+exports.spanToTraceContext = spanUtils.spanToTraceContext;
 exports.spanToTraceHeader = spanUtils.spanToTraceHeader;
 exports.getRootSpan = getRootSpan.getRootSpan;
+exports.applySdkMetadata = sdkMetadata.applySdkMetadata;
 exports.DEFAULT_ENVIRONMENT = constants.DEFAULT_ENVIRONMENT;
 exports.ModuleMetadata = metadata.ModuleMetadata;
 exports.moduleMetadataIntegration = metadata.moduleMetadataIntegration;
@@ -12765,7 +13387,7 @@ exports.metrics = exports$2.metrics;
 exports.Integrations = Integrations;
 
 
-},{"./api.js":57,"./baseclient.js":58,"./checkin.js":59,"./constants.js":60,"./envelope.js":62,"./eventProcessors.js":63,"./exports.js":64,"./hub.js":65,"./integration.js":67,"./integrations/functiontostring.js":68,"./integrations/inboundfilters.js":69,"./integrations/index.js":70,"./integrations/linkederrors.js":71,"./integrations/metadata.js":72,"./integrations/requestdata.js":73,"./metrics/exports.js":79,"./scope.js":83,"./sdk.js":84,"./semanticAttributes.js":85,"./server-runtime-client.js":86,"./session.js":87,"./sessionflusher.js":88,"./tracing/dynamicSamplingContext.js":89,"./tracing/hubextensions.js":91,"./tracing/idletransaction.js":92,"./tracing/measurement.js":93,"./tracing/span.js":95,"./tracing/spanstatus.js":96,"./tracing/trace.js":97,"./tracing/transaction.js":98,"./tracing/utils.js":99,"./transports/base.js":100,"./transports/multiplexed.js":101,"./transports/offline.js":102,"./utils/applyScopeDataToEvent.js":103,"./utils/getRootSpan.js":104,"./utils/handleCallbackErrors.js":105,"./utils/hasTracingEnabled.js":106,"./utils/isSentryRequestUrl.js":107,"./utils/prepareEvent.js":108,"./utils/spanUtils.js":109,"./version.js":110}],67:[function(require,module,exports){
+},{"./api.js":58,"./baseclient.js":59,"./checkin.js":60,"./constants.js":61,"./envelope.js":63,"./eventProcessors.js":64,"./exports.js":65,"./hub.js":66,"./integration.js":68,"./integrations/functiontostring.js":69,"./integrations/inboundfilters.js":70,"./integrations/index.js":71,"./integrations/linkederrors.js":72,"./integrations/metadata.js":73,"./integrations/requestdata.js":74,"./metrics/exports.js":80,"./scope.js":85,"./sdk.js":86,"./semanticAttributes.js":87,"./server-runtime-client.js":88,"./session.js":89,"./sessionflusher.js":90,"./tracing/dynamicSamplingContext.js":91,"./tracing/hubextensions.js":93,"./tracing/idletransaction.js":94,"./tracing/measurement.js":95,"./tracing/span.js":97,"./tracing/spanstatus.js":98,"./tracing/trace.js":99,"./tracing/transaction.js":100,"./tracing/utils.js":101,"./transports/base.js":102,"./transports/multiplexed.js":103,"./transports/offline.js":104,"./utils/applyScopeDataToEvent.js":105,"./utils/getRootSpan.js":106,"./utils/handleCallbackErrors.js":107,"./utils/hasTracingEnabled.js":108,"./utils/isSentryRequestUrl.js":109,"./utils/parameterize.js":110,"./utils/prepareEvent.js":111,"./utils/sdkMetadata.js":112,"./utils/spanUtils.js":113,"./version.js":114}],68:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -12858,6 +13480,18 @@ function setupIntegrations(client, integrations) {
   return integrationIndex;
 }
 
+/**
+ * Execute the `afterAllSetup` hooks of the given integrations.
+ */
+function afterSetupIntegrations(client, integrations) {
+  for (const integration of integrations) {
+    // guard against empty provided integrations
+    if (integration && integration.afterAllSetup) {
+      integration.afterAllSetup(client);
+    }
+  }
+}
+
 /** Setup a single integration.  */
 function setupIntegration(client, integration, integrationIndex) {
   if (integrationIndex[integration.name]) {
@@ -12946,6 +13580,7 @@ function defineIntegration(fn) {
 }
 
 exports.addIntegration = addIntegration;
+exports.afterSetupIntegrations = afterSetupIntegrations;
 exports.convertIntegrationFnToClass = convertIntegrationFnToClass;
 exports.defineIntegration = defineIntegration;
 exports.getIntegrationsToSetup = getIntegrationsToSetup;
@@ -12954,15 +13589,18 @@ exports.setupIntegration = setupIntegration;
 exports.setupIntegrations = setupIntegrations;
 
 
-},{"./debug-build.js":61,"./eventProcessors.js":63,"./exports.js":64,"./hub.js":65,"@sentry/utils":131}],68:[function(require,module,exports){
+},{"./debug-build.js":62,"./eventProcessors.js":64,"./exports.js":65,"./hub.js":66,"@sentry/utils":135}],69:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
+const exports$1 = require('../exports.js');
 const integration = require('../integration.js');
 
 let originalFunctionToString;
 
 const INTEGRATION_NAME = 'FunctionToString';
+
+const SETUP_CLIENTS = new WeakMap();
 
 const _functionToStringIntegration = (() => {
   return {
@@ -12976,20 +13614,37 @@ const _functionToStringIntegration = (() => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         Function.prototype.toString = function ( ...args) {
-          const context = utils.getOriginalFunction(this) || this;
+          const originalFunction = utils.getOriginalFunction(this);
+          const context =
+            SETUP_CLIENTS.has(exports$1.getClient() ) && originalFunction !== undefined ? originalFunction : this;
           return originalFunctionToString.apply(context, args);
         };
       } catch (e) {
         // ignore errors here, just don't patch this
       }
     },
+    setup(client) {
+      SETUP_CLIENTS.set(client, true);
+    },
   };
 }) ;
 
+/**
+ * Patch toString calls to return proper name for wrapped functions.
+ *
+ * ```js
+ * Sentry.init({
+ *   integrations: [
+ *     functionToStringIntegration(),
+ *   ],
+ * });
+ * ```
+ */
 const functionToStringIntegration = integration.defineIntegration(_functionToStringIntegration);
 
 /**
  * Patch toString calls to return proper name for wrapped functions.
+ *
  * @deprecated Use `functionToStringIntegration()` instead.
  */
 // eslint-disable-next-line deprecation/deprecation
@@ -12998,11 +13653,13 @@ const FunctionToString = integration.convertIntegrationFnToClass(
   functionToStringIntegration,
 ) ;
 
+// eslint-disable-next-line deprecation/deprecation
+
 exports.FunctionToString = FunctionToString;
 exports.functionToStringIntegration = functionToStringIntegration;
 
 
-},{"../integration.js":67,"@sentry/utils":131}],69:[function(require,module,exports){
+},{"../exports.js":65,"../integration.js":68,"@sentry/utils":135}],70:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -13226,7 +13883,7 @@ exports.InboundFilters = InboundFilters;
 exports.inboundFiltersIntegration = inboundFiltersIntegration;
 
 
-},{"../debug-build.js":61,"../integration.js":67,"@sentry/utils":131}],70:[function(require,module,exports){
+},{"../debug-build.js":62,"../integration.js":68,"@sentry/utils":135}],71:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const functiontostring = require('./functiontostring.js');
@@ -13240,7 +13897,7 @@ exports.InboundFilters = inboundfilters.InboundFilters;
 exports.LinkedErrors = linkederrors.LinkedErrors;
 
 
-},{"./functiontostring.js":68,"./inboundfilters.js":69,"./linkederrors.js":71}],71:[function(require,module,exports){
+},{"./functiontostring.js":69,"./inboundfilters.js":70,"./linkederrors.js":72}],72:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -13290,7 +13947,7 @@ exports.LinkedErrors = LinkedErrors;
 exports.linkedErrorsIntegration = linkedErrorsIntegration;
 
 
-},{"../integration.js":67,"@sentry/utils":131}],72:[function(require,module,exports){
+},{"../integration.js":68,"@sentry/utils":135}],73:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -13357,7 +14014,7 @@ exports.ModuleMetadata = ModuleMetadata;
 exports.moduleMetadataIntegration = moduleMetadataIntegration;
 
 
-},{"../integration.js":67,"../metadata.js":74,"@sentry/utils":131}],73:[function(require,module,exports){
+},{"../integration.js":68,"../metadata.js":75,"@sentry/utils":135}],74:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -13537,7 +14194,7 @@ exports.RequestData = RequestData;
 exports.requestDataIntegration = requestDataIntegration;
 
 
-},{"../integration.js":67,"../utils/spanUtils.js":109,"@sentry/utils":131}],74:[function(require,module,exports){
+},{"../integration.js":68,"../utils/spanUtils.js":113,"@sentry/utils":135}],75:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -13642,12 +14299,13 @@ exports.getMetadataForUrl = getMetadataForUrl;
 exports.stripMetadataFromStackFrames = stripMetadataFromStackFrames;
 
 
-},{"@sentry/utils":131}],75:[function(require,module,exports){
+},{"@sentry/utils":135}],76:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils$1 = require('@sentry/utils');
 const constants = require('./constants.js');
 const instance = require('./instance.js');
+const metricSummary = require('./metric-summary.js');
 const utils = require('./utils.js');
 
 /**
@@ -13695,7 +14353,11 @@ class MetricsAggregator  {
     const tags = utils.sanitizeTags(unsanitizedTags);
 
     const bucketKey = utils.getBucketKey(metricType, name, unit, tags);
+
     let bucketItem = this._buckets.get(bucketKey);
+    // If this is a set metric, we need to calculate the delta from the previous weight.
+    const previousWeight = bucketItem && metricType === constants.SET_METRIC_TYPE ? bucketItem.metric.weight : 0;
+
     if (bucketItem) {
       bucketItem.metric.add(value);
       // TODO(abhi): Do we need this check?
@@ -13714,6 +14376,10 @@ class MetricsAggregator  {
       };
       this._buckets.set(bucketKey, bucketItem);
     }
+
+    // If value is a string, it's a set metric so calculate the delta from the previous weight.
+    const val = typeof value === 'string' ? bucketItem.metric.weight - previousWeight : value;
+    metricSummary.updateMetricSummaryOnActiveSpan(metricType, name, val, unit, unsanitizedTags, bucketKey);
 
     // We need to keep track of the total weight of the buckets so that we can
     // flush them when we exceed the max weight.
@@ -13798,12 +14464,13 @@ class MetricsAggregator  {
 exports.MetricsAggregator = MetricsAggregator;
 
 
-},{"./constants.js":77,"./instance.js":80,"./utils.js":82,"@sentry/utils":131}],76:[function(require,module,exports){
+},{"./constants.js":78,"./instance.js":81,"./metric-summary.js":83,"./utils.js":84,"@sentry/utils":135}],77:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils$1 = require('@sentry/utils');
 const constants = require('./constants.js');
 const instance = require('./instance.js');
+const metricSummary = require('./metric-summary.js');
 const utils = require('./utils.js');
 
 /**
@@ -13838,7 +14505,11 @@ class BrowserMetricsAggregator  {
     const tags = utils.sanitizeTags(unsanitizedTags);
 
     const bucketKey = utils.getBucketKey(metricType, name, unit, tags);
-    const bucketItem = this._buckets.get(bucketKey);
+
+    let bucketItem = this._buckets.get(bucketKey);
+    // If this is a set metric, we need to calculate the delta from the previous weight.
+    const previousWeight = bucketItem && metricType === constants.SET_METRIC_TYPE ? bucketItem.metric.weight : 0;
+
     if (bucketItem) {
       bucketItem.metric.add(value);
       // TODO(abhi): Do we need this check?
@@ -13846,7 +14517,7 @@ class BrowserMetricsAggregator  {
         bucketItem.timestamp = timestamp;
       }
     } else {
-      this._buckets.set(bucketKey, {
+      bucketItem = {
         // @ts-expect-error we don't need to narrow down the type of value here, saves bundle size.
         metric: new instance.METRIC_MAP[metricType](value),
         timestamp,
@@ -13854,8 +14525,13 @@ class BrowserMetricsAggregator  {
         name,
         unit,
         tags,
-      });
+      };
+      this._buckets.set(bucketKey, bucketItem);
     }
+
+    // If value is a string, it's a set metric so calculate the delta from the previous weight.
+    const val = typeof value === 'string' ? bucketItem.metric.weight - previousWeight : value;
+    metricSummary.updateMetricSummaryOnActiveSpan(metricType, name, val, unit, unsanitizedTags, bucketKey);
   }
 
   /**
@@ -13886,7 +14562,7 @@ class BrowserMetricsAggregator  {
 exports.BrowserMetricsAggregator = BrowserMetricsAggregator;
 
 
-},{"./constants.js":77,"./instance.js":80,"./utils.js":82,"@sentry/utils":131}],77:[function(require,module,exports){
+},{"./constants.js":78,"./instance.js":81,"./metric-summary.js":83,"./utils.js":84,"@sentry/utils":135}],78:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const COUNTER_METRIC_TYPE = 'c' ;
@@ -13912,7 +14588,7 @@ const NAME_AND_TAG_KEY_NORMALIZATION_REGEX = /[^a-zA-Z0-9_/.-]+/g;
  *
  * See: https://develop.sentry.dev/sdk/metrics/#normalization
  */
-const TAG_VALUE_NORMALIZATION_REGEX = /[^\w\d_:/@.{}[\]$-]+/g;
+const TAG_VALUE_NORMALIZATION_REGEX = /[^\w\d\s_:/@.{}[\]$-]+/g;
 
 /**
  * This does not match spec in https://develop.sentry.dev/sdk/metrics
@@ -13942,7 +14618,7 @@ exports.SET_METRIC_TYPE = SET_METRIC_TYPE;
 exports.TAG_VALUE_NORMALIZATION_REGEX = TAG_VALUE_NORMALIZATION_REGEX;
 
 
-},{}],78:[function(require,module,exports){
+},{}],79:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -13988,7 +14664,7 @@ function createMetricEnvelopeItem(metricBucketItems) {
 exports.createMetricEnvelope = createMetricEnvelope;
 
 
-},{"./utils.js":82,"@sentry/utils":131}],79:[function(require,module,exports){
+},{"./utils.js":84,"@sentry/utils":135}],80:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -14086,7 +14762,7 @@ exports.metrics = metrics;
 exports.set = set;
 
 
-},{"../debug-build.js":61,"../exports.js":64,"../utils/spanUtils.js":109,"./constants.js":77,"./integration.js":81,"@sentry/utils":131}],80:[function(require,module,exports){
+},{"../debug-build.js":62,"../exports.js":65,"../utils/spanUtils.js":113,"./constants.js":78,"./integration.js":82,"@sentry/utils":135}],81:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const constants = require('./constants.js');
@@ -14217,7 +14893,7 @@ exports.METRIC_MAP = METRIC_MAP;
 exports.SetMetric = SetMetric;
 
 
-},{"./constants.js":77,"./utils.js":82}],81:[function(require,module,exports){
+},{"./constants.js":78,"./utils.js":84}],82:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const integration = require('../integration.js');
@@ -14254,7 +14930,104 @@ exports.MetricsAggregator = MetricsAggregator;
 exports.metricsAggregatorIntegration = metricsAggregatorIntegration;
 
 
-},{"../integration.js":67,"./browser-aggregator.js":76}],82:[function(require,module,exports){
+},{"../integration.js":68,"./browser-aggregator.js":77}],83:[function(require,module,exports){
+Object.defineProperty(exports, '__esModule', { value: true });
+
+const utils = require('@sentry/utils');
+require('../debug-build.js');
+require('../tracing/errors.js');
+require('../tracing/spanstatus.js');
+const trace = require('../tracing/trace.js');
+
+/**
+ * key: bucketKey
+ * value: [exportKey, MetricSummary]
+ */
+
+let SPAN_METRIC_SUMMARY;
+
+function getMetricStorageForSpan(span) {
+  return SPAN_METRIC_SUMMARY ? SPAN_METRIC_SUMMARY.get(span) : undefined;
+}
+
+/**
+ * Fetches the metric summary if it exists for the passed span
+ */
+function getMetricSummaryJsonForSpan(span) {
+  const storage = getMetricStorageForSpan(span);
+
+  if (!storage) {
+    return undefined;
+  }
+  const output = {};
+
+  for (const [, [exportKey, summary]] of storage) {
+    if (!output[exportKey]) {
+      output[exportKey] = [];
+    }
+
+    output[exportKey].push(utils.dropUndefinedKeys(summary));
+  }
+
+  return output;
+}
+
+/**
+ * Updates the metric summary on the currently active span
+ */
+function updateMetricSummaryOnActiveSpan(
+  metricType,
+  sanitizedName,
+  value,
+  unit,
+  tags,
+  bucketKey,
+) {
+  const span = trace.getActiveSpan();
+  if (span) {
+    const storage = getMetricStorageForSpan(span) || new Map();
+
+    const exportKey = `${metricType}:${sanitizedName}@${unit}`;
+    const bucketItem = storage.get(bucketKey);
+
+    if (bucketItem) {
+      const [, summary] = bucketItem;
+      storage.set(bucketKey, [
+        exportKey,
+        {
+          min: Math.min(summary.min, value),
+          max: Math.max(summary.max, value),
+          count: (summary.count += 1),
+          sum: (summary.sum += value),
+          tags: summary.tags,
+        },
+      ]);
+    } else {
+      storage.set(bucketKey, [
+        exportKey,
+        {
+          min: value,
+          max: value,
+          count: 1,
+          sum: value,
+          tags,
+        },
+      ]);
+    }
+
+    if (!SPAN_METRIC_SUMMARY) {
+      SPAN_METRIC_SUMMARY = new WeakMap();
+    }
+
+    SPAN_METRIC_SUMMARY.set(span, storage);
+  }
+}
+
+exports.getMetricSummaryJsonForSpan = getMetricSummaryJsonForSpan;
+exports.updateMetricSummaryOnActiveSpan = updateMetricSummaryOnActiveSpan;
+
+
+},{"../debug-build.js":62,"../tracing/errors.js":92,"../tracing/spanstatus.js":98,"../tracing/trace.js":99,"@sentry/utils":135}],84:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -14319,7 +15092,7 @@ function sanitizeTags(unsanitizedTags) {
   for (const key in unsanitizedTags) {
     if (Object.prototype.hasOwnProperty.call(unsanitizedTags, key)) {
       const sanitizedKey = key.replace(constants.NAME_AND_TAG_KEY_NORMALIZATION_REGEX, '_');
-      tags[sanitizedKey] = String(unsanitizedTags[key]).replace(constants.TAG_VALUE_NORMALIZATION_REGEX, '_');
+      tags[sanitizedKey] = String(unsanitizedTags[key]).replace(constants.TAG_VALUE_NORMALIZATION_REGEX, '');
     }
   }
   return tags;
@@ -14331,7 +15104,7 @@ exports.serializeMetricBuckets = serializeMetricBuckets;
 exports.simpleHash = simpleHash;
 
 
-},{"./constants.js":77,"@sentry/utils":131}],83:[function(require,module,exports){
+},{"./constants.js":78,"@sentry/utils":135}],85:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15026,7 +15799,7 @@ exports.getGlobalScope = getGlobalScope;
 exports.setGlobalScope = setGlobalScope;
 
 
-},{"./eventProcessors.js":63,"./session.js":87,"./utils/applyScopeDataToEvent.js":103,"@sentry/utils":131}],84:[function(require,module,exports){
+},{"./eventProcessors.js":64,"./session.js":89,"./utils/applyScopeDataToEvent.js":105,"@sentry/utils":135}],86:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15097,7 +15870,7 @@ exports.initAndBind = initAndBind;
 exports.setCurrentClient = setCurrentClient;
 
 
-},{"./debug-build.js":61,"./exports.js":64,"./hub.js":65,"@sentry/utils":131}],85:[function(require,module,exports){
+},{"./debug-build.js":62,"./exports.js":65,"./hub.js":66,"@sentry/utils":135}],87:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -15117,12 +15890,18 @@ const SEMANTIC_ATTRIBUTE_SENTRY_SAMPLE_RATE = 'sentry.sample_rate';
  */
 const SEMANTIC_ATTRIBUTE_SENTRY_OP = 'sentry.op';
 
+/**
+ * Use this attribute to represent the origin of a span.
+ */
+const SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN = 'sentry.origin';
+
 exports.SEMANTIC_ATTRIBUTE_SENTRY_OP = SEMANTIC_ATTRIBUTE_SENTRY_OP;
+exports.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN = SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN;
 exports.SEMANTIC_ATTRIBUTE_SENTRY_SAMPLE_RATE = SEMANTIC_ATTRIBUTE_SENTRY_SAMPLE_RATE;
 exports.SEMANTIC_ATTRIBUTE_SENTRY_SOURCE = SEMANTIC_ATTRIBUTE_SENTRY_SOURCE;
 
 
-},{}],86:[function(require,module,exports){
+},{}],88:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15135,8 +15914,8 @@ const sessionflusher = require('./sessionflusher.js');
 const hubextensions = require('./tracing/hubextensions.js');
 const spanUtils = require('./utils/spanUtils.js');
 const getRootSpan = require('./utils/getRootSpan.js');
-const dynamicSamplingContext = require('./tracing/dynamicSamplingContext.js');
 require('./tracing/spanstatus.js');
+const dynamicSamplingContext = require('./tracing/dynamicSamplingContext.js');
 
 /**
  * The Sentry Server Runtime Client SDK.
@@ -15386,7 +16165,7 @@ class ServerRuntimeClient
 exports.ServerRuntimeClient = ServerRuntimeClient;
 
 
-},{"./baseclient.js":58,"./checkin.js":59,"./debug-build.js":61,"./exports.js":64,"./metrics/aggregator.js":75,"./sessionflusher.js":88,"./tracing/dynamicSamplingContext.js":89,"./tracing/hubextensions.js":91,"./tracing/spanstatus.js":96,"./utils/getRootSpan.js":104,"./utils/spanUtils.js":109,"@sentry/utils":131}],87:[function(require,module,exports){
+},{"./baseclient.js":59,"./checkin.js":60,"./debug-build.js":62,"./exports.js":65,"./metrics/aggregator.js":76,"./sessionflusher.js":90,"./tracing/dynamicSamplingContext.js":91,"./tracing/hubextensions.js":93,"./tracing/spanstatus.js":98,"./utils/getRootSpan.js":106,"./utils/spanUtils.js":113,"@sentry/utils":135}],89:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15552,7 +16331,7 @@ exports.makeSession = makeSession;
 exports.updateSession = updateSession;
 
 
-},{"@sentry/utils":131}],88:[function(require,module,exports){
+},{"@sentry/utils":135}],90:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15658,7 +16437,7 @@ class SessionFlusher  {
 exports.SessionFlusher = SessionFlusher;
 
 
-},{"./exports.js":64,"@sentry/utils":131}],89:[function(require,module,exports){
+},{"./exports.js":65,"@sentry/utils":135}],91:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15758,7 +16537,7 @@ exports.getDynamicSamplingContextFromClient = getDynamicSamplingContextFromClien
 exports.getDynamicSamplingContextFromSpan = getDynamicSamplingContextFromSpan;
 
 
-},{"../constants.js":60,"../exports.js":64,"../utils/getRootSpan.js":104,"../utils/spanUtils.js":109,"@sentry/utils":131}],90:[function(require,module,exports){
+},{"../constants.js":61,"../exports.js":65,"../utils/getRootSpan.js":106,"../utils/spanUtils.js":113,"@sentry/utils":135}],92:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15800,7 +16579,7 @@ errorCallback.tag = 'sentry_tracingErrorCallback';
 exports.registerErrorInstrumentation = registerErrorInstrumentation;
 
 
-},{"../debug-build.js":61,"./utils.js":99,"@sentry/utils":131}],91:[function(require,module,exports){
+},{"../debug-build.js":62,"./utils.js":101,"@sentry/utils":135}],93:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -15867,8 +16646,14 @@ The transaction will not be sampled. Please use the ${configInstrumenter} instru
   // eslint-disable-next-line deprecation/deprecation
   let transaction$1 = new transaction.Transaction(transactionContext, this);
   transaction$1 = sampling.sampleTransaction(transaction$1, options, {
+    name: transactionContext.name,
     parentSampled: transactionContext.parentSampled,
     transactionContext,
+    attributes: {
+      // eslint-disable-next-line deprecation/deprecation
+      ...transactionContext.data,
+      ...transactionContext.attributes,
+    },
     ...customSamplingContext,
   });
   if (transaction$1.isRecording()) {
@@ -15908,8 +16693,14 @@ function startIdleTransaction(
     delayAutoFinishUntilSignal,
   );
   transaction = sampling.sampleTransaction(transaction, options, {
+    name: transactionContext.name,
     parentSampled: transactionContext.parentSampled,
     transactionContext,
+    attributes: {
+      // eslint-disable-next-line deprecation/deprecation
+      ...transactionContext.data,
+      ...transactionContext.attributes,
+    },
     ...customSamplingContext,
   });
   if (transaction.isRecording()) {
@@ -15944,7 +16735,7 @@ exports.addTracingExtensions = addTracingExtensions;
 exports.startIdleTransaction = startIdleTransaction;
 
 
-},{"../debug-build.js":61,"../hub.js":65,"../utils/spanUtils.js":109,"./errors.js":90,"./idletransaction.js":92,"./sampling.js":94,"./transaction.js":98,"@sentry/utils":131}],92:[function(require,module,exports){
+},{"../debug-build.js":62,"../hub.js":66,"../utils/spanUtils.js":113,"./errors.js":92,"./idletransaction.js":94,"./sampling.js":96,"./transaction.js":100,"@sentry/utils":135}],94:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -16352,7 +17143,7 @@ exports.IdleTransactionSpanRecorder = IdleTransactionSpanRecorder;
 exports.TRACING_DEFAULTS = TRACING_DEFAULTS;
 
 
-},{"../debug-build.js":61,"../utils/spanUtils.js":109,"./span.js":95,"./transaction.js":98,"@sentry/utils":131}],93:[function(require,module,exports){
+},{"../debug-build.js":62,"../utils/spanUtils.js":113,"./span.js":97,"./transaction.js":100,"@sentry/utils":135}],95:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('./utils.js');
@@ -16372,7 +17163,7 @@ function setMeasurement(name, value, unit) {
 exports.setMeasurement = setMeasurement;
 
 
-},{"./utils.js":99}],94:[function(require,module,exports){
+},{"./utils.js":101}],96:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -16502,14 +17293,16 @@ function isValidSampleRate(rate) {
 exports.sampleTransaction = sampleTransaction;
 
 
-},{"../debug-build.js":61,"../semanticAttributes.js":85,"../utils/hasTracingEnabled.js":106,"../utils/spanUtils.js":109,"@sentry/utils":131}],95:[function(require,module,exports){
+},{"../debug-build.js":62,"../semanticAttributes.js":87,"../utils/hasTracingEnabled.js":108,"../utils/spanUtils.js":113,"@sentry/utils":135}],97:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
 const debugBuild = require('../debug-build.js');
+const metricSummary = require('../metrics/metric-summary.js');
 const semanticAttributes = require('../semanticAttributes.js');
 const getRootSpan = require('../utils/getRootSpan.js');
 const spanUtils = require('../utils/spanUtils.js');
+const spanstatus = require('./spanstatus.js');
 
 /**
  * Keeps track of finished spans for a given transaction
@@ -16545,17 +17338,13 @@ class SpanRecorder {
  */
 class Span  {
   /**
-   * @inheritDoc
-   */
-
-  /**
    * Tags for the span.
-   * @deprecated Use `getSpanAttributes(span)` instead.
+   * @deprecated Use `spanToJSON(span).atttributes` instead.
    */
 
   /**
    * Data for the span.
-   * @deprecated Use `getSpanAttributes(span)` instead.
+   * @deprecated Use `spanToJSON(span).atttributes` instead.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 
@@ -16580,10 +17369,6 @@ class Span  {
    * @deprecated This field will be removed.
    */
 
-  /**
-   * The origin of the span, giving context about what created the span.
-   */
-
   /** Epoch timestamp in seconds when the span started. */
 
   /** Epoch timestamp in seconds when the span ended. */
@@ -16605,22 +17390,25 @@ class Span  {
     this.tags = spanContext.tags ? { ...spanContext.tags } : {};
     // eslint-disable-next-line deprecation/deprecation
     this.data = spanContext.data ? { ...spanContext.data } : {};
-    this._attributes = spanContext.attributes ? { ...spanContext.attributes } : {};
     // eslint-disable-next-line deprecation/deprecation
     this.instrumenter = spanContext.instrumenter || 'sentry';
-    this.origin = spanContext.origin || 'manual';
+
+    this._attributes = {};
+    this.setAttributes({
+      [semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN]: spanContext.origin || 'manual',
+      [semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_OP]: spanContext.op,
+      ...spanContext.attributes,
+    });
+
     // eslint-disable-next-line deprecation/deprecation
     this._name = spanContext.name || spanContext.description;
 
     if (spanContext.parentSpanId) {
-      this.parentSpanId = spanContext.parentSpanId;
+      this._parentSpanId = spanContext.parentSpanId;
     }
     // We want to include booleans as well here
     if ('sampled' in spanContext) {
       this._sampled = spanContext.sampled;
-    }
-    if (spanContext.op) {
-      this.setAttribute(semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_OP, spanContext.op);
     }
     if (spanContext.status) {
       this._status = spanContext.status;
@@ -16698,6 +17486,24 @@ class Span  {
   }
 
   /**
+   * @inheritDoc
+   *
+   * @deprecated Use `startSpan` functions instead.
+   */
+   set parentSpanId(string) {
+    this._parentSpanId = string;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * @deprecated Use `spanToJSON(span).parent_span_id` instead.
+   */
+   get parentSpanId() {
+    return this._parentSpanId;
+  }
+
+  /**
    * Was this span chosen to be sent as part of the sample?
    * @deprecated Use `isRecording()` instead.
    */
@@ -16715,7 +17521,7 @@ class Span  {
 
   /**
    * Attributes for the span.
-   * @deprecated Use `getSpanAttributes(span)` instead.
+   * @deprecated Use `spanToJSON(span).atttributes` instead.
    */
    get attributes() {
     return this._attributes;
@@ -16796,6 +17602,24 @@ class Span  {
    */
    set op(op) {
     this.setAttribute(semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_OP, op);
+  }
+
+  /**
+   * The origin of the span, giving context about what created the span.
+   *
+   * @deprecated Use `spanToJSON().origin` to read the origin instead.
+   */
+   get origin() {
+    return this._attributes[semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN] ;
+  }
+
+  /**
+   * The origin of the span, giving context about what created the span.
+   *
+   * @deprecated Use `startSpan()` functions to set the origin instead.
+   */
+   set origin(origin) {
+    this.setAttribute(semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN, origin);
   }
 
   /* eslint-enable @typescript-eslint/member-ordering */
@@ -16906,16 +17730,10 @@ class Span  {
 
   /**
    * @inheritDoc
+   * @deprecated Use top-level `setHttpStatus()` instead.
    */
    setHttpStatus(httpStatus) {
-    // eslint-disable-next-line deprecation/deprecation
-    this.setTag('http.status_code', String(httpStatus));
-    // eslint-disable-next-line deprecation/deprecation
-    this.setData('http.response.status_code', httpStatus);
-    const spanStatus = spanStatusfromHttpCode(httpStatus);
-    if (spanStatus !== 'unknown_error') {
-      this.setStatus(spanStatus);
-    }
+    spanstatus.setHttpStatus(this, httpStatus);
     return this;
   }
 
@@ -16997,7 +17815,7 @@ class Span  {
       endTimestamp: this._endTime,
       // eslint-disable-next-line deprecation/deprecation
       op: this.op,
-      parentSpanId: this.parentSpanId,
+      parentSpanId: this._parentSpanId,
       sampled: this._sampled,
       spanId: this._spanId,
       startTimestamp: this._startTime,
@@ -17021,7 +17839,7 @@ class Span  {
     this._endTime = spanContext.endTimestamp;
     // eslint-disable-next-line deprecation/deprecation
     this.op = spanContext.op;
-    this.parentSpanId = spanContext.parentSpanId;
+    this._parentSpanId = spanContext.parentSpanId;
     this._sampled = spanContext.sampled;
     this._spanId = spanContext.spanId || this._spanId;
     this._startTime = spanContext.startTimestamp || this._startTime;
@@ -17055,7 +17873,7 @@ class Span  {
       data: this._getData(),
       description: this._name,
       op: this._attributes[semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_OP] ,
-      parent_span_id: this.parentSpanId,
+      parent_span_id: this._parentSpanId,
       span_id: this._spanId,
       start_timestamp: this._startTime,
       status: this._status,
@@ -17063,7 +17881,8 @@ class Span  {
       tags: Object.keys(this.tags).length > 0 ? this.tags : undefined,
       timestamp: this._endTime,
       trace_id: this._traceId,
-      origin: this.origin,
+      origin: this._attributes[semanticAttributes.SEMANTIC_ATTRIBUTE_SENTRY_ORIGIN] ,
+      _metrics_summary: metricSummary.getMetricSummaryJsonForSpan(this),
     });
   }
 
@@ -17109,58 +17928,11 @@ class Span  {
   }
 }
 
-/**
- * Converts a HTTP status code into a {@link SpanStatusType}.
- *
- * @param httpStatus The HTTP response status code.
- * @returns The span status or unknown_error.
- */
-function spanStatusfromHttpCode(httpStatus) {
-  if (httpStatus < 400 && httpStatus >= 100) {
-    return 'ok';
-  }
-
-  if (httpStatus >= 400 && httpStatus < 500) {
-    switch (httpStatus) {
-      case 401:
-        return 'unauthenticated';
-      case 403:
-        return 'permission_denied';
-      case 404:
-        return 'not_found';
-      case 409:
-        return 'already_exists';
-      case 413:
-        return 'failed_precondition';
-      case 429:
-        return 'resource_exhausted';
-      default:
-        return 'invalid_argument';
-    }
-  }
-
-  if (httpStatus >= 500 && httpStatus < 600) {
-    switch (httpStatus) {
-      case 501:
-        return 'unimplemented';
-      case 503:
-        return 'unavailable';
-      case 504:
-        return 'deadline_exceeded';
-      default:
-        return 'internal_error';
-    }
-  }
-
-  return 'unknown_error';
-}
-
 exports.Span = Span;
 exports.SpanRecorder = SpanRecorder;
-exports.spanStatusfromHttpCode = spanStatusfromHttpCode;
 
 
-},{"../debug-build.js":61,"../semanticAttributes.js":85,"../utils/getRootSpan.js":104,"../utils/spanUtils.js":109,"@sentry/utils":131}],96:[function(require,module,exports){
+},{"../debug-build.js":62,"../metrics/metric-summary.js":83,"../semanticAttributes.js":87,"../utils/getRootSpan.js":106,"../utils/spanUtils.js":113,"./spanstatus.js":98,"@sentry/utils":135}],98:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /** The status of an Span.
@@ -17204,8 +17976,92 @@ exports.SpanStatus = void 0; (function (SpanStatus) {
   const DataLoss = 'data_loss'; SpanStatus["DataLoss"] = DataLoss;
 })(exports.SpanStatus || (exports.SpanStatus = {}));
 
+/**
+ * Converts a HTTP status code into a {@link SpanStatusType}.
+ *
+ * @param httpStatus The HTTP response status code.
+ * @returns The span status or unknown_error.
+ */
+function getSpanStatusFromHttpCode(httpStatus) {
+  if (httpStatus < 400 && httpStatus >= 100) {
+    return 'ok';
+  }
 
-},{}],97:[function(require,module,exports){
+  if (httpStatus >= 400 && httpStatus < 500) {
+    switch (httpStatus) {
+      case 401:
+        return 'unauthenticated';
+      case 403:
+        return 'permission_denied';
+      case 404:
+        return 'not_found';
+      case 409:
+        return 'already_exists';
+      case 413:
+        return 'failed_precondition';
+      case 429:
+        return 'resource_exhausted';
+      default:
+        return 'invalid_argument';
+    }
+  }
+
+  if (httpStatus >= 500 && httpStatus < 600) {
+    switch (httpStatus) {
+      case 501:
+        return 'unimplemented';
+      case 503:
+        return 'unavailable';
+      case 504:
+        return 'deadline_exceeded';
+      default:
+        return 'internal_error';
+    }
+  }
+
+  return 'unknown_error';
+}
+
+/**
+ * Converts a HTTP status code into a {@link SpanStatusType}.
+ *
+ * @deprecated Use {@link spanStatusFromHttpCode} instead.
+ * This export will be removed in v8 as the signature contains a typo.
+ *
+ * @param httpStatus The HTTP response status code.
+ * @returns The span status or unknown_error.
+ */
+const spanStatusfromHttpCode = getSpanStatusFromHttpCode;
+
+/**
+ * Sets the Http status attributes on the current span based on the http code.
+ * Additionally, the span's status is updated, depending on the http code.
+ */
+function setHttpStatus(span, httpStatus) {
+  // TODO (v8): Remove these calls
+  // Relay does not require us to send the status code as a tag
+  // For now, just because users might expect it to land as a tag we keep sending it.
+  // Same with data.
+  // In v8, we replace both, simply with
+  // span.setAttribute('http.response.status_code', httpStatus);
+
+  // eslint-disable-next-line deprecation/deprecation
+  span.setTag('http.status_code', String(httpStatus));
+  // eslint-disable-next-line deprecation/deprecation
+  span.setData('http.response.status_code', httpStatus);
+
+  const spanStatus = getSpanStatusFromHttpCode(httpStatus);
+  if (spanStatus !== 'unknown_error') {
+    span.setStatus(spanStatus);
+  }
+}
+
+exports.getSpanStatusFromHttpCode = getSpanStatusFromHttpCode;
+exports.setHttpStatus = setHttpStatus;
+exports.spanStatusfromHttpCode = spanStatusfromHttpCode;
+
+
+},{}],99:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -17279,29 +18135,33 @@ function trace(
 function startSpan(context, callback) {
   const ctx = normalizeContext(context);
 
-  return exports$1.withScope(context.scope, scope => {
-    // eslint-disable-next-line deprecation/deprecation
-    const hub$1 = hub.getCurrentHub();
-    // eslint-disable-next-line deprecation/deprecation
-    const parentSpan = scope.getSpan();
+  return hub.runWithAsyncContext(() => {
+    return exports$1.withScope(context.scope, scope => {
+      // eslint-disable-next-line deprecation/deprecation
+      const hub$1 = hub.getCurrentHub();
+      // eslint-disable-next-line deprecation/deprecation
+      const parentSpan = scope.getSpan();
 
-    const activeSpan = createChildSpanOrTransaction(hub$1, parentSpan, ctx);
-    // eslint-disable-next-line deprecation/deprecation
-    scope.setSpan(activeSpan);
+      const shouldSkipSpan = context.onlyIfParent && !parentSpan;
+      const activeSpan = shouldSkipSpan ? undefined : createChildSpanOrTransaction(hub$1, parentSpan, ctx);
 
-    return handleCallbackErrors.handleCallbackErrors(
-      () => callback(activeSpan),
-      () => {
-        // Only update the span status if it hasn't been changed yet
-        if (activeSpan) {
-          const { status } = spanUtils.spanToJSON(activeSpan);
-          if (!status || status === 'ok') {
-            activeSpan.setStatus('internal_error');
+      // eslint-disable-next-line deprecation/deprecation
+      scope.setSpan(activeSpan);
+
+      return handleCallbackErrors.handleCallbackErrors(
+        () => callback(activeSpan),
+        () => {
+          // Only update the span status if it hasn't been changed yet
+          if (activeSpan) {
+            const { status } = spanUtils.spanToJSON(activeSpan);
+            if (!status || status === 'ok') {
+              activeSpan.setStatus('internal_error');
+            }
           }
-        }
-      },
-      () => activeSpan && activeSpan.end(),
-    );
+        },
+        () => activeSpan && activeSpan.end(),
+      );
+    });
   });
 }
 
@@ -17327,32 +18187,36 @@ function startSpanManual(
 ) {
   const ctx = normalizeContext(context);
 
-  return exports$1.withScope(context.scope, scope => {
-    // eslint-disable-next-line deprecation/deprecation
-    const hub$1 = hub.getCurrentHub();
-    // eslint-disable-next-line deprecation/deprecation
-    const parentSpan = scope.getSpan();
+  return hub.runWithAsyncContext(() => {
+    return exports$1.withScope(context.scope, scope => {
+      // eslint-disable-next-line deprecation/deprecation
+      const hub$1 = hub.getCurrentHub();
+      // eslint-disable-next-line deprecation/deprecation
+      const parentSpan = scope.getSpan();
 
-    const activeSpan = createChildSpanOrTransaction(hub$1, parentSpan, ctx);
-    // eslint-disable-next-line deprecation/deprecation
-    scope.setSpan(activeSpan);
+      const shouldSkipSpan = context.onlyIfParent && !parentSpan;
+      const activeSpan = shouldSkipSpan ? undefined : createChildSpanOrTransaction(hub$1, parentSpan, ctx);
 
-    function finishAndSetSpan() {
-      activeSpan && activeSpan.end();
-    }
+      // eslint-disable-next-line deprecation/deprecation
+      scope.setSpan(activeSpan);
 
-    return handleCallbackErrors.handleCallbackErrors(
-      () => callback(activeSpan, finishAndSetSpan),
-      () => {
-        // Only update the span status if it hasn't been changed yet, and the span is not yet finished
-        if (activeSpan && activeSpan.isRecording()) {
-          const { status } = spanUtils.spanToJSON(activeSpan);
-          if (!status || status === 'ok') {
-            activeSpan.setStatus('internal_error');
+      function finishAndSetSpan() {
+        activeSpan && activeSpan.end();
+      }
+
+      return handleCallbackErrors.handleCallbackErrors(
+        () => callback(activeSpan, finishAndSetSpan),
+        () => {
+          // Only update the span status if it hasn't been changed yet, and the span is not yet finished
+          if (activeSpan && activeSpan.isRecording()) {
+            const { status } = spanUtils.spanToJSON(activeSpan);
+            if (!status || status === 'ok') {
+              activeSpan.setStatus('internal_error');
+            }
           }
-        }
-      },
-    );
+        },
+      );
+    });
   });
 }
 
@@ -17378,11 +18242,44 @@ function startInactiveSpan(context) {
     ? // eslint-disable-next-line deprecation/deprecation
       context.scope.getSpan()
     : getActiveSpan();
-  return parentSpan
-    ? // eslint-disable-next-line deprecation/deprecation
-      parentSpan.startChild(ctx)
-    : // eslint-disable-next-line deprecation/deprecation
-      hub$1.startTransaction(ctx);
+
+  const shouldSkipSpan = context.onlyIfParent && !parentSpan;
+
+  if (shouldSkipSpan) {
+    return undefined;
+  }
+
+  const isolationScope = hub.getIsolationScope();
+  const scope = exports$1.getCurrentScope();
+
+  let span;
+
+  if (parentSpan) {
+    // eslint-disable-next-line deprecation/deprecation
+    span = parentSpan.startChild(ctx);
+  } else {
+    const { traceId, dsc, parentSpanId, sampled } = {
+      ...isolationScope.getPropagationContext(),
+      ...scope.getPropagationContext(),
+    };
+
+    // eslint-disable-next-line deprecation/deprecation
+    span = hub$1.startTransaction({
+      traceId,
+      parentSpanId,
+      parentSampled: sampled,
+      ...ctx,
+      metadata: {
+        dynamicSamplingContext: dsc,
+        // eslint-disable-next-line deprecation/deprecation
+        ...ctx.metadata,
+      },
+    });
+  }
+
+  setCapturedScopesOnSpan(span, scope, isolationScope);
+
+  return span;
 }
 
 /**
@@ -17393,14 +18290,7 @@ function getActiveSpan() {
   return exports$1.getCurrentScope().getSpan();
 }
 
-/**
- * Continue a trace from `sentry-trace` and `baggage` values.
- * These values can be obtained from incoming request headers,
- * or in the browser from `<meta name="sentry-trace">` and `<meta name="baggage">` HTML tags.
- *
- * The callback receives a transactionContext that may be used for `startTransaction` or `startSpan`.
- */
-function continueTrace(
+const continueTrace = (
   {
     sentryTrace,
     baggage,
@@ -17408,9 +18298,19 @@ function continueTrace(
 
 ,
   callback,
-) {
+) => {
+  // TODO(v8): Change this function so it doesn't do anything besides setting the propagation context on the current scope:
+  /*
+    return withScope((scope) => {
+      const propagationContext = propagationContextFromHeaders(sentryTrace, baggage);
+      scope.setPropagationContext(propagationContext);
+      return callback();
+    })
+  */
+
   const currentScope = exports$1.getCurrentScope();
 
+  // eslint-disable-next-line deprecation/deprecation
   const { traceparentData, dynamicSamplingContext, propagationContext } = utils.tracingContextFromHeaders(
     sentryTrace,
     baggage,
@@ -17425,7 +18325,7 @@ function continueTrace(
   const transactionContext = {
     ...traceparentData,
     metadata: utils.dropUndefinedKeys({
-      dynamicSamplingContext: traceparentData && !dynamicSamplingContext ? {} : dynamicSamplingContext,
+      dynamicSamplingContext,
     }),
   };
 
@@ -17433,22 +18333,50 @@ function continueTrace(
     return transactionContext;
   }
 
-  return callback(transactionContext);
-}
+  return hub.runWithAsyncContext(() => {
+    return callback(transactionContext);
+  });
+};
 
 function createChildSpanOrTransaction(
-  hub,
+  hub$1,
   parentSpan,
   ctx,
 ) {
   if (!hasTracingEnabled.hasTracingEnabled()) {
     return undefined;
   }
-  return parentSpan
-    ? // eslint-disable-next-line deprecation/deprecation
-      parentSpan.startChild(ctx)
-    : // eslint-disable-next-line deprecation/deprecation
-      hub.startTransaction(ctx);
+
+  const isolationScope = hub.getIsolationScope();
+  const scope = exports$1.getCurrentScope();
+
+  let span;
+  if (parentSpan) {
+    // eslint-disable-next-line deprecation/deprecation
+    span = parentSpan.startChild(ctx);
+  } else {
+    const { traceId, dsc, parentSpanId, sampled } = {
+      ...isolationScope.getPropagationContext(),
+      ...scope.getPropagationContext(),
+    };
+
+    // eslint-disable-next-line deprecation/deprecation
+    span = hub$1.startTransaction({
+      traceId,
+      parentSpanId,
+      parentSampled: sampled,
+      ...ctx,
+      metadata: {
+        dynamicSamplingContext: dsc,
+        // eslint-disable-next-line deprecation/deprecation
+        ...ctx.metadata,
+      },
+    });
+  }
+
+  setCapturedScopesOnSpan(span, scope, isolationScope);
+
+  return span;
 }
 
 /**
@@ -17469,8 +18397,29 @@ function normalizeContext(context) {
   return context;
 }
 
+const SCOPE_ON_START_SPAN_FIELD = '_sentryScope';
+const ISOLATION_SCOPE_ON_START_SPAN_FIELD = '_sentryIsolationScope';
+
+function setCapturedScopesOnSpan(span, scope, isolationScope) {
+  if (span) {
+    utils.addNonEnumerableProperty(span, ISOLATION_SCOPE_ON_START_SPAN_FIELD, isolationScope);
+    utils.addNonEnumerableProperty(span, SCOPE_ON_START_SPAN_FIELD, scope);
+  }
+}
+
+/**
+ * Grabs the scope and isolation scope off a span that were active when the span was started.
+ */
+function getCapturedScopesOnSpan(span) {
+  return {
+    scope: (span )[SCOPE_ON_START_SPAN_FIELD],
+    isolationScope: (span )[ISOLATION_SCOPE_ON_START_SPAN_FIELD],
+  };
+}
+
 exports.continueTrace = continueTrace;
 exports.getActiveSpan = getActiveSpan;
+exports.getCapturedScopesOnSpan = getCapturedScopesOnSpan;
 exports.startActiveSpan = startActiveSpan;
 exports.startInactiveSpan = startInactiveSpan;
 exports.startSpan = startSpan;
@@ -17478,16 +18427,18 @@ exports.startSpanManual = startSpanManual;
 exports.trace = trace;
 
 
-},{"../debug-build.js":61,"../exports.js":64,"../hub.js":65,"../utils/handleCallbackErrors.js":105,"../utils/hasTracingEnabled.js":106,"../utils/spanUtils.js":109,"@sentry/utils":131}],98:[function(require,module,exports){
+},{"../debug-build.js":62,"../exports.js":65,"../hub.js":66,"../utils/handleCallbackErrors.js":107,"../utils/hasTracingEnabled.js":108,"../utils/spanUtils.js":113,"@sentry/utils":135}],100:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
 const debugBuild = require('../debug-build.js');
 const hub = require('../hub.js');
+const metricSummary = require('../metrics/metric-summary.js');
 const semanticAttributes = require('../semanticAttributes.js');
 const spanUtils = require('../utils/spanUtils.js');
 const dynamicSamplingContext = require('./dynamicSamplingContext.js');
 const span = require('./span.js');
+const trace = require('./trace.js');
 
 /** JSDoc */
 class Transaction extends span.Span  {
@@ -17760,6 +18711,8 @@ class Transaction extends span.Span  {
       });
     }
 
+    const { scope: capturedSpanScope, isolationScope: capturedSpanIsolationScope } = trace.getCapturedScopesOnSpan(this);
+
     // eslint-disable-next-line deprecation/deprecation
     const { metadata } = this;
     // eslint-disable-next-line deprecation/deprecation
@@ -17781,8 +18734,11 @@ class Transaction extends span.Span  {
       type: 'transaction',
       sdkProcessingMetadata: {
         ...metadata,
+        capturedSpanScope,
+        capturedSpanIsolationScope,
         dynamicSamplingContext: dynamicSamplingContext.getDynamicSamplingContextFromSpan(this),
       },
+      _metrics_summary: metricSummary.getMetricSummaryJsonForSpan(this),
       ...(source && {
         transaction_info: {
           source,
@@ -17811,7 +18767,7 @@ class Transaction extends span.Span  {
 exports.Transaction = Transaction;
 
 
-},{"../debug-build.js":61,"../hub.js":65,"../semanticAttributes.js":85,"../utils/spanUtils.js":109,"./dynamicSamplingContext.js":89,"./span.js":95,"@sentry/utils":131}],99:[function(require,module,exports){
+},{"../debug-build.js":62,"../hub.js":66,"../metrics/metric-summary.js":83,"../semanticAttributes.js":87,"../utils/spanUtils.js":113,"./dynamicSamplingContext.js":91,"./span.js":97,"./trace.js":99,"@sentry/utils":135}],101:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -17850,7 +18806,7 @@ exports.extractTraceparentData = extractTraceparentData;
 exports.getActiveTransaction = getActiveTransaction;
 
 
-},{"../hub.js":65,"@sentry/utils":131}],100:[function(require,module,exports){
+},{"../hub.js":66,"@sentry/utils":135}],102:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -17957,7 +18913,7 @@ exports.DEFAULT_TRANSPORT_BUFFER_SIZE = DEFAULT_TRANSPORT_BUFFER_SIZE;
 exports.createTransport = createTransport;
 
 
-},{"../debug-build.js":61,"@sentry/utils":131}],101:[function(require,module,exports){
+},{"../debug-build.js":62,"@sentry/utils":135}],103:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -18080,7 +19036,7 @@ exports.eventFromEnvelope = eventFromEnvelope;
 exports.makeMultiplexedTransport = makeMultiplexedTransport;
 
 
-},{"../api.js":57,"@sentry/utils":131}],102:[function(require,module,exports){
+},{"../api.js":58,"@sentry/utils":135}],104:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -18209,7 +19165,7 @@ exports.START_DELAY = START_DELAY;
 exports.makeOfflineTransport = makeOfflineTransport;
 
 
-},{"../debug-build.js":61,"@sentry/utils":131}],103:[function(require,module,exports){
+},{"../debug-build.js":62,"@sentry/utils":135}],105:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -18221,7 +19177,7 @@ const spanUtils = require('./spanUtils.js');
  * Applies data from the scope to the event and runs all event processors on it.
  */
 function applyScopeDataToEvent(event, data) {
-  const { fingerprint, span, breadcrumbs, sdkProcessingMetadata, propagationContext } = data;
+  const { fingerprint, span, breadcrumbs, sdkProcessingMetadata } = data;
 
   // Apply general data
   applyDataToEvent(event, data);
@@ -18235,7 +19191,7 @@ function applyScopeDataToEvent(event, data) {
 
   applyFingerprintToEvent(event, fingerprint);
   applyBreadcrumbsToEvent(event, breadcrumbs);
-  applySdkMetadataToEvent(event, sdkProcessingMetadata, propagationContext);
+  applySdkMetadataToEvent(event, sdkProcessingMetadata);
 }
 
 /** Merge data of two scopes together. */
@@ -18358,15 +19314,10 @@ function applyBreadcrumbsToEvent(event, breadcrumbs) {
   event.breadcrumbs = mergedBreadcrumbs.length ? mergedBreadcrumbs : undefined;
 }
 
-function applySdkMetadataToEvent(
-  event,
-  sdkProcessingMetadata,
-  propagationContext,
-) {
+function applySdkMetadataToEvent(event, sdkProcessingMetadata) {
   event.sdkProcessingMetadata = {
     ...event.sdkProcessingMetadata,
     ...sdkProcessingMetadata,
-    propagationContext: propagationContext,
   };
 }
 
@@ -18409,7 +19360,7 @@ exports.mergeAndOverwriteScopeData = mergeAndOverwriteScopeData;
 exports.mergeScopeData = mergeScopeData;
 
 
-},{"../tracing/dynamicSamplingContext.js":89,"./getRootSpan.js":104,"./spanUtils.js":109,"@sentry/utils":131}],104:[function(require,module,exports){
+},{"../tracing/dynamicSamplingContext.js":91,"./getRootSpan.js":106,"./spanUtils.js":113,"@sentry/utils":135}],106:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -18429,7 +19380,7 @@ function getRootSpan(span) {
 exports.getRootSpan = getRootSpan;
 
 
-},{}],105:[function(require,module,exports){
+},{}],107:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -18498,7 +19449,7 @@ function maybeHandlePromiseRejection(
 exports.handleCallbackErrors = handleCallbackErrors;
 
 
-},{"@sentry/utils":131}],106:[function(require,module,exports){
+},{"@sentry/utils":135}],108:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const exports$1 = require('../exports.js');
@@ -18525,7 +19476,7 @@ function hasTracingEnabled(
 exports.hasTracingEnabled = hasTracingEnabled;
 
 
-},{"../exports.js":64}],107:[function(require,module,exports){
+},{"../exports.js":65}],109:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -18570,7 +19521,29 @@ function isHub(hubOrClient) {
 exports.isSentryRequestUrl = isSentryRequestUrl;
 
 
-},{}],108:[function(require,module,exports){
+},{}],110:[function(require,module,exports){
+Object.defineProperty(exports, '__esModule', { value: true });
+
+/**
+ * Tagged template function which returns paramaterized representation of the message
+ * For example: parameterize`This is a log statement with ${x} and ${y} params`, would return:
+ * "__sentry_template_string__": 'This is a log statement with %s and %s params',
+ * "__sentry_template_values__": ['first', 'second']
+ * @param strings An array of string values splitted between expressions
+ * @param values Expressions extracted from template string
+ * @returns String with template information in __sentry_template_string__ and __sentry_template_values__ properties
+ */
+function parameterize(strings, ...values) {
+  const formatted = new String(String.raw(strings, ...values)) ;
+  formatted.__sentry_template_string__ = strings.join('\x00').replace(/%/g, '%%').replace(/\0/g, '%s');
+  formatted.__sentry_template_values__ = values;
+  return formatted;
+}
+
+exports.parameterize = parameterize;
+
+
+},{}],111:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -18964,7 +19937,45 @@ exports.parseEventHintOrCaptureContext = parseEventHintOrCaptureContext;
 exports.prepareEvent = prepareEvent;
 
 
-},{"../constants.js":60,"../eventProcessors.js":63,"../scope.js":83,"./applyScopeDataToEvent.js":103,"./spanUtils.js":109,"@sentry/utils":131}],109:[function(require,module,exports){
+},{"../constants.js":61,"../eventProcessors.js":64,"../scope.js":85,"./applyScopeDataToEvent.js":105,"./spanUtils.js":113,"@sentry/utils":135}],112:[function(require,module,exports){
+Object.defineProperty(exports, '__esModule', { value: true });
+
+const version = require('../version.js');
+
+/**
+ * A builder for the SDK metadata in the options for the SDK initialization.
+ *
+ * Note: This function is identical to `buildMetadata` in Remix and NextJS and SvelteKit.
+ * We don't extract it for bundle size reasons.
+ * @see https://github.com/getsentry/sentry-javascript/pull/7404
+ * @see https://github.com/getsentry/sentry-javascript/pull/4196
+ *
+ * If you make changes to this function consider updating the others as well.
+ *
+ * @param options SDK options object that gets mutated
+ * @param names list of package names
+ */
+function applySdkMetadata(options, name, names = [name], source = 'npm') {
+  const metadata = options._metadata || {};
+
+  if (!metadata.sdk) {
+    metadata.sdk = {
+      name: `sentry.javascript.${name}`,
+      packages: names.map(name => ({
+        name: `${source}:@sentry/${name}`,
+        version: version.SDK_VERSION,
+      })),
+      version: version.SDK_VERSION,
+    };
+  }
+
+  options._metadata = metadata;
+}
+
+exports.applySdkMetadata = applySdkMetadata;
+
+
+},{"../version.js":114}],113:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const utils = require('@sentry/utils');
@@ -19084,15 +20095,15 @@ exports.spanToTraceContext = spanToTraceContext;
 exports.spanToTraceHeader = spanToTraceHeader;
 
 
-},{"@sentry/utils":131}],110:[function(require,module,exports){
+},{"@sentry/utils":135}],114:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
-const SDK_VERSION = '7.94.1';
+const SDK_VERSION = '7.101.0';
 
 exports.SDK_VERSION = SDK_VERSION;
 
 
-},{}],111:[function(require,module,exports){
+},{}],115:[function(require,module,exports){
 var {
     _nullishCoalesce,
     _optionalChain
@@ -19603,6 +20614,21 @@ function needMaskingText(node, maskTextClass, maskTextSelector, unmaskTextClass,
             : node.parentElement;
         if (el === null)
             return false;
+        if (el.tagName === 'INPUT') {
+            const autocomplete = el.getAttribute('autocomplete');
+            const disallowedAutocompleteValues = [
+                'current-password',
+                'new-password',
+                'cc-number',
+                'cc-exp',
+                'cc-exp-month',
+                'cc-exp-year',
+                'cc-csc',
+            ];
+            if (disallowedAutocompleteValues.includes(autocomplete)) {
+                return true;
+            }
+        }
         let maskDistance = -1;
         let unmaskDistance = -1;
         if (maskAllText) {
@@ -19834,7 +20860,7 @@ function serializeElementNode(n, options) {
     const len = n.attributes.length;
     for (let i = 0; i < len; i++) {
         const attr = n.attributes[i];
-        if (!ignoreAttribute(tagName, attr.name, attr.value)) {
+        if (attr.name && !ignoreAttribute(tagName, attr.name, attr.value)) {
             attributes[attr.name] = transformAttribute(doc, tagName, toLowerCase(attr.name), attr.value, n, maskAttributeFn);
         }
     }
@@ -22033,10 +23059,8 @@ function initSelectionObserver(param) {
 }
 function initCustomElementObserver({ doc, customElementCb, }) {
     const win = doc.defaultView;
-    if (!win || !win.customElements) {
-        return () => {
-        };
-    }
+    if (!win || !win.customElements)
+        return () => { };
     const restoreHandler = patch(win.customElements, 'define', function (original) {
         return function (name, constructor, options) {
             try {
@@ -22777,6 +23801,7 @@ function record(options = {}) {
         unblockSelector,
         sampling: sampling['canvas'],
         dataURLOptions,
+        errorHandler,
     });
     const shadowDomManager = typeof __RRWEB_EXCLUDE_SHADOW_DOM__ === 'boolean' &&
         __RRWEB_EXCLUDE_SHADOW_DOM__
@@ -24950,16 +25975,17 @@ function addFeedbackBreadcrumb(replay, event) {
       type: EventType.Custom,
       timestamp: event.timestamp * 1000,
       data: {
-        timestamp: event.timestamp,
         tag: 'breadcrumb',
         payload: {
+          timestamp: event.timestamp,
+          type: 'default',
           category: 'sentry.feedback',
           data: {
             feedbackId: event.event_id,
           },
         },
       },
-    });
+    } );
 
     return false;
   });
@@ -28227,8 +29253,14 @@ const DEFAULT_NETWORK_HEADERS = ['content-length', 'content-type', 'accept'];
 
 let _initialized = false;
 
+const replayIntegration = ((options) => {
+  // eslint-disable-next-line deprecation/deprecation
+  return new Replay(options);
+}) ;
+
 /**
  * The main replay integration class, to be passed to `init({  integrations: [] })`.
+ * @deprecated Use `replayIntegration()` instead.
  */
 class Replay  {
   /**
@@ -28303,6 +29335,7 @@ class Replay  {
     // eslint-disable-next-line deprecation/deprecation
     ignoreClass,
   } = {}) {
+    // eslint-disable-next-line deprecation/deprecation
     this.name = Replay.id;
 
     const privacyOptions = getPrivacyOptions({
@@ -28611,10 +29644,23 @@ function _getMergedNetworkHeaders(headers) {
   return [...DEFAULT_NETWORK_HEADERS, ...headers.map(header => header.toLowerCase())];
 }
 
+/**
+ * This is a small utility to get a type-safe instance of the Replay integration.
+ */
+// eslint-disable-next-line deprecation/deprecation
+function getReplay() {
+  const client = core.getClient();
+  return (
+    client && client.getIntegrationByName && client.getIntegrationByName('Replay')
+  );
+}
+
 exports.Replay = Replay;
+exports.getReplay = getReplay;
+exports.replayIntegration = replayIntegration;
 
 
-},{"@sentry-internal/tracing":25,"@sentry/core":66,"@sentry/utils":131}],112:[function(require,module,exports){
+},{"@sentry-internal/tracing":26,"@sentry/core":67,"@sentry/utils":135}],116:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const is = require('./is.js');
@@ -28763,7 +29809,7 @@ function truncateAggregateExceptions(exceptions, maxValueLength) {
 exports.applyAggregateErrorsToEvent = applyAggregateErrorsToEvent;
 
 
-},{"./is.js":141,"./string.js":158}],113:[function(require,module,exports){
+},{"./is.js":145,"./string.js":161}],117:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const object = require('./object.js');
@@ -28841,7 +29887,7 @@ exports.callFrameToStackFrame = callFrameToStackFrame;
 exports.watchdogTimer = watchdogTimer;
 
 
-},{"./node-stack-trace.js":147,"./object.js":150}],114:[function(require,module,exports){
+},{"./node-stack-trace.js":151,"./object.js":154}],118:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const debugBuild = require('./debug-build.js');
@@ -29000,7 +30046,7 @@ exports.baggageHeaderToDynamicSamplingContext = baggageHeaderToDynamicSamplingCo
 exports.dynamicSamplingContextToSentryBaggageHeader = dynamicSamplingContextToSentryBaggageHeader;
 
 
-},{"./debug-build.js":125,"./is.js":141,"./logger.js":143}],115:[function(require,module,exports){
+},{"./debug-build.js":129,"./is.js":145,"./logger.js":147}],119:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const is = require('./is.js');
@@ -29200,7 +30246,7 @@ exports.getLocationHref = getLocationHref;
 exports.htmlTreeAsString = htmlTreeAsString;
 
 
-},{"./is.js":141,"./worldwide.js":167}],116:[function(require,module,exports){
+},{"./is.js":145,"./worldwide.js":170}],120:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const _nullishCoalesce = require('./_nullishCoalesce.js');
@@ -29236,7 +30282,7 @@ async function _asyncNullishCoalesce(lhs, rhsFn) {
 exports._asyncNullishCoalesce = _asyncNullishCoalesce;
 
 
-},{"./_nullishCoalesce.js":119}],117:[function(require,module,exports){
+},{"./_nullishCoalesce.js":123}],121:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -29299,7 +30345,7 @@ async function _asyncOptionalChain(ops) {
 exports._asyncOptionalChain = _asyncOptionalChain;
 
 
-},{}],118:[function(require,module,exports){
+},{}],122:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const _asyncOptionalChain = require('./_asyncOptionalChain.js');
@@ -29335,7 +30381,7 @@ async function _asyncOptionalChainDelete(ops) {
 exports._asyncOptionalChainDelete = _asyncOptionalChainDelete;
 
 
-},{"./_asyncOptionalChain.js":117}],119:[function(require,module,exports){
+},{"./_asyncOptionalChain.js":121}],123:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 // https://github.com/alangpierce/sucrase/tree/265887868966917f3b924ce38dfad01fbab1329f
@@ -29391,7 +30437,7 @@ function _nullishCoalesce(lhs, rhsFn) {
 exports._nullishCoalesce = _nullishCoalesce;
 
 
-},{}],120:[function(require,module,exports){
+},{}],124:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -29454,7 +30500,7 @@ function _optionalChain(ops) {
 exports._optionalChain = _optionalChain;
 
 
-},{}],121:[function(require,module,exports){
+},{}],125:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const _optionalChain = require('./_optionalChain.js');
@@ -29491,7 +30537,7 @@ function _optionalChainDelete(ops) {
 exports._optionalChainDelete = _optionalChainDelete;
 
 
-},{"./_optionalChain.js":120}],122:[function(require,module,exports){
+},{"./_optionalChain.js":124}],126:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -29562,7 +30608,7 @@ function makeFifoCache(
 exports.makeFifoCache = makeFifoCache;
 
 
-},{}],123:[function(require,module,exports){
+},{}],127:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const envelope = require('./envelope.js');
@@ -29591,7 +30637,7 @@ function createClientReportEnvelope(
 exports.createClientReportEnvelope = createClientReportEnvelope;
 
 
-},{"./envelope.js":128,"./time.js":161}],124:[function(require,module,exports){
+},{"./envelope.js":132,"./time.js":164}],128:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -29676,9 +30722,9 @@ function parseCookie(str) {
 exports.parseCookie = parseCookie;
 
 
-},{}],125:[function(require,module,exports){
-arguments[4][22][0].apply(exports,arguments)
-},{"dup":22}],126:[function(require,module,exports){
+},{}],129:[function(require,module,exports){
+arguments[4][23][0].apply(exports,arguments)
+},{"dup":23}],130:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const debugBuild = require('./debug-build.js');
@@ -29813,7 +30859,7 @@ exports.dsnToString = dsnToString;
 exports.makeDsn = makeDsn;
 
 
-},{"./debug-build.js":125,"./logger.js":143}],127:[function(require,module,exports){
+},{"./debug-build.js":129,"./logger.js":147}],131:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /*
@@ -29852,7 +30898,7 @@ exports.getSDKSource = getSDKSource;
 exports.isBrowserBundle = isBrowserBundle;
 
 
-},{}],128:[function(require,module,exports){
+},{}],132:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const dsn = require('./dsn.js');
@@ -30100,7 +31146,7 @@ exports.parseEnvelope = parseEnvelope;
 exports.serializeEnvelope = serializeEnvelope;
 
 
-},{"./dsn.js":126,"./normalize.js":149,"./object.js":150}],129:[function(require,module,exports){
+},{"./dsn.js":130,"./normalize.js":153,"./object.js":154}],133:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /** An error emitted by Sentry SDKs and related utilities. */
@@ -30121,7 +31167,7 @@ class SentryError extends Error {
 exports.SentryError = SentryError;
 
 
-},{}],130:[function(require,module,exports){
+},{}],134:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const is = require('./is.js');
@@ -30288,7 +31334,7 @@ exports.exceptionFromError = exceptionFromError;
 exports.parseStackFrames = parseStackFrames;
 
 
-},{"./is.js":141,"./misc.js":146,"./normalize.js":149,"./object.js":150}],131:[function(require,module,exports){
+},{"./is.js":145,"./misc.js":150,"./normalize.js":153,"./object.js":154}],135:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const aggregateErrors = require('./aggregate-errors.js');
@@ -30324,7 +31370,6 @@ const url = require('./url.js');
 const userIntegrations = require('./userIntegrations.js');
 const cache = require('./cache.js');
 const eventbuilder = require('./eventbuilder.js');
-const parameterize = require('./parameterize.js');
 const anr = require('./anr.js');
 const lru = require('./lru.js');
 const _asyncNullishCoalesce = require('./buildPolyfills/_asyncNullishCoalesce.js');
@@ -30456,6 +31501,7 @@ exports.timestampWithMs = time.timestampWithMs;
 exports.TRACEPARENT_REGEXP = tracing.TRACEPARENT_REGEXP;
 exports.extractTraceparentData = tracing.extractTraceparentData;
 exports.generateSentryTraceHeader = tracing.generateSentryTraceHeader;
+exports.propagationContextFromHeaders = tracing.propagationContextFromHeaders;
 exports.tracingContextFromHeaders = tracing.tracingContextFromHeaders;
 exports.getSDKSource = env.getSDKSource;
 exports.isBrowserBundle = env.isBrowserBundle;
@@ -30491,7 +31537,6 @@ exports.eventFromMessage = eventbuilder.eventFromMessage;
 exports.eventFromUnknownInput = eventbuilder.eventFromUnknownInput;
 exports.exceptionFromError = eventbuilder.exceptionFromError;
 exports.parseStackFrames = eventbuilder.parseStackFrames;
-exports.parameterize = parameterize.parameterize;
 exports.callFrameToStackFrame = anr.callFrameToStackFrame;
 exports.watchdogTimer = anr.watchdogTimer;
 exports.LRUMap = lru.LRUMap;
@@ -30515,7 +31560,7 @@ exports.escapeStringForRegex = escapeStringForRegex.escapeStringForRegex;
 exports.supportsHistory = supportsHistory.supportsHistory;
 
 
-},{"./aggregate-errors.js":112,"./anr.js":113,"./baggage.js":114,"./browser.js":115,"./buildPolyfills/_asyncNullishCoalesce.js":116,"./buildPolyfills/_asyncOptionalChain.js":117,"./buildPolyfills/_asyncOptionalChainDelete.js":118,"./buildPolyfills/_nullishCoalesce.js":119,"./buildPolyfills/_optionalChain.js":120,"./buildPolyfills/_optionalChainDelete.js":121,"./cache.js":122,"./clientreport.js":123,"./dsn.js":126,"./env.js":127,"./envelope.js":128,"./error.js":129,"./eventbuilder.js":130,"./instrument/_handlers.js":132,"./instrument/console.js":133,"./instrument/dom.js":134,"./instrument/fetch.js":135,"./instrument/globalError.js":136,"./instrument/globalUnhandledRejection.js":137,"./instrument/history.js":138,"./instrument/index.js":139,"./instrument/xhr.js":140,"./is.js":141,"./isBrowser.js":142,"./logger.js":143,"./lru.js":144,"./memo.js":145,"./misc.js":146,"./node-stack-trace.js":147,"./node.js":148,"./normalize.js":149,"./object.js":150,"./parameterize.js":151,"./path.js":152,"./promisebuffer.js":153,"./ratelimit.js":154,"./requestdata.js":155,"./severity.js":156,"./stacktrace.js":157,"./string.js":158,"./supports.js":159,"./syncpromise.js":160,"./time.js":161,"./tracing.js":162,"./url.js":163,"./userIntegrations.js":164,"./vendor/escapeStringForRegex.js":165,"./vendor/supportsHistory.js":166,"./worldwide.js":167}],132:[function(require,module,exports){
+},{"./aggregate-errors.js":116,"./anr.js":117,"./baggage.js":118,"./browser.js":119,"./buildPolyfills/_asyncNullishCoalesce.js":120,"./buildPolyfills/_asyncOptionalChain.js":121,"./buildPolyfills/_asyncOptionalChainDelete.js":122,"./buildPolyfills/_nullishCoalesce.js":123,"./buildPolyfills/_optionalChain.js":124,"./buildPolyfills/_optionalChainDelete.js":125,"./cache.js":126,"./clientreport.js":127,"./dsn.js":130,"./env.js":131,"./envelope.js":132,"./error.js":133,"./eventbuilder.js":134,"./instrument/_handlers.js":136,"./instrument/console.js":137,"./instrument/dom.js":138,"./instrument/fetch.js":139,"./instrument/globalError.js":140,"./instrument/globalUnhandledRejection.js":141,"./instrument/history.js":142,"./instrument/index.js":143,"./instrument/xhr.js":144,"./is.js":145,"./isBrowser.js":146,"./logger.js":147,"./lru.js":148,"./memo.js":149,"./misc.js":150,"./node-stack-trace.js":151,"./node.js":152,"./normalize.js":153,"./object.js":154,"./path.js":155,"./promisebuffer.js":156,"./ratelimit.js":157,"./requestdata.js":158,"./severity.js":159,"./stacktrace.js":160,"./string.js":161,"./supports.js":162,"./syncpromise.js":163,"./time.js":164,"./tracing.js":165,"./url.js":166,"./userIntegrations.js":167,"./vendor/escapeStringForRegex.js":168,"./vendor/supportsHistory.js":169,"./worldwide.js":170}],136:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const debugBuild = require('../debug-build.js');
@@ -30576,7 +31621,7 @@ exports.resetInstrumentationHandlers = resetInstrumentationHandlers;
 exports.triggerHandlers = triggerHandlers;
 
 
-},{"../debug-build.js":125,"../logger.js":143,"../stacktrace.js":157}],133:[function(require,module,exports){
+},{"../debug-build.js":129,"../logger.js":147,"../stacktrace.js":160}],137:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const logger = require('../logger.js');
@@ -30623,7 +31668,7 @@ function instrumentConsole() {
 exports.addConsoleInstrumentationHandler = addConsoleInstrumentationHandler;
 
 
-},{"../logger.js":143,"../object.js":150,"../worldwide.js":167,"./_handlers.js":132}],134:[function(require,module,exports){
+},{"../logger.js":147,"../object.js":154,"../worldwide.js":170,"./_handlers.js":136}],138:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const misc = require('../misc.js');
@@ -30864,7 +31909,7 @@ exports.addClickKeypressInstrumentationHandler = addClickKeypressInstrumentation
 exports.instrumentDOM = instrumentDOM;
 
 
-},{"../misc.js":146,"../object.js":150,"../worldwide.js":167,"./_handlers.js":132}],135:[function(require,module,exports){
+},{"../misc.js":150,"../object.js":154,"../worldwide.js":170,"./_handlers.js":136}],139:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const object = require('../object.js');
@@ -30991,7 +32036,7 @@ exports.addFetchInstrumentationHandler = addFetchInstrumentationHandler;
 exports.parseFetchArgs = parseFetchArgs;
 
 
-},{"../object.js":150,"../supports.js":159,"../worldwide.js":167,"./_handlers.js":132}],136:[function(require,module,exports){
+},{"../object.js":154,"../supports.js":162,"../worldwide.js":170,"./_handlers.js":136}],140:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const worldwide = require('../worldwide.js');
@@ -31044,7 +32089,7 @@ function instrumentError() {
 exports.addGlobalErrorInstrumentationHandler = addGlobalErrorInstrumentationHandler;
 
 
-},{"../worldwide.js":167,"./_handlers.js":132}],137:[function(require,module,exports){
+},{"../worldwide.js":170,"./_handlers.js":136}],141:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const worldwide = require('../worldwide.js');
@@ -31087,7 +32132,7 @@ function instrumentUnhandledRejection() {
 exports.addGlobalUnhandledRejectionInstrumentationHandler = addGlobalUnhandledRejectionInstrumentationHandler;
 
 
-},{"../worldwide.js":167,"./_handlers.js":132}],138:[function(require,module,exports){
+},{"../worldwide.js":170,"./_handlers.js":136}],142:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const object = require('../object.js');
@@ -31163,7 +32208,7 @@ function instrumentHistory() {
 exports.addHistoryInstrumentationHandler = addHistoryInstrumentationHandler;
 
 
-},{"../debug-build.js":125,"../logger.js":143,"../object.js":150,"../vendor/supportsHistory.js":166,"../worldwide.js":167,"./_handlers.js":132}],139:[function(require,module,exports){
+},{"../debug-build.js":129,"../logger.js":147,"../object.js":154,"../vendor/supportsHistory.js":169,"../worldwide.js":170,"./_handlers.js":136}],143:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const debugBuild = require('../debug-build.js');
@@ -31216,7 +32261,7 @@ exports.addXhrInstrumentationHandler = xhr.addXhrInstrumentationHandler;
 exports.addInstrumentationHandler = addInstrumentationHandler;
 
 
-},{"../debug-build.js":125,"../logger.js":143,"./console.js":133,"./dom.js":134,"./fetch.js":135,"./globalError.js":136,"./globalUnhandledRejection.js":137,"./history.js":138,"./xhr.js":140}],140:[function(require,module,exports){
+},{"../debug-build.js":129,"../logger.js":147,"./console.js":137,"./dom.js":138,"./fetch.js":139,"./globalError.js":140,"./globalUnhandledRejection.js":141,"./history.js":142,"./xhr.js":144}],144:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const is = require('../is.js');
@@ -31379,7 +32424,7 @@ exports.addXhrInstrumentationHandler = addXhrInstrumentationHandler;
 exports.instrumentXHR = instrumentXHR;
 
 
-},{"../is.js":141,"../object.js":150,"../worldwide.js":167,"./_handlers.js":132}],141:[function(require,module,exports){
+},{"../is.js":145,"../object.js":154,"../worldwide.js":170,"./_handlers.js":136}],145:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -31604,7 +32649,7 @@ exports.isThenable = isThenable;
 exports.isVueViewModel = isVueViewModel;
 
 
-},{}],142:[function(require,module,exports){
+},{}],146:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const node = require('./node.js');
@@ -31629,7 +32674,7 @@ function isElectronNodeRenderer() {
 exports.isBrowser = isBrowser;
 
 
-},{"./node.js":148,"./worldwide.js":167}],143:[function(require,module,exports){
+},{"./node.js":152,"./worldwide.js":170}],147:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const debugBuild = require('./debug-build.js');
@@ -31728,7 +32773,7 @@ exports.logger = logger;
 exports.originalConsoleMethods = originalConsoleMethods;
 
 
-},{"./debug-build.js":125,"./worldwide.js":167}],144:[function(require,module,exports){
+},{"./debug-build.js":129,"./worldwide.js":170}],148:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /** A simple Least Recently Used map */
@@ -31794,7 +32839,7 @@ class LRUMap {
 exports.LRUMap = LRUMap;
 
 
-},{}],145:[function(require,module,exports){
+},{}],149:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
@@ -31843,7 +32888,7 @@ function memoBuilder() {
 exports.memoBuilder = memoBuilder;
 
 
-},{}],146:[function(require,module,exports){
+},{}],150:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const object = require('./object.js');
@@ -32065,7 +33110,7 @@ exports.parseSemver = parseSemver;
 exports.uuid4 = uuid4;
 
 
-},{"./object.js":150,"./string.js":158,"./worldwide.js":167}],147:[function(require,module,exports){
+},{"./object.js":154,"./string.js":161,"./worldwide.js":170}],151:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -32179,7 +33224,7 @@ exports.filenameIsInApp = filenameIsInApp;
 exports.node = node;
 
 
-},{}],148:[function(require,module,exports){
+},{}],152:[function(require,module,exports){
 (function (process){(function (){
 Object.defineProperty(exports, '__esModule', { value: true });
 
@@ -32253,7 +33298,7 @@ exports.loadModule = loadModule;
 
 
 }).call(this)}).call(this,require('_process'))
-},{"./env.js":127,"_process":168}],149:[function(require,module,exports){
+},{"./env.js":131,"_process":171}],153:[function(require,module,exports){
 (function (global){(function (){
 Object.defineProperty(exports, '__esModule', { value: true });
 
@@ -32559,7 +33604,7 @@ exports.walk = visit;
 
 
 }).call(this)}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./is.js":141,"./memo.js":145,"./object.js":150,"./stacktrace.js":157}],150:[function(require,module,exports){
+},{"./is.js":145,"./memo.js":149,"./object.js":154,"./stacktrace.js":160}],154:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const browser = require('./browser.js');
@@ -32868,29 +33913,7 @@ exports.objectify = objectify;
 exports.urlEncode = urlEncode;
 
 
-},{"./browser.js":115,"./debug-build.js":125,"./is.js":141,"./logger.js":143,"./string.js":158}],151:[function(require,module,exports){
-Object.defineProperty(exports, '__esModule', { value: true });
-
-/**
- * Tagged template function which returns paramaterized representation of the message
- * For example: parameterize`This is a log statement with ${x} and ${y} params`, would return:
- * "__sentry_template_string__": "My raw message with interpreted strings like %s",
- * "__sentry_template_values__": ["this"]
- * @param strings An array of string values splitted between expressions
- * @param values Expressions extracted from template string
- * @returns String with template information in __sentry_template_string__ and __sentry_template_values__ properties
- */
-function parameterize(strings, ...values) {
-  const formatted = new String(String.raw(strings, ...values)) ;
-  formatted.__sentry_template_string__ = strings.join('\x00').replace(/%/g, '%%').replace(/\0/g, '%s');
-  formatted.__sentry_template_values__ = values;
-  return formatted;
-}
-
-exports.parameterize = parameterize;
-
-
-},{}],152:[function(require,module,exports){
+},{"./browser.js":119,"./debug-build.js":129,"./is.js":145,"./logger.js":147,"./string.js":161}],155:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 // Slightly modified (no IE8 support, ES6) and transcribed to TypeScript
@@ -33112,7 +34135,7 @@ exports.relative = relative;
 exports.resolve = resolve;
 
 
-},{}],153:[function(require,module,exports){
+},{}],156:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const error = require('./error.js');
@@ -33218,7 +34241,7 @@ function makePromiseBuffer(limit) {
 exports.makePromiseBuffer = makePromiseBuffer;
 
 
-},{"./error.js":129,"./syncpromise.js":160}],154:[function(require,module,exports){
+},{"./error.js":133,"./syncpromise.js":163}],157:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 // Intentionally keeping the key broad, as we don't know for sure what rate limit headers get returned from backend
@@ -33323,7 +34346,7 @@ exports.parseRetryAfterHeader = parseRetryAfterHeader;
 exports.updateRateLimits = updateRateLimits;
 
 
-},{}],155:[function(require,module,exports){
+},{}],158:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const cookie = require('./cookie.js');
@@ -33702,7 +34725,7 @@ exports.winterCGHeadersToDict = winterCGHeadersToDict;
 exports.winterCGRequestToRequestData = winterCGRequestToRequestData;
 
 
-},{"./cookie.js":124,"./debug-build.js":125,"./is.js":141,"./logger.js":143,"./normalize.js":149,"./url.js":163}],156:[function(require,module,exports){
+},{"./cookie.js":128,"./debug-build.js":129,"./is.js":145,"./logger.js":147,"./normalize.js":153,"./url.js":166}],159:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 // Note: Ideally the `SeverityLevel` type would be derived from `validSeverityLevels`, but that would mean either
@@ -33744,7 +34767,7 @@ exports.severityLevelFromString = severityLevelFromString;
 exports.validSeverityLevels = validSeverityLevels;
 
 
-},{}],157:[function(require,module,exports){
+},{}],160:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const nodeStackTrace = require('./node-stack-trace.js');
@@ -33900,7 +34923,7 @@ exports.stackParserFromStackParserOptions = stackParserFromStackParserOptions;
 exports.stripSentryFramesAndReverse = stripSentryFramesAndReverse;
 
 
-},{"./node-stack-trace.js":147}],158:[function(require,module,exports){
+},{"./node-stack-trace.js":151}],161:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const is = require('./is.js');
@@ -34049,7 +35072,7 @@ exports.stringMatchesSomePattern = stringMatchesSomePattern;
 exports.truncate = truncate;
 
 
-},{"./is.js":141}],159:[function(require,module,exports){
+},{"./is.js":145}],162:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const debugBuild = require('./debug-build.js');
@@ -34226,7 +35249,7 @@ exports.supportsReferrerPolicy = supportsReferrerPolicy;
 exports.supportsReportingObserver = supportsReportingObserver;
 
 
-},{"./debug-build.js":125,"./logger.js":143,"./worldwide.js":167}],160:[function(require,module,exports){
+},{"./debug-build.js":129,"./logger.js":147,"./worldwide.js":170}],163:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const is = require('./is.js');
@@ -34424,7 +35447,7 @@ exports.rejectedSyncPromise = rejectedSyncPromise;
 exports.resolvedSyncPromise = resolvedSyncPromise;
 
 
-},{"./is.js":141}],161:[function(require,module,exports){
+},{"./is.js":145}],164:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const worldwide = require('./worldwide.js');
@@ -34559,7 +35582,7 @@ exports.timestampInSeconds = timestampInSeconds;
 exports.timestampWithMs = timestampWithMs;
 
 
-},{"./worldwide.js":167}],162:[function(require,module,exports){
+},{"./worldwide.js":170}],165:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const baggage = require('./baggage.js');
@@ -34607,7 +35630,10 @@ function extractTraceparentData(traceparent) {
 
 /**
  * Create tracing context from incoming headers.
+ *
+ * @deprecated Use `propagationContextFromHeaders` instead.
  */
+// TODO(v8): Remove this function
 function tracingContextFromHeaders(
   sentryTrace,
   baggage$1,
@@ -34619,25 +35645,56 @@ function tracingContextFromHeaders(
 
   const { traceId, parentSpanId, parentSampled } = traceparentData || {};
 
-  const propagationContext = {
-    traceId: traceId || misc.uuid4(),
-    spanId: misc.uuid4().substring(16),
-    sampled: parentSampled,
-  };
-
-  if (parentSpanId) {
-    propagationContext.parentSpanId = parentSpanId;
+  if (!traceparentData) {
+    return {
+      traceparentData,
+      dynamicSamplingContext: undefined,
+      propagationContext: {
+        traceId: traceId || misc.uuid4(),
+        spanId: misc.uuid4().substring(16),
+      },
+    };
+  } else {
+    return {
+      traceparentData,
+      dynamicSamplingContext: dynamicSamplingContext || {}, // If we have traceparent data but no DSC it means we are not head of trace and we must freeze it
+      propagationContext: {
+        traceId: traceId || misc.uuid4(),
+        parentSpanId: parentSpanId || misc.uuid4().substring(16),
+        spanId: misc.uuid4().substring(16),
+        sampled: parentSampled,
+        dsc: dynamicSamplingContext || {}, // If we have traceparent data but no DSC it means we are not head of trace and we must freeze it
+      },
+    };
   }
+}
 
-  if (dynamicSamplingContext) {
-    propagationContext.dsc = dynamicSamplingContext ;
+/**
+ * Create a propagation context from incoming headers.
+ */
+function propagationContextFromHeaders(
+  sentryTrace,
+  baggage$1,
+) {
+  const traceparentData = extractTraceparentData(sentryTrace);
+  const dynamicSamplingContext = baggage.baggageHeaderToDynamicSamplingContext(baggage$1);
+
+  const { traceId, parentSpanId, parentSampled } = traceparentData || {};
+
+  if (!traceparentData) {
+    return {
+      traceId: traceId || misc.uuid4(),
+      spanId: misc.uuid4().substring(16),
+    };
+  } else {
+    return {
+      traceId: traceId || misc.uuid4(),
+      parentSpanId: parentSpanId || misc.uuid4().substring(16),
+      spanId: misc.uuid4().substring(16),
+      sampled: parentSampled,
+      dsc: dynamicSamplingContext || {}, // If we have traceparent data but no DSC it means we are not head of trace and we must freeze it
+    };
   }
-
-  return {
-    traceparentData,
-    dynamicSamplingContext,
-    propagationContext,
-  };
 }
 
 /**
@@ -34658,10 +35715,11 @@ function generateSentryTraceHeader(
 exports.TRACEPARENT_REGEXP = TRACEPARENT_REGEXP;
 exports.extractTraceparentData = extractTraceparentData;
 exports.generateSentryTraceHeader = generateSentryTraceHeader;
+exports.propagationContextFromHeaders = propagationContextFromHeaders;
 exports.tracingContextFromHeaders = tracingContextFromHeaders;
 
 
-},{"./baggage.js":114,"./misc.js":146}],163:[function(require,module,exports){
+},{"./baggage.js":118,"./misc.js":150}],166:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -34741,7 +35799,7 @@ exports.parseUrl = parseUrl;
 exports.stripUrlQueryAndFragment = stripUrlQueryAndFragment;
 
 
-},{}],164:[function(require,module,exports){
+},{}],167:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 /**
@@ -34779,6 +35837,8 @@ function setNestedKey(obj, keyPath, value) {
  * @param userIntegrations Integrations defined by the user.
  * @param forcedOptions Options with which to patch an existing user-derived instance on the integration.
  * @returns A final integrations array.
+ *
+ * @deprecated This will be removed in v8.
  */
 function addOrUpdateIntegration(
   defaultIntegrationInstance,
@@ -34844,7 +35904,7 @@ function addOrUpdateIntegrationInFunction(
 exports.addOrUpdateIntegration = addOrUpdateIntegration;
 
 
-},{}],165:[function(require,module,exports){
+},{}],168:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 // Based on https://github.com/sindresorhus/escape-string-regexp but with modifications to:
@@ -34885,7 +35945,7 @@ function escapeStringForRegex(regexString) {
 exports.escapeStringForRegex = escapeStringForRegex;
 
 
-},{}],166:[function(require,module,exports){
+},{}],169:[function(require,module,exports){
 Object.defineProperty(exports, '__esModule', { value: true });
 
 const worldwide = require('../worldwide.js');
@@ -34918,7 +35978,7 @@ function supportsHistory() {
 exports.supportsHistory = supportsHistory;
 
 
-},{"../worldwide.js":167}],167:[function(require,module,exports){
+},{"../worldwide.js":170}],170:[function(require,module,exports){
 (function (global){(function (){
 Object.defineProperty(exports, '__esModule', { value: true });
 
@@ -34996,7 +36056,7 @@ exports.getGlobalSingleton = getGlobalSingleton;
 
 
 }).call(this)}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{}],168:[function(require,module,exports){
+},{}],171:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -35182,5 +36242,5 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}]},{},[39])(39)
+},{}]},{},[40])(40)
 });
