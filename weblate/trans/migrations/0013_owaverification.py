@@ -23,7 +23,7 @@ class Migration(migrations.Migration):
                 ),
                 ("token", models.CharField(max_length=32)),
                 ("remote_url", models.TextField()),
-                ("created_at", models.DateField(auto_now_add=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
             options={
                 "indexes": [
