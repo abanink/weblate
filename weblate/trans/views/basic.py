@@ -70,13 +70,11 @@ from weblate.utils.views import (
     try_set_language,
 )
 from weblate.logger import LOGGER
-import json
 from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse, urlsplit, urlunsplit
 import string
 import random
 from weblate.trans.models.owa_verification import OwaVerification
-import rsa
 import base64
 from weblate.accounts.avatar import get_avatar_cache_key
 from django.core.cache import InvalidCacheBackendError, caches
