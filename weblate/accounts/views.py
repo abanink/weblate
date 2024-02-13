@@ -139,6 +139,16 @@ ANCHOR_RE = re.compile(r"^#[a-z]+$")
 
 NOTIFICATION_PREFIX_TEMPLATE = "notifications__{}"
 
+ALLOWED_SIZES = (
+    # Used in top navigation
+    24,
+    # In text avatars
+    32,
+    # 80 pixels used when linked with weblate.org
+    80,
+    # Public profile
+    128,
+)
 
 class EmailSentView(TemplateView):
     r"""Class for rendering "E-mail sent" page."""
@@ -677,17 +687,7 @@ def user_contributions(request, user: str):
 
 def user_avatar(request, user: str, size: int):
     """User avatar view."""
-    allowed_sizes = (
-        # Used in top navigation
-        24,
-        # In text avatars
-        32,
-        # 80 pixels used when linked with weblate.org
-        80,
-        # Public profile
-        128,
-    )
-    if size not in allowed_sizes:
+    if size not in ALLOWED_SIZES:
         raise Http404(f"Not supported size: {size}")
 
     user = get_object_or_404(User, username=user)
