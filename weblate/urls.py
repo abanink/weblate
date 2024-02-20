@@ -10,6 +10,8 @@ from django.urls import include, path, re_path
 from django.views.decorators.cache import cache_control, cache_page
 from django.views.decorators.vary import vary_on_cookie
 from django.views.generic import RedirectView, TemplateView
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.common import no_append_slash
 
 import weblate.accounts.urls
 import weblate.accounts.views
@@ -67,18 +69,8 @@ URL_PREFIX = settings.URL_PREFIX
 if URL_PREFIX:
     URL_PREFIX = URL_PREFIX.strip("/") + "/"
 
-# support csrf_exempt on redirect vieew
-from django.views.decorators.csrf import csrf_exempt
-# support exception to APPEND_SLASH policy
-from django.views.decorators.common import no_append_slash
-
 real_patterns = [
     path("", weblate.trans.views.dashboard.home, name="home"),
-    path(
-        "owa",
-        no_append_slash(csrf_exempt(weblate.trans.views.basic.owa_server)),
-        name="owa_server"
-    ),
     path("projects/", weblate.trans.views.basic.list_projects, name="projects"),
     # Object display
     path(
@@ -989,6 +981,12 @@ if "weblate.gitexport" in settings.INSTALLED_APPS:
             "git/<object_path:path>/<git_path:git_request>",
             weblate.gitexport.views.git_export,
             name="git-export",
+        ),
+        # OpenWebAuth must be on the root for now
+        path(
+            "owa",
+            no_append_slash(csrf_exempt(weblate.accounts.views.owa_server)),
+            name="owa_server"
         ),
     ]
 
