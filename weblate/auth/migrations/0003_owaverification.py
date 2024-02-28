@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("trans", "0010_unit_trans_unit_pending"),
+        ("weblate_auth", "0002_squashed_weblate_5"),
     ]
 
     operations = [
