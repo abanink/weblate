@@ -115,7 +115,7 @@ from asgiref.sync import async_to_sync
 from urllib.parse import urlparse, urlunparse
 import string
 import random
-from weblate.trans.models.owa_verification import OwaVerification
+from weblate.auth.models import OwaVerification
 import base64
 from weblate.accounts.avatar import get_avatar_cache_key
 from django.core.cache import InvalidCacheBackendError, caches

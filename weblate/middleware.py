@@ -18,11 +18,12 @@ from django.utils.http import escape_leading_slashes
 from django.utils.translation import gettext_lazy
 
 from weblate.lang.models import Language
-from weblate.trans.models import Change, Component, Project, OwaVerification
+from weblate.trans.models import Change, Component, Project
 from weblate.utils.errors import report_error
 from weblate.utils.site import get_site_url
 from weblate.utils.views import parse_path
 
+from weblate.auth.models import OwaVerification
 from weblate.logger import LOGGER
 from django.db.models.functions import Now
 from datetime import timedelta

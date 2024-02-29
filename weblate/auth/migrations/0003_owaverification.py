@@ -27,7 +27,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 "indexes": [
-                    models.Index(fields=["token"], name="trans_owave_token_563265_idx")
+                    models.Index(fields=["token"], name="weblate_aut_token_9d3c96_idx")
                 ],
             },
         ),
