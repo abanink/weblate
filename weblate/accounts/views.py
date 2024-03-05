@@ -1567,6 +1567,7 @@ async def owa_server(request):
         wf_properties = wf_result["properties"]
         if not wf_properties or not wf_properties[pubkey_property]:
             LOGGER.info("Unable to retrieve public key from webfinger")
+            return None
 
         public_key = wf_properties[pubkey_property]
         LOGGER.debug(f"Public key retrieved: {public_key}")
@@ -1752,7 +1753,6 @@ async def owa_server(request):
         return "".join(random.choice(characters) for i in range(length))
 
     def check_auth_header(auth_header):
-        result = False
         if auth_header is None:
             LOGGER.info(f"No Auth header present. all headers: {request.headers}")
             return False
