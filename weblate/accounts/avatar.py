@@ -45,8 +45,10 @@ def get_fallback_avatar(size: int):
     with open(filename, "rb") as handle:
         return handle.read()
 
+
 def get_avatar_cache_key(username, size: int):
     return "-".join(("avatar-img", username, str(size)))
+
 
 def get_avatar_image(user, size: int):
     """Return avatar image from cache (if available) or download it."""

@@ -8,10 +8,10 @@ import django.views.static
 from django.conf import settings
 from django.urls import include, path, re_path
 from django.views.decorators.cache import cache_control, cache_page
+from django.views.decorators.common import no_append_slash
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.vary import vary_on_cookie
 from django.views.generic import RedirectView, TemplateView
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.common import no_append_slash
 
 import weblate.accounts.urls
 import weblate.accounts.views
@@ -986,7 +986,7 @@ if "weblate.gitexport" in settings.INSTALLED_APPS:
         path(
             "owa",
             no_append_slash(csrf_exempt(weblate.accounts.views.owa_server)),
-            name="owa_server"
+            name="owa_server",
         ),
     ]
 

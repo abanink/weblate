@@ -8,7 +8,7 @@ import re
 
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.html import format_html
 from django.utils.http import urlencode
@@ -69,6 +69,7 @@ from weblate.utils.views import (
     show_form_errors,
     try_set_language,
 )
+
 
 @never_cache
 def list_projects(request):
@@ -783,6 +784,7 @@ def guide(request, path):
             "guidelines": obj.guidelines,
         },
     )
+
 
 class ProjectLanguageRedirectView(RedirectView):
     permanent = True

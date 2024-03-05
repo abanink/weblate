@@ -4,17 +4,29 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import os
+import random
 import re
+import string
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from importlib import import_module
+from urllib.parse import urlparse, urlunparse
 
 import social_django.utils
+from asgiref.sync import async_to_sync
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
+from django.core.cache import InvalidCacheBackendError, caches
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.core.mail.message import EmailMultiAlternatives
 from django.core.signing import (
@@ -41,6 +53,8 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.views.generic import ListView, TemplateView, UpdateView
+from PIL import Image
+from requests.exceptions import JSONDecodeError
 from rest_framework.authtoken.models import Token
 from social_core.actions import do_auth
 from social_core.backends.open_id import OpenIdAuth
@@ -58,7 +72,11 @@ from social_core.exceptions import (
 from social_django.utils import load_backend, load_strategy
 from social_django.views import complete, disconnect
 
-from weblate.accounts.avatar import get_avatar_image, get_fallback_avatar_url
+from weblate.accounts.avatar import (
+    get_avatar_cache_key,
+    get_avatar_image,
+    get_fallback_avatar_url,
+)
 from weblate.accounts.forms import (
     CaptchaForm,
     CommitForm,
@@ -96,7 +114,7 @@ from weblate.accounts.notifications import (
 from weblate.accounts.pipeline import EmailAlreadyAssociated, UsernameAlreadyAssociated
 from weblate.accounts.utils import remove_user
 from weblate.auth.forms import UserEditForm
-from weblate.auth.models import Invitation, User, get_auth_keys
+from weblate.auth.models import Invitation, OwaVerification, User, get_auth_keys
 from weblate.auth.utils import format_address
 from weblate.logger import LOGGER
 from weblate.trans.models import Change, Component, Project, Suggestion, Translation
@@ -107,27 +125,10 @@ from weblate.utils import messages
 from weblate.utils.errors import add_breadcrumb, report_error
 from weblate.utils.ratelimit import check_rate_limit, session_ratelimit_post
 from weblate.utils.request import get_ip_address, get_user_agent
+from weblate.utils.requests import request as weblate_request
 from weblate.utils.stats import prefetch_stats
 from weblate.utils.token import get_token
 from weblate.utils.views import get_paginator, parse_path
-
-from asgiref.sync import async_to_sync
-from urllib.parse import urlparse, urlunparse
-import string
-import random
-from weblate.auth.models import OwaVerification
-import base64
-from weblate.accounts.avatar import get_avatar_cache_key
-from django.core.cache import InvalidCacheBackendError, caches
-from weblate.utils.requests import request as weblate_request
-from requests.exceptions import JSONDecodeError
-import time
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
-from cryptography.exceptions import InvalidSignature
-import io
-from PIL import Image
 
 CONTACT_TEMPLATE = """
 Message from %(name)s <%(email)s>:
@@ -167,6 +168,7 @@ ALLOWED_SIZES = (
     # Public profile
     128,
 )
+
 
 class EmailSentView(TemplateView):
     r"""Class for rendering "E-mail sent" page."""
@@ -1469,114 +1471,122 @@ class UserList(ListView):
         context["query_string"] = urlencode(context["search_items"])
         return context
 
+
 @async_to_sync
 async def owa_server(request):
-    
-    ret_response = { "success": "false" }
-    LOGGER.info('Hit OWA endpoint')
-   
-    public_key = None 
+    ret_response = {"success": "false"}
+    LOGGER.info("Hit OWA endpoint")
+
+    public_key = None
     avatar_link = None
-    keyId = None
+    key_id = None
     remote_user_cache = caches["default"]
-    
-    def perform_webfinger(url, domain = None):
+
+    def perform_webfinger(url, domain=None):
         if not domain:
             parsed_url = urlparse(url)
             domain = parsed_url.netloc
-            
+
         webfinger_url = f"https://{domain}/.well-known/webfinger?resource={url}"
-        LOGGER.info(f"Performing webfinger lookup for url {url} on domain {domain}, calling {webfinger_url}")
-        
+        LOGGER.info(
+            f"Performing webfinger lookup for url {url} on domain {domain}, calling {webfinger_url}"
+        )
+
         wf_response = weblate_request("get", webfinger_url)
         if wf_response.status_code != 200:
-            LOGGER.info(f"Webfinger request failed, status code = {wf_response.status_code}")
+            LOGGER.info(
+                f"Webfinger request failed, status code = {wf_response.status_code}"
+            )
             return None
-      
+
         try:
             wf_result = wf_response.json()
         except JSONDecodeError as e:
             LOGGER.debug(f"Json parse error: {e}")
             return None
-        
+
         LOGGER.debug(f"Webfinger result = {wf_result}")
-        return wf_result 
-    
-    def webfinger_find_address(wf_result, check_routine = callable):
+        return wf_result
+
+    def webfinger_find_address(wf_result, check_routine=callable):
         subject = wf_result["subject"]
         if subject:
             subject = str(subject)
             if check_routine(subject):
-                address = subject.removeprefix('acct:')
+                address = subject.removeprefix("acct:")
                 LOGGER.debug(f"Address {address} found in subject")
-                return address 
-            
+                return address
+
         address = None
         aliases = wf_result["aliases"]
         if aliases and isinstance(aliases, list):
             for a in aliases:
                 a = str(a)
                 if check_routine(a):
-                    address = a.removeprefix('acct:')
-                    LOGGER.debug(f"Address {address} found in alias") 
+                    address = a.removeprefix("acct:")
+                    LOGGER.debug(f"Address {address} found in alias")
                     break
-        
+
         return address
-    
+
     # Check that a claimed address wil resolve to the keyId
     #
     # We will use the claimed address as username and in the key for caching the avatar
     # we need to make sure that this claimed address can be trusted
     # This can be done by looking up the keyId on the claimed address's domain
     # if it fails, someone is providing an invalid address to use as username
-    def verify_address(address, keyId):
-        domain = address.rpartition('@')[2]
+    def verify_address(address, key_id):
+        domain = address.rpartition("@")[2]
         if not domain:
             return False
-        
-        wf_result = perform_webfinger(keyId, domain)
-        return webfinger_find_address(wf_result, lambda address: address == keyId)
-    
-    def try_fetch_remote_user(keyId):
-        wf_result = perform_webfinger(keyId)
+
+        wf_result = perform_webfinger(key_id, domain)
+        return webfinger_find_address(wf_result, lambda address: address == key_id)
+
+    def try_fetch_remote_user(key_id):
+        wf_result = perform_webfinger(key_id)
         if not wf_result:
-            LOGGER.debug(f"Webfinger failed for {keyId}")
+            LOGGER.debug(f"Webfinger failed for {key_id}")
             return None
-        
+
         address = extract_address_from_webfinger(wf_result)
-        verify_addr_result = verify_address(address, keyId)
+        verify_addr_result = verify_address(address, key_id)
         if not verify_addr_result:
-            LOGGER.info(f"Address {address} could not be verified - this is a fatal error")
+            LOGGER.info(
+                f"Address {address} could not be verified - this is a fatal error"
+            )
             return None
-        
+
         LOGGER.info(f"Address verification passed for {address}")
-        return store_remote_user_in_cache(keyId, wf_result)
-            
+        return store_remote_user_in_cache(key_id, wf_result)
+
     def extract_publickey_from_webfinger(wf_result):
         # extract public key from webfinger result
         pubkey_property = "https://w3id.org/security/v1#publicKeyPem"
         # TODO also return None if the public key is not a valid format?
         wf_properties = wf_result["properties"]
         if not wf_properties or not wf_properties[pubkey_property]:
-            LOGGER.info(f"Unable to retrieve public key from webfinger")
-            
+            LOGGER.info("Unable to retrieve public key from webfinger")
+
         public_key = wf_properties[pubkey_property]
-        LOGGER.debug(f"Public key retrieved: {public_key}") 
+        LOGGER.debug(f"Public key retrieved: {public_key}")
         return public_key
-    
+
     def extract_address_from_webfinger(wf_result):
         # extract remote user address from webfinger
         # it could be in the subject or in the aliases
-      
-        address = webfinger_find_address(wf_result, lambda field: field.startswith('acct:'))  
+
+        address = webfinger_find_address(
+            wf_result, lambda field: field.startswith("acct:")
+        )
 
         if address is None:
-            LOGGER.info(f"Unable to retrieve address from webfinger")
+            LOGGER.info("Unable to retrieve address from webfinger")
             return None
-        
+
         LOGGER.debug(f"Found address {address} from webfinger")
         return address
-    
+
     def extract_avatar_from_webfinger(wf_result):
         # read the avatar from the webfinger link http://webfinger.net/rel/avatar
         avatar_link = None
@@ -1585,83 +1595,87 @@ async def owa_server(request):
             for l in links:
                 if l["rel"] == "http://webfinger.net/rel/avatar":
                     avatar_link = l["href"]
-                    LOGGER.debug(f"Found avatar link from webfinger response: {avatar_link}")
+                    LOGGER.debug(
+                        f"Found avatar link from webfinger response: {avatar_link}"
+                    )
                     break
         return avatar_link
-    
+
     def create_cache_key_from_remote_user(remote_user):
         return f"remote_user_{remote_user}"
-        
+
     def store_remote_user_in_cache(key, wf_result):
         public_key = extract_publickey_from_webfinger(wf_result).encode()
         address = extract_address_from_webfinger(wf_result)
         avatar_link = extract_avatar_from_webfinger(wf_result)
-        remote_user = { 
-                       "pubkey": public_key,
-                       "address": address,
-                       "avatar_link": avatar_link
-                       }
+        remote_user = {
+            "pubkey": public_key,
+            "address": address,
+            "avatar_link": avatar_link,
+        }
         remote_user_cache.set(create_cache_key_from_remote_user(key), remote_user)
         return remote_user
-    
+
     def parse_sigheader(header):
         ret = {}
-        
+
         m = re.search(r'keyId="(.*?)"', header)
         if m:
             ret["keyId"] = m.group(1)
-            
-        m = re.search(r'created=([0-9]*)', header)
+
+        m = re.search(r"created=([0-9]*)", header)
         if m:
             ret["created"] = m.group(1)
-            
-        m = re.search(r'expires=([0-9]*)', header)
+
+        m = re.search(r"expires=([0-9]*)", header)
         if m:
             ret["expires"] = m.group(1)
-            
+
         m = re.search(r'algorithm="(.*?)"', header)
         if m:
-            ret['algorithm'] = m.group(1)
-            
+            ret["algorithm"] = m.group(1)
+
         m = re.search(r'headers="(.*?)"', header)
         if m:
-            ret['headers'] = m.group(1).split()
-            
+            ret["headers"] = m.group(1).split()
+
         m = re.search(r'signature="(.*?)"', header)
         if m:
-            ret['signature'] = base64.b64decode(m.group(1).strip())
-            
-        if (ret.get("signature") and ret.get("algorithm") and (not ret.get("headers"))):
+            ret["signature"] = base64.b64decode(m.group(1).strip())
+
+        if ret.get("signature") and ret.get("algorithm") and (not ret.get("headers")):
             ret["headers"] = ["date"]
-            
+
         LOGGER.info(f"parse_sigheader: returning {ret}")
         return ret
-    
+
     def sig_verify(request, sig_block, pubkey):
         LOGGER.info("Verify signature now...")
-        
+
         headers = {k.lower(): v for k, v in dict(request.headers).items()}
         LOGGER.debug(f"Prepared headers: {headers}")
-        headers["(request-target)"] = request.method.lower() + " " + request.get_full_path()
+        headers["(request-target)"] = (
+            request.method.lower() + " " + request.get_full_path()
+        )
         LOGGER.debug(f"headers = {headers}")
-        
+
         if not sig_block:
             header_sig = request.headers["Signature"]
             header_auth = request.headers["Authorization"]
-            
+
             if header_sig:
                 sig_block = parse_sigheader(header_sig)
             elif header_auth:
                 sig_block = parse_sigheader(header_auth)
-            
+
             if not sig_block:
                 LOGGER.info("No signature provided")
                 return False
-           
+
         signed_headers = sig_block["headers"]
         if not signed_headers:
-            signed_headers = [ 'date' ]
-         
+            signed_headers = ["date"]
+
         LOGGER.info(f"Signed header: {signed_headers}")
         signed_data = ""
         for h in signed_headers:
@@ -1684,7 +1698,7 @@ async def owa_server(request):
                 past = now - timedelta(days=1)
                 future = now + timedelta(days=1)
                 try:
-                    curr = datetime.strptime(h_val, '%a, %d %b %Y %H:%M:%S GMT') 
+                    curr = datetime.strptime(h_val, "%a, %d %b %Y %H:%M:%S GMT")
                     if curr > future or curr < past:
                         LOGGER.info("Bad time")
                         return False
@@ -1692,11 +1706,11 @@ async def owa_server(request):
                     return False
             else:
                 signed_data += h + ": " + h_val + "\n"
-        
-        # Strip end linefeed        
-        signed_data = signed_data.rstrip("\n").encode() 
+
+        # Strip end linefeed
+        signed_data = signed_data.rstrip("\n").encode()
         LOGGER.debug(f"Signed data: {signed_data}")
-       
+
         sig_algorithm = sig_block["algorithm"]
         if sig_algorithm == "rsa-sha256":
             alg = hashes.SHA256()
@@ -1705,98 +1719,125 @@ async def owa_server(request):
         else:
             LOGGER.info(f"Unsupported algorithm ({sig_algorithm})")
             return False
-             
+
         if not sig_block["keyId"]:
             return False
-       
+
         try:
-            LOGGER.info("Starting crypto verify now") 
+            LOGGER.info("Starting crypto verify now")
             pubkey.verify(sig_block["signature"], signed_data, padding.PKCS1v15(), alg)
         except InvalidSignature:
             LOGGER.info("Signature invalid")
             return False
-        
-        return True 
-    
+
+        return True
+
     def store_avatar_image(image, size):
         resized_image = Image.open(io.BytesIO(image.content)).resize((size, size))
         imgByteArr = io.BytesIO()
-        resized_image.save(imgByteArr, format = 'PNG')
+        resized_image.save(imgByteArr, format="PNG")
         avatar_image = imgByteArr.getvalue()
-        
+
         avatar_cache_key = get_avatar_cache_key(address, size)
         cache.set(avatar_cache_key, avatar_image)
-        
+
         LOGGER.info(f"Stored avatar for size {size} in cache at key {avatar_cache_key}")
-    
-    def generate_token(length = 32):
+
+    def generate_token(length=32):
         # TODO this should be run through a whirlpool hash but "pip install whirlpool" failed compilation so I skipped that
         characters = string.ascii_letters + string.digits
-        return ''.join(random.choice(characters) for i in range(length))
-   
+        return "".join(random.choice(characters) for i in range(length))
+
+    def check_auth_header(auth_header):
+        result = False
+        if auth_header is None:
+            LOGGER.info(f"No Auth header present. all headers: {request.headers}")
+            return False
+
+        if not auth_header.strip().startswith("Signature"):
+            LOGGER.info("Missing Signature in Authorization header!")
+            return False
+
+        return True
+
+    def get_key_id(sig_block):
+        key_id = sig_block.get("keyId")
+        if not key_id:
+            LOGGER.debug("Missing keyId")
+            return None
+
+        LOGGER.info(f"Found keyId = {key_id}")
+        parsed_key_id = urlparse(key_id)
+        if parsed_key_id.scheme.startswith("http"):
+            key_id = urlunparse(
+                (
+                    parsed_key_id.scheme,
+                    parsed_key_id.netloc,
+                    parsed_key_id.path,
+                    parsed_key_id.params,
+                    "",
+                    "",
+                )
+            )
+        else:
+            key_id = re.sub("acct:", "", key_id)
+
+        return key_id
+
     auth_header = request.headers.get("Authorization", None)
-    if auth_header is None:
-        LOGGER.info(f"No Auth header present. all headers: {request.headers}")
-        return JsonResponse(ret_response)
     LOGGER.info(f"Auth header: {auth_header}")
-    
-    if not auth_header.strip().startswith('Signature'):
-        LOGGER.info('Missing Signature in Authorization header!')
-        return JsonResponse(ret_response)
-    
-    sig_block = parse_sigheader(auth_header)
-    keyId = sig_block.get("keyId")
-    if not keyId:
-        LOGGER.debug("Missing keyId")
+    if not check_auth_header(auth_header):
         return JsonResponse(ret_response)
 
-    LOGGER.info(f"Found keyId = {keyId}")
-    parsed_keyId = urlparse(keyId)
-    if parsed_keyId.scheme.startswith("http"):
-        keyId = urlunparse((parsed_keyId.scheme, parsed_keyId.netloc, parsed_keyId.path, parsed_keyId.params, '', ''))
-    else:
-        keyId = re.sub("acct:", "", keyId)
-   
-    LOGGER.info(f"cleaned keyId = {keyId}")
-    
+    sig_block = parse_sigheader(auth_header)
+    key_id = get_key_id(sig_block)
+    if not key_id:
+        return JsonResponse(ret_response)
+
+    LOGGER.info(f"cleaned keyId = {key_id}")
+
     # now find the user with this keyId
-    remote_user_from_cache = remote_user_cache.get(create_cache_key_from_remote_user(keyId))
+    remote_user_from_cache = remote_user_cache.get(
+        create_cache_key_from_remote_user(key_id)
+    )
     if remote_user_from_cache is None:
-        remote_user_from_cache = try_fetch_remote_user(keyId)
+        remote_user_from_cache = try_fetch_remote_user(key_id)
     else:
-        LOGGER.info(f"Remote user {keyId} found in cache!")
-        
+        LOGGER.info(f"Remote user {key_id} found in cache!")
+
     if remote_user_from_cache is None:
-        LOGGER.info(f"Failed to retrieve user's public key for {keyId}")
-        return JsonResponse(ret_response) 
-   
+        LOGGER.info(f"Failed to retrieve user's public key for {key_id}")
+        return JsonResponse(ret_response)
+
     public_key = load_pem_public_key(remote_user_from_cache["pubkey"])
     verified = sig_verify(request, sig_block, public_key)
     if not verified:
         # maybe the cached user had an outdated public key - fetch most recent public key
-        remote_user_from_cache = try_fetch_remote_user(keyId)
+        remote_user_from_cache = try_fetch_remote_user(key_id)
         if not remote_user_from_cache:
-            LOGGER.info(f"Failed to retrieve user's public key for {keyId}")
+            LOGGER.info(f"Failed to retrieve user's public key for {key_id}")
             return JsonResponse(ret_response)
-        
+
         public_key = load_pem_public_key(remote_user_from_cache["pubkey"])
         verified = sig_verify(request, sig_block, public_key)
-           
+
     if not verified:
         LOGGER.info("Signature verification failed")
-        return JsonResponse(ret_response) 
-    
+        return JsonResponse(ret_response)
+
     LOGGER.info("Signature OK")
-        
+
     address = remote_user_from_cache["address"]
     # generate and store the OWA token
     token = generate_token()
-    owa_verification = OwaVerification(token = token, remote_url = address)
+    owa_verification = OwaVerification(token=token, remote_url=address)
     await owa_verification.asave()
-    
+
     # encrypt the token with the public key of the remote user
-    encrypted_token = base64.b64encode(public_key.encrypt(token.encode(), padding.PKCS1v15())).decode()
-  
+    encrypted_token = base64.b64encode(
+        public_key.encrypt(token.encode(), padding.PKCS1v15())
+    ).decode()
+
     avatar_link = remote_user_from_cache["avatar_link"]
     LOGGER.debug(f"Address: {address} - Avatar link: {avatar_link}")
     if avatar_link:
@@ -1805,12 +1846,12 @@ async def owa_server(request):
             cache = caches["avatar"]
         except InvalidCacheBackendError:
             cache = caches["default"]
-      
-        # 24 is just one of the ALLOWED_SIZES. 
+
+        # 24 is just one of the ALLOWED_SIZES.
         # Assumption is that, if one of them is there, all sizes will be found from cache
         avatar_image = cache.get(get_avatar_cache_key(address, 24))
-        if avatar_image is None: 
-            LOGGER.info(f"Requesting avatar on {avatar_link}")    
+        if avatar_image is None:
+            LOGGER.info(f"Requesting avatar on {avatar_link}")
             avatar_image = weblate_request("get", avatar_link)
             for size in ALLOWED_SIZES:
                 store_avatar_image(avatar_image, size)
@@ -1819,5 +1860,5 @@ async def owa_server(request):
 
     ret_response["success"] = "true"
     ret_response["encrypted_token"] = encrypted_token
-    
+
     return JsonResponse(ret_response)
