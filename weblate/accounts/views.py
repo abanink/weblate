@@ -53,7 +53,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.views.generic import ListView, TemplateView, UpdateView
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from requests.exceptions import JSONDecodeError
 from rest_framework.authtoken.models import Token
 from social_core.actions import do_auth
@@ -1733,15 +1733,18 @@ async def owa_server(request):
         return True
 
     def store_avatar_image(image, size):
-        resized_image = Image.open(io.BytesIO(image.content)).resize((size, size))
-        imgByteArr = io.BytesIO()
-        resized_image.save(imgByteArr, format="PNG")
-        avatar_image = imgByteArr.getvalue()
+        try:
+            resized_image = Image.open(io.BytesIO(image.content)).resize((size, size))
+            imgByteArr = io.BytesIO()
+            resized_image.save(imgByteArr, format="PNG")
+            avatar_image = imgByteArr.getvalue()
 
-        avatar_cache_key = get_avatar_cache_key(address, size)
-        cache.set(avatar_cache_key, avatar_image)
+            avatar_cache_key = get_avatar_cache_key(address, size)
+            cache.set(avatar_cache_key, avatar_image)
 
-        LOGGER.info(f"Stored avatar for size {size} in cache at key {avatar_cache_key}")
+            LOGGER.info(f"Stored avatar for size {size} in cache at key {avatar_cache_key}")
+        except UnidentifiedImageError:
+            LOGGER.info("Image could not be identified - skipping avatar storage")
 
     def generate_token(length=32):
         # TODO this should be run through a whirlpool hash but "pip install whirlpool" failed compilation so I skipped that
