@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+from collections import defaultdict
 from datetime import datetime
 from itertools import chain
 from shutil import copyfileobj
-from typing import Callable
+from typing import Callable, TypedDict
 from zipfile import ZipFile
 
 from django.conf import settings
@@ -43,6 +44,15 @@ from weblate.utils.validators import validate_filename
 from weblate.utils.version import VERSION
 from weblate.vcs.models import VCS_REGISTRY
 
+PROJECTBACKUP_PREFIX = "projectbackups"
+
+
+class BackupListDict(TypedDict):
+    name: str
+    path: str
+    timestamp: datetime
+    size: int
+
 
 class ProjectBackup:
     COMPONENTS_PREFIX = "components/"
@@ -56,7 +66,7 @@ class ProjectBackup:
         self.project = None
         self.project_schema = load_schema("weblate-backup.schema.json")
         self.component_schema = load_schema("weblate-component.schema.json")
-        self.languages_cache = None
+        self.languages_cache = {}
         self.labels_map = None
         self.user_cache = {}
 
@@ -135,7 +145,7 @@ class ProjectBackup:
             handle.write(json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
 
     def generate_filename(self, project):
-        backup_dir = data_dir("projectbackups", f"{project.pk}")
+        backup_dir = data_dir(PROJECTBACKUP_PREFIX, f"{project.pk}")
         backup_info = os.path.join(backup_dir, "README.txt")
         timestamp = int(self.timestamp.timestamp())
         if not os.path.exists(backup_dir):
@@ -267,6 +277,7 @@ class ProjectBackup:
             f"{self.VCS_PREFIX}{component.slug}",
         )
 
+    @transaction.atomic
     def backup_project(self, project):
         """Backup whole project."""
         # Generate data
@@ -328,6 +339,18 @@ class ProjectBackup:
                     raise ValueError(
                         f'Component {data["component"]["name"]} uses unsupported VCS: {data["component"]["vcs"]}'
                     )
+                # Validate translations have unique languages
+                languages = defaultdict(list)
+                for item in data["translations"]:
+                    language = self.import_language(item["language_code"])
+                    languages[language.code].append(item["language_code"])
+
+                for code, values in languages.items():
+                    if len(values) > 1:
+                        raise ValueError(
+                            f"Several languages from backup map to single language on this server {values} -> {code}"
+                        )
+
                 if callback is not None:
                     callback(zipfile, data)
 
@@ -396,8 +419,10 @@ class ProjectBackup:
         source_translation_id = -1
         for item in data["translations"]:
             language = self.import_language(item["language_code"])
-            plural = language.plural_set.filter(**item["plural"]).first()
-            if plural is None:
+            plurals = language.plural_set.filter(**item["plural"])
+            try:
+                plural = plurals[0]
+            except IndexError:
                 if item["plural"]["source"] == Plural.SOURCE_DEFAULT:
                     plural = language.plural
                 elif item["plural"]["source"] in (
@@ -408,7 +433,7 @@ class ProjectBackup:
                 else:
                     plural = language.plural_set.filter(
                         source=item["plural"]["source"]
-                    ).first()
+                    )[0]
             translation = Translation(
                 component=component,
                 filename=item["filename"],
@@ -516,14 +541,15 @@ class ProjectBackup:
         component.schedule_update_checks()
 
     def import_language(self, code: str):
-        if self.languages_cache is None:
+        if not self.languages_cache:
             self.languages_cache = {lang.code: lang for lang in Language.objects.all()}
-        if code in self.languages_cache:
+        try:
             return self.languages_cache[code]
-        self.languages_cache[code] = language = Language.objects.auto_get_or_create(
-            code
-        )
-        return language
+        except KeyError:
+            self.languages_cache[code] = language = Language.objects.auto_get_or_create(
+                code
+            )
+            return language
 
     @transaction.atomic
     def restore(self, project_name: str, project_slug: str, user, billing=None):
@@ -588,7 +614,7 @@ class ProjectBackup:
         return self.project
 
     def store_for_import(self):
-        backup_dir = data_dir("projectbackups", "import")
+        backup_dir = data_dir(PROJECTBACKUP_PREFIX, "import")
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
         timestamp = int(timezone.now().timestamp())

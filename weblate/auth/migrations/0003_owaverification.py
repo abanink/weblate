@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("trans", "0010_unit_trans_unit_pending"),
+        ("weblate_auth", "0002_squashed_weblate_5"),
     ]
 
     operations = [
@@ -23,11 +23,11 @@ class Migration(migrations.Migration):
                 ),
                 ("token", models.CharField(max_length=32)),
                 ("remote_url", models.TextField()),
-                ("created_at", models.DateField(auto_now_add=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
             ],
             options={
                 "indexes": [
-                    models.Index(fields=["token"], name="trans_owave_token_563265_idx")
+                    models.Index(fields=["token"], name="weblate_aut_token_9d3c96_idx")
                 ],
             },
         ),

@@ -50,6 +50,7 @@ from weblate.utils.state import (
     STATE_FUZZY,
     STATE_READONLY,
     STATE_TRANSLATED,
+    StringState,
 )
 from weblate.utils.stats import GhostStats, TranslationStats
 
@@ -998,8 +999,12 @@ class Translation(models.Model, URLMixin, LoggerMixin, CacheKeyMixin):
                 continue
 
             # Add suggestion
-            if dbunit.target != unit.target and not dbunit.readonly:
-                if Suggestion.objects.add(dbunit, unit.target, request):
+            current_target = dbunit.get_target_plurals()
+            new_target = unit.target
+            if isinstance(new_target, str):
+                new_target = [new_target]
+            if current_target != new_target and not dbunit.readonly:
+                if Suggestion.objects.add(dbunit, new_target, request):
                     accepted += 1
                 else:
                     skipped += 1
@@ -1368,7 +1373,7 @@ class Translation(models.Model, URLMixin, LoggerMixin, CacheKeyMixin):
         auto_context: bool = False,
         is_batch_update: bool = False,
         skip_existing: bool = False,
-        state: int | None = None,
+        state: StringState | None = None,
     ):
         if isinstance(source, list):
             source = join_plural(source)
@@ -1462,9 +1467,11 @@ class Translation(models.Model, URLMixin, LoggerMixin, CacheKeyMixin):
             if unit is None:
                 if "read-only" in translation.all_flags:
                     unit_state = STATE_READONLY
-                elif has_translation and (state is None or state == STATE_EMPTY):
+                elif state is None:
+                    unit_state = STATE_TRANSLATED if has_translation else STATE_EMPTY
+                elif has_translation and state == STATE_EMPTY:
                     unit_state = STATE_TRANSLATED
-                elif not has_translation and (state is None or state != STATE_EMPTY):
+                elif not has_translation and state != STATE_EMPTY:
                     unit_state = STATE_EMPTY
                 else:
                     unit_state = state
@@ -1619,6 +1626,7 @@ class Translation(models.Model, URLMixin, LoggerMixin, CacheKeyMixin):
         extra_flags: str | None = None,
         explanation: str = "",
         state: int | None = None,
+        skip_existing: bool = False,
     ):
         component = self.component
         extra = {}
