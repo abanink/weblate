@@ -53,3 +53,4 @@ translation-finder>=2.15,<3.0
 user-agents>=2.0,<2.3
 weblate-language-data>=2023.9
 weblate-schemas==2023.3
+Whirlpool @ git+https://github.com/oohlaf/python-whirlpool.git@4e40d4dd03edfdc9e77cb22bec1cee11a0f7c2e4

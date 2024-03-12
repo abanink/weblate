@@ -7,14 +7,15 @@ from __future__ import annotations
 import base64
 import io
 import os
-import random
 import re
+import secrets
 import string
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from importlib import import_module
 from urllib.parse import urlparse, urlunparse
+import whirlpool
 
 import social_django.utils
 from asgiref.sync import async_to_sync
@@ -1593,9 +1594,9 @@ async def owa_server(request):
         avatar_link = None
         links = wf_result["links"]
         if links and isinstance(links, list):
-            for l in links:
-                if l["rel"] == "http://webfinger.net/rel/avatar":
-                    avatar_link = l["href"]
+            for link in links:
+                if link["rel"] == "http://webfinger.net/rel/avatar":
+                    avatar_link = link["href"]
                     LOGGER.debug(
                         f"Found avatar link from webfinger response: {avatar_link}"
                     )
@@ -1695,11 +1696,13 @@ async def owa_server(request):
                     return False
                 signed_data += h + ": " + expire_time + "\n"
             elif h == "date":
-                now = datetime.now()
+                now = datetime.now(tz=datetime.UTC)
                 past = now - timedelta(days=1)
                 future = now + timedelta(days=1)
                 try:
-                    curr = datetime.strptime(h_val, "%a, %d %b %Y %H:%M:%S GMT")
+                    curr = datetime.strptime(
+                        h_val, "%a, %d %b %Y %H:%M:%S GMT"
+                    ).astimezone(datetime.UTC)
                     if curr > future or curr < past:
                         LOGGER.info("Bad time")
                         return False
@@ -1736,21 +1739,22 @@ async def owa_server(request):
     def store_avatar_image(image, size):
         try:
             resized_image = Image.open(io.BytesIO(image.content)).resize((size, size))
-            imgByteArr = io.BytesIO()
-            resized_image.save(imgByteArr, format="PNG")
-            avatar_image = imgByteArr.getvalue()
+            img_byte_arr = io.BytesIO()
+            resized_image.save(img_byte_arr, format="PNG")
+            avatar_image = img_byte_arr.getvalue()
 
             avatar_cache_key = get_avatar_cache_key(address, size)
             cache.set(avatar_cache_key, avatar_image)
 
-            LOGGER.info(f"Stored avatar for size {size} in cache at key {avatar_cache_key}")
+            LOGGER.info(
+                f"Stored avatar for size {size} in cache at key {avatar_cache_key}"
+            )
         except UnidentifiedImageError:
             LOGGER.info("Image could not be identified - skipping avatar storage")
 
     def generate_token(length=32):
-        # TODO this should be run through a whirlpool hash but "pip install whirlpool" failed compilation so I skipped that
         characters = string.ascii_letters + string.digits
-        return "".join(random.choice(characters) for i in range(length))
+        return whirlpool.new("".join(secrets.choice(characters) for i in range(length)).encode('utf-8')).hexdigest()[:length]
 
     def check_auth_header(auth_header):
         if auth_header is None:
@@ -1833,6 +1837,7 @@ async def owa_server(request):
     address = remote_user_from_cache["address"]
     # generate and store the OWA token
     token = generate_token()
+    LOGGER.debug(f"Token: {token}")
     owa_verification = OwaVerification(token=token, remote_url=address)
     await owa_verification.asave()
 
