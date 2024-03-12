@@ -15,9 +15,9 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from importlib import import_module
 from urllib.parse import urlparse, urlunparse
-import whirlpool
 
 import social_django.utils
+import whirlpool
 from asgiref.sync import async_to_sync
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -1479,7 +1479,6 @@ async def owa_server(request):
     LOGGER.info("Hit OWA endpoint")
 
     public_key = None
-    avatar_link = None
     key_id = None
     remote_user_cache = caches["default"]
 
@@ -1564,7 +1563,7 @@ async def owa_server(request):
     def extract_publickey_from_webfinger(wf_result):
         # extract public key from webfinger result
         pubkey_property = "https://w3id.org/security/v1#publicKeyPem"
-        # TODO also return None if the public key is not a valid format?
+        # TODO: also return None if the public key is not a valid format?
         wf_properties = wf_result["properties"]
         if not wf_properties or not wf_properties[pubkey_property]:
             LOGGER.info("Unable to retrieve public key from webfinger")
@@ -1661,19 +1660,6 @@ async def owa_server(request):
         )
         LOGGER.debug(f"headers = {headers}")
 
-        if not sig_block:
-            header_sig = request.headers["Signature"]
-            header_auth = request.headers["Authorization"]
-
-            if header_sig:
-                sig_block = parse_sigheader(header_sig)
-            elif header_auth:
-                sig_block = parse_sigheader(header_auth)
-
-            if not sig_block:
-                LOGGER.info("No signature provided")
-                return False
-
         signed_headers = sig_block["headers"]
         if not signed_headers:
             signed_headers = ["date"]
@@ -1736,12 +1722,22 @@ async def owa_server(request):
 
         return True
 
+    def get_avatar_cache():
+        # Try using avatar specific cache if available
+        try:
+            cache = caches["avatar"]
+        except InvalidCacheBackendError:
+            cache = caches["default"]
+
+        return cache
+
     def store_avatar_image(image, size):
         try:
             resized_image = Image.open(io.BytesIO(image.content)).resize((size, size))
             img_byte_arr = io.BytesIO()
             resized_image.save(img_byte_arr, format="PNG")
             avatar_image = img_byte_arr.getvalue()
+            cache = get_avatar_cache()
 
             avatar_cache_key = get_avatar_cache_key(address, size)
             cache.set(avatar_cache_key, avatar_image)
@@ -1754,7 +1750,9 @@ async def owa_server(request):
 
     def generate_token(length=32):
         characters = string.ascii_letters + string.digits
-        return whirlpool.new("".join(secrets.choice(characters) for i in range(length)).encode('utf-8')).hexdigest()[:length]
+        return whirlpool.new(
+            "".join(secrets.choice(characters) for i in range(length)).encode("utf-8")
+        ).hexdigest()[:length]
 
     def check_auth_header(auth_header):
         if auth_header is None:
@@ -1790,6 +1788,23 @@ async def owa_server(request):
             key_id = re.sub("acct:", "", key_id)
 
         return key_id
+
+    def avatar_fetch(address):
+        avatar_link = remote_user_from_cache["avatar_link"]
+        LOGGER.debug(f"Address: {address} - Avatar link: {avatar_link}")
+        if avatar_link:
+            cache = get_avatar_cache()
+
+            # 24 is just one of the ALLOWED_SIZES.
+            # Assumption is that, if one of them is there, all sizes will be found from cache
+            avatar_image = cache.get(get_avatar_cache_key(address, 24))
+            if avatar_image is None:
+                LOGGER.info(f"Requesting avatar on {avatar_link}")
+                avatar_image = weblate_request("get", avatar_link)
+                for size in ALLOWED_SIZES:
+                    store_avatar_image(avatar_image, size)
+            else:
+                LOGGER.info("Avatar found in cache!")
 
     auth_header = request.headers.get("Authorization", None)
     LOGGER.info(f"Auth header: {auth_header}")
@@ -1837,7 +1852,6 @@ async def owa_server(request):
     address = remote_user_from_cache["address"]
     # generate and store the OWA token
     token = generate_token()
-    LOGGER.debug(f"Token: {token}")
     owa_verification = OwaVerification(token=token, remote_url=address)
     await owa_verification.asave()
 
@@ -1846,26 +1860,7 @@ async def owa_server(request):
         public_key.encrypt(token.encode(), padding.PKCS1v15())
     ).decode()
 
-    avatar_link = remote_user_from_cache["avatar_link"]
-    LOGGER.debug(f"Address: {address} - Avatar link: {avatar_link}")
-    if avatar_link:
-        # Try using avatar specific cache if available
-        try:
-            cache = caches["avatar"]
-        except InvalidCacheBackendError:
-            cache = caches["default"]
-
-        # 24 is just one of the ALLOWED_SIZES.
-        # Assumption is that, if one of them is there, all sizes will be found from cache
-        avatar_image = cache.get(get_avatar_cache_key(address, 24))
-        if avatar_image is None:
-            LOGGER.info(f"Requesting avatar on {avatar_link}")
-            avatar_image = weblate_request("get", avatar_link)
-            for size in ALLOWED_SIZES:
-                store_avatar_image(avatar_image, size)
-        else:
-            LOGGER.info("Avatar found in cache!")
-
+    avatar_fetch(address)
     ret_response["success"] = "true"
     ret_response["encrypted_token"] = encrypted_token
 

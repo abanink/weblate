@@ -409,8 +409,7 @@ class ValidateOpenWebAuthentication:
         # detect owt tag
         owt = request.GET.get("owt")
         if owt is None:
-            response = self.get_response(request)
-            return response
+            return self.get_response(request)
 
         LOGGER.info(f"Found OpenWebAuth token {owt}")
 
@@ -427,17 +426,11 @@ class ValidateOpenWebAuthentication:
             #  The OpenWebAuth token service MUST discard tokens after first use and SHOULD discard unused tokens within a few minutes of generation.
             match.delete()
 
-            # This could be used to explicitely set the user to authenticate
-            # It should be picked up by RemoteUserMiddleware to create and log in the user based on the trusted REMOTE_USER meta header in the request
-            # as long as RemoteUserMiddleware comes after this middleware
-            # I also had to move the messageMiddleware before the authentication middleware to avoid an exception which said
-            # "django.contrib.messages.api.MessageFailure: You cannot add messages without installing django.contrib.messages.middleware.MessageMiddleware"
-            # but after that: yeah!
+            # This is used to explicitely set the user to authenticate
+            # It is picked up by RemoteUserMiddleware to create and log in the user based on the trusted REMOTE_USER meta header in the request
             request.META["REMOTE_USER"] = user_url
 
-            response = self.get_response(request)
-            return response
+            return self.get_response(request)
 
         except OwaVerification.DoesNotExist:
-            response = self.get_response(request)
-            return response
+            return self.get_response(request)

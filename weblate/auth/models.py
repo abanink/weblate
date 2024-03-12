@@ -1067,3 +1067,6 @@ class OwaVerification(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["token"])]
+
+    def __str__(self):
+        return f"Owa verification token for {self.remote_url}"
