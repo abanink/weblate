@@ -1473,23 +1473,20 @@ class UserList(ListView):
         return context
 
 
-@async_to_sync
-async def owa_server(request):
-    ret_response = {"success": "false"}
-    LOGGER.info("Hit OWA endpoint")
-
-    public_key = None
-    key_id = None
-    remote_user_cache = caches["default"]
-
-    def perform_webfinger(url, domain=None):
+class Webfinger:
+    def __init__(self, url, domain=None):
+        self.url = url
         if not domain:
             parsed_url = urlparse(url)
-            domain = parsed_url.netloc
+            self.domain = parsed_url.netloc
+        else:
+            self.domain = domain
 
-        webfinger_url = f"https://{domain}/.well-known/webfinger?resource={url}"
+        webfinger_url = (
+            f"https://{self.domain}/.well-known/webfinger?resource={self.url}"
+        )
         LOGGER.info(
-            f"Performing webfinger lookup for url {url} on domain {domain}, calling {webfinger_url}"
+            f"Performing webfinger lookup for url {self.url} on domain {self.domain}, calling {webfinger_url}"
         )
 
         wf_response = weblate_request("get", webfinger_url)
@@ -1497,19 +1494,22 @@ async def owa_server(request):
             LOGGER.info(
                 f"Webfinger request failed, status code = {wf_response.status_code}"
             )
-            return None
+            self.wf_result = None
 
         try:
-            wf_result = wf_response.json()
+            self.wf_result = wf_response.json()
         except JSONDecodeError as e:
             LOGGER.debug(f"Json parse error: {e}")
+            self.wf_result = None
+
+        LOGGER.debug(f"Webfinger result = {self.wf_result}")
+
+    def find_address(self, check_routine=callable):
+        if not self.wf_result:
+            LOGGER.error("No Webfinger result acquired yet")
             return None
 
-        LOGGER.debug(f"Webfinger result = {wf_result}")
-        return wf_result
-
-    def webfinger_find_address(wf_result, check_routine=callable):
-        subject = wf_result["subject"]
+        subject = self.wf_result["subject"]
         if subject:
             subject = str(subject)
             if check_routine(subject):
@@ -1518,7 +1518,7 @@ async def owa_server(request):
                 return address
 
         address = None
-        aliases = wf_result["aliases"]
+        aliases = self.wf_result["aliases"]
         if aliases and isinstance(aliases, list):
             for a in aliases:
                 a = str(a)
@@ -1529,42 +1529,15 @@ async def owa_server(request):
 
         return address
 
-    # Check that a claimed address wil resolve to the keyId
-    #
-    # We will use the claimed address as username and in the key for caching the avatar
-    # we need to make sure that this claimed address can be trusted
-    # This can be done by looking up the keyId on the claimed address's domain
-    # if it fails, someone is providing an invalid address to use as username
-    def verify_address(address, key_id):
-        domain = address.rpartition("@")[2]
-        if not domain:
-            return False
-
-        wf_result = perform_webfinger(key_id, domain)
-        return webfinger_find_address(wf_result, lambda address: address == key_id)
-
-    def try_fetch_remote_user(key_id):
-        wf_result = perform_webfinger(key_id)
-        if not wf_result:
-            LOGGER.debug(f"Webfinger failed for {key_id}")
+    def extract_publickey(self):
+        if not self.wf_result:
+            LOGGER.error("No Webfinger result acquired yet")
             return None
 
-        address = extract_address_from_webfinger(wf_result)
-        verify_addr_result = verify_address(address, key_id)
-        if not verify_addr_result:
-            LOGGER.info(
-                f"Address {address} could not be verified - this is a fatal error"
-            )
-            return None
-
-        LOGGER.info(f"Address verification passed for {address}")
-        return store_remote_user_in_cache(key_id, wf_result)
-
-    def extract_publickey_from_webfinger(wf_result):
         # extract public key from webfinger result
         pubkey_property = "https://w3id.org/security/v1#publicKeyPem"
         # TODO: also return None if the public key is not a valid format?
-        wf_properties = wf_result["properties"]
+        wf_properties = self.wf_result["properties"]
         if not wf_properties or not wf_properties[pubkey_property]:
             LOGGER.info("Unable to retrieve public key from webfinger")
             return None
@@ -1573,13 +1546,11 @@ async def owa_server(request):
         LOGGER.debug(f"Public key retrieved: {public_key}")
         return public_key
 
-    def extract_address_from_webfinger(wf_result):
+    def extract_address(self):
         # extract remote user address from webfinger
         # it could be in the subject or in the aliases
 
-        address = webfinger_find_address(
-            wf_result, lambda field: field.startswith("acct:")
-        )
+        address = self.find_address(lambda field: field.startswith("acct:"))
 
         if address is None:
             LOGGER.info("Unable to retrieve address from webfinger")
@@ -1588,10 +1559,14 @@ async def owa_server(request):
         LOGGER.debug(f"Found address {address} from webfinger")
         return address
 
-    def extract_avatar_from_webfinger(wf_result):
+    def extract_avatar(self):
+        if not self.wf_result:
+            LOGGER.error("No Webfinger result acquired yet")
+            return None
+
         # read the avatar from the webfinger link http://webfinger.net/rel/avatar
         avatar_link = None
-        links = wf_result["links"]
+        links = self.wf_result["links"]
         if links and isinstance(links, list):
             for link in links:
                 if link["rel"] == "http://webfinger.net/rel/avatar":
@@ -1602,23 +1577,30 @@ async def owa_server(request):
                     break
         return avatar_link
 
-    def create_cache_key_from_remote_user(remote_user):
-        return f"remote_user_{remote_user}"
 
-    def store_remote_user_in_cache(key, wf_result):
-        public_key = extract_publickey_from_webfinger(wf_result).encode()
-        address = extract_address_from_webfinger(wf_result)
-        avatar_link = extract_avatar_from_webfinger(wf_result)
-        remote_user = {
-            "pubkey": public_key,
-            "address": address,
-            "avatar_link": avatar_link,
-        }
-        remote_user_cache.set(create_cache_key_from_remote_user(key), remote_user)
-        return remote_user
+class HttpSig:
+    # raises InvalidSignature in case anything wrong with the headers
+    def __init__(self, request):
+        self.request = request
+        self.header = request.headers.get("Authorization", None)
+        LOGGER.info(f"Auth header: {self.header}")
 
-    def parse_sigheader(header):
+        if self.header is None:
+            LOGGER.info(f"No Auth header present. all headers: {request.headers}")
+            raise InvalidSignature
+
+        if not self.header.strip().startswith("Signature"):
+            LOGGER.info("Missing Signature in Authorization header!")
+            raise InvalidSignature
+
+        self.sig_block = self.parse_sigheader()
+
+    def get_sig_block(self):
+        return self.sig_block
+
+    def parse_sigheader(self):
         ret = {}
+        header = self.header
 
         m = re.search(r'keyId="(.*?)"', header)
         if m:
@@ -1647,99 +1629,130 @@ async def owa_server(request):
         if ret.get("signature") and ret.get("algorithm") and (not ret.get("headers")):
             ret["headers"] = ["date"]
 
-        LOGGER.info(f"parse_sigheader: returning {ret}")
+        LOGGER.debug(f"parse_sigheader: returning {ret}")
         return ret
 
-    def sig_verify(request, sig_block, pubkey):
+    # raises InvalidSignature in case anything wrong with the verification
+    def verify(self, pubkey):
         LOGGER.info("Verify signature now...")
 
-        headers = {k.lower(): v for k, v in dict(request.headers).items()}
+        def check_header(h, check_func):
+            value = self.sig_block.get(h)
+            if not check_func(value):
+                return False
+            return value
+
+        def createdtime_check(created_time):
+            return created_time and created_time < time.time()
+
+        def expiretime_check(expire_time):
+            return expire_time and expire_time > time.time()
+
+        def check_generate_signed_data(signed_headers):
+            signed_data = ""
+            for h in signed_headers:
+                h_val = headers.get(h)
+                LOGGER.debug(f"Checking header {h} = {h_val}")
+                if h_val:
+                    signed_data += h + ": " + h_val + "\n"
+
+                match h:
+                    case "(created)":
+                        created_time = check_header(h, createdtime_check)
+                        if not created_time:
+                            LOGGER.debug("Created time missing or in the future")
+                            return False
+                        signed_data += h + ": " + created_time + "\n"
+
+                    case "(expires)":
+                        expire_time = check_header(h, expiretime_check)
+                        if not expire_time:
+                            LOGGER.debug("Expire time not present or passed")
+                            return False
+                        signed_data += h + ": " + expire_time + "\n"
+
+                    case "date":
+                        now = datetime.now(tz=datetime.UTC)
+                        past = now - timedelta(days=1)
+                        future = now + timedelta(days=1)
+                        try:
+                            curr = datetime.strptime(
+                                h_val, "%a, %d %b %Y %H:%M:%S GMT"
+                            ).astimezone(datetime.UTC)
+                            if curr > future or curr < past:
+                                LOGGER.debug("Bad time")
+                                return False
+                        except OSError:
+                            return False
+
+            # Strip end linefeed
+            signed_data = signed_data.rstrip("\n").encode()
+            LOGGER.debug(f"Signed data: {signed_data}")
+            return signed_data
+
+        headers = {k.lower(): v for k, v in dict(self.request.headers).items()}
         LOGGER.debug(f"Prepared headers: {headers}")
         headers["(request-target)"] = (
-            request.method.lower() + " " + request.get_full_path()
+            self.request.method.lower() + " " + self.request.get_full_path()
         )
         LOGGER.debug(f"headers = {headers}")
 
-        signed_headers = sig_block["headers"]
-        if not signed_headers:
-            signed_headers = ["date"]
+        signed_headers = self.sig_block["headers"] or ["date"]
+        LOGGER.info(f"Signed headers: {signed_headers}")
 
-        LOGGER.info(f"Signed header: {signed_headers}")
-        signed_data = ""
-        for h in signed_headers:
-            h_val = headers[h]
-            LOGGER.debug(f"Checking header {h} = {h_val}")
-            if h == "(created)":
-                created_time = sig_block["(created)"]
-                if not created_time or created_time > time.time():
-                    LOGGER.info("Created time missing or in the future")
-                    return False
-                signed_data += h + ": " + created_time + "\n"
-            elif h == "(expires)":
-                expire_time = sig_block["(expires)"]
-                if not expire_time or expire_time < time.time():
-                    LOGGER.info("Expire time not present or passed")
-                    return False
-                signed_data += h + ": " + expire_time + "\n"
-            elif h == "date":
-                now = datetime.now(tz=datetime.UTC)
-                past = now - timedelta(days=1)
-                future = now + timedelta(days=1)
-                try:
-                    curr = datetime.strptime(
-                        h_val, "%a, %d %b %Y %H:%M:%S GMT"
-                    ).astimezone(datetime.UTC)
-                    if curr > future or curr < past:
-                        LOGGER.info("Bad time")
-                        return False
-                except OSError:
-                    return False
-            else:
-                signed_data += h + ": " + h_val + "\n"
+        signed_data = check_generate_signed_data(signed_headers)
+        if not signed_data:
+            raise InvalidSignature
 
-        # Strip end linefeed
-        signed_data = signed_data.rstrip("\n").encode()
-        LOGGER.debug(f"Signed data: {signed_data}")
+        sig_algorithm = self.sig_block["algorithm"]
+        match sig_algorithm:
+            case "rsa-sha256":
+                alg = hashes.SHA256()
+            case "rsa-sha512":
+                alg = hashes.SHA512()
+            case _:
+                LOGGER.debug(f"Unsupported algorithm ({sig_algorithm})")
+                raise InvalidSignature
 
-        sig_algorithm = sig_block["algorithm"]
-        if sig_algorithm == "rsa-sha256":
-            alg = hashes.SHA256()
-        elif sig_algorithm == "rsa-sha512":
-            alg = hashes.SHA512()
-        else:
-            LOGGER.info(f"Unsupported algorithm ({sig_algorithm})")
-            return False
+        if not self.sig_block["keyId"]:
+            LOGGER.debug("Missing keyId")
+            raise InvalidSignature
 
-        if not sig_block["keyId"]:
-            return False
+        LOGGER.info("Starting crypto verify now")
+        pubkey.verify(self.sig_block["signature"], signed_data, padding.PKCS1v15(), alg)
 
-        try:
-            LOGGER.info("Starting crypto verify now")
-            pubkey.verify(sig_block["signature"], signed_data, padding.PKCS1v15(), alg)
-        except InvalidSignature:
-            LOGGER.info("Signature invalid")
-            return False
 
-        return True
-
-    def get_avatar_cache():
+class AvatarImageMgr:
+    def __init__(self):
         # Try using avatar specific cache if available
         try:
-            cache = caches["avatar"]
+            self.cache = caches["avatar"]
         except InvalidCacheBackendError:
-            cache = caches["default"]
+            self.cache = caches["default"]
 
-        return cache
+    def fetch(self, avatar_key, avatar_link):
+        if avatar_link:
+            cache = self.cache
 
-    def store_avatar_image(image, size):
+            # 24 is just one of the ALLOWED_SIZES.
+            # Assumption is that, if one of them is there, all sizes will be found from cache
+            avatar_image = cache.get(avatar_key)
+            if avatar_image is None:
+                LOGGER.info(f"Requesting avatar on {avatar_link}")
+                avatar_image = weblate_request("get", avatar_link)
+                for size in ALLOWED_SIZES:
+                    self.store(avatar_key, avatar_image, size)
+            else:
+                LOGGER.info("Avatar found in cache!")
+
+    def store(self, avatar_cache_key, image, size):
         try:
             resized_image = Image.open(io.BytesIO(image.content)).resize((size, size))
             img_byte_arr = io.BytesIO()
             resized_image.save(img_byte_arr, format="PNG")
             avatar_image = img_byte_arr.getvalue()
-            cache = get_avatar_cache()
+            cache = self.cache
 
-            avatar_cache_key = get_avatar_cache_key(address, size)
             cache.set(avatar_cache_key, avatar_image)
 
             LOGGER.info(
@@ -1748,28 +1761,39 @@ async def owa_server(request):
         except UnidentifiedImageError:
             LOGGER.info("Image could not be identified - skipping avatar storage")
 
-    def generate_token(length=32):
-        characters = string.ascii_letters + string.digits
-        return whirlpool.new(
-            "".join(secrets.choice(characters) for i in range(length)).encode("utf-8")
-        ).hexdigest()[:length]
 
-    def check_auth_header(auth_header):
-        if auth_header is None:
-            LOGGER.info(f"No Auth header present. all headers: {request.headers}")
-            return False
+class VerifiedRemoteUser:
+    def __init__(self, http_sig):
+        self.remote_user_cache = caches["default"]
 
-        if not auth_header.strip().startswith("Signature"):
-            LOGGER.info("Missing Signature in Authorization header!")
-            return False
+        self.get_key_id(http_sig.get_sig_block())
+        LOGGER.info(f"cleaned keyId = {self.key_id}")
 
-        return True
+        # now find the user with this keyId
+        self.get_remote_user()
 
-    def get_key_id(sig_block):
+        self.public_key = load_pem_public_key(self.get("pubkey"))
+
+        try:
+            http_sig.verify(self.public_key)
+        except InvalidSignature:
+            # maybe the cached user had an outdated public key - fetch most recent public key
+            self.get_remote_user(cache=False)
+
+            self.public_key = load_pem_public_key(self.get("pubkey"))
+            http_sig.verify(self.public_key)
+
+    def get(self, field):
+        return self.remote_user[field]
+
+    def get_public_key(self):
+        return self.public_key
+
+    def get_key_id(self, sig_block):
         key_id = sig_block.get("keyId")
         if not key_id:
             LOGGER.debug("Missing keyId")
-            return None
+            raise InvalidSignature
 
         LOGGER.info(f"Found keyId = {key_id}")
         parsed_key_id = urlparse(key_id)
@@ -1787,81 +1811,113 @@ async def owa_server(request):
         else:
             key_id = re.sub("acct:", "", key_id)
 
-        return key_id
+        self.key_id = key_id
 
-    def avatar_fetch(address):
-        avatar_link = remote_user_from_cache["avatar_link"]
+    def try_fetch_remote_user(self):
+        key_id = self.key_id
+        wf = Webfinger(key_id)
+
+        address = wf.extract_address()
+        verify_addr_result = self.verify_address(address)
+        if not verify_addr_result:
+            LOGGER.info(
+                f"Address {address} could not be verified - this is a fatal error"
+            )
+            return None
+
+        LOGGER.info(f"Address verification passed for {address}")
+        public_key = wf.extract_publickey().encode()
+        address = wf.extract_address()
+        avatar_link = wf.extract_avatar()
+        remote_user = {
+            "pubkey": public_key,
+            "address": address,
+            "avatar_link": avatar_link,
+        }
+        self.remote_user_cache.set(
+            self.create_cache_key_from_remote_user(key_id), remote_user
+        )
+        return remote_user
+
+    # Check that a claimed address wil resolve to the keyId
+    #
+    # We will use the claimed address as username and in the key for caching the avatar
+    # we need to make sure that this claimed address can be trusted
+    # This can be done by looking up the keyId on the claimed address's domain
+    # if it fails, someone is providing an invalid address to use as username
+    def verify_address(self, address):
+        domain = address.rpartition("@")[2]
+        if not domain:
+            return False
+
+        wf_result = Webfinger(self.key_id, domain)
+        if wf_result:
+            return wf_result.find_address(lambda address: address == self.key_id)
+
+        return False
+
+    def create_cache_key_from_remote_user(self, remote_user):
+        return f"remote_user_{remote_user}"
+
+    def get_remote_user_from_cache(self):
+        remote_user_from_cache = self.remote_user_cache.get(
+            self.create_cache_key_from_remote_user()
+        )
+
+        if remote_user_from_cache:
+            LOGGER.info(f"Remote user {self.key_id} found in cache!")
+
+        return remote_user_from_cache
+
+    def get_remote_user(self, cache=True):
+        remote_user = (
+            self.get_remote_user_from_cache() or self.try_fetch_remote_user()
+            if cache
+            else self.try_fetch_remote_user()
+        )
+        if not remote_user:
+            LOGGER.info(f"Failed to retrieve user's public key for {self.key_id}")
+            raise InvalidSignature
+
+        self.remote_user = remote_user
+
+
+@async_to_sync
+async def owa_server(request):
+    ret_response = {"success": "false"}
+    LOGGER.info("Hit OWA endpoint")
+
+    def generate_token(length=32):
+        characters = string.ascii_letters + string.digits
+        return whirlpool.new(
+            "".join(secrets.choice(characters) for i in range(length)).encode("utf-8")
+        ).hexdigest()[:length]
+
+    try:
+        # raises InvalidSignature when signature could not be verified for some reason
+        remote_user = VerifiedRemoteUser(HttpSig(request))
+        LOGGER.info("Signature OK")
+
+        address = remote_user.get("address")
+        # generate and store the OWA token
+        token = generate_token()
+        owa_verification = OwaVerification(token=token, remote_url=address)
+        await owa_verification.asave()
+
+        # encrypt the token with the public key of the remote user
+        encrypted_token = base64.b64encode(
+            remote_user.get_public_key().encrypt(token.encode(), padding.PKCS1v15())
+        ).decode()
+
+        avatar_image_mgr = AvatarImageMgr()
+        avatar_link = remote_user.get("avatar_link")
         LOGGER.debug(f"Address: {address} - Avatar link: {avatar_link}")
-        if avatar_link:
-            cache = get_avatar_cache()
+        avatar_image_mgr.fetch(get_avatar_cache_key(address, 24), avatar_link)
 
-            # 24 is just one of the ALLOWED_SIZES.
-            # Assumption is that, if one of them is there, all sizes will be found from cache
-            avatar_image = cache.get(get_avatar_cache_key(address, 24))
-            if avatar_image is None:
-                LOGGER.info(f"Requesting avatar on {avatar_link}")
-                avatar_image = weblate_request("get", avatar_link)
-                for size in ALLOWED_SIZES:
-                    store_avatar_image(avatar_image, size)
-            else:
-                LOGGER.info("Avatar found in cache!")
+        ret_response["success"] = "true"
+        ret_response["encrypted_token"] = encrypted_token
 
-    auth_header = request.headers.get("Authorization", None)
-    LOGGER.info(f"Auth header: {auth_header}")
-    if not check_auth_header(auth_header):
-        return JsonResponse(ret_response)
-
-    sig_block = parse_sigheader(auth_header)
-    key_id = get_key_id(sig_block)
-    if not key_id:
-        return JsonResponse(ret_response)
-
-    LOGGER.info(f"cleaned keyId = {key_id}")
-
-    # now find the user with this keyId
-    remote_user_from_cache = remote_user_cache.get(
-        create_cache_key_from_remote_user(key_id)
-    )
-    if remote_user_from_cache is None:
-        remote_user_from_cache = try_fetch_remote_user(key_id)
-    else:
-        LOGGER.info(f"Remote user {key_id} found in cache!")
-
-    if remote_user_from_cache is None:
-        LOGGER.info(f"Failed to retrieve user's public key for {key_id}")
-        return JsonResponse(ret_response)
-
-    public_key = load_pem_public_key(remote_user_from_cache["pubkey"])
-    verified = sig_verify(request, sig_block, public_key)
-    if not verified:
-        # maybe the cached user had an outdated public key - fetch most recent public key
-        remote_user_from_cache = try_fetch_remote_user(key_id)
-        if not remote_user_from_cache:
-            LOGGER.info(f"Failed to retrieve user's public key for {key_id}")
-            return JsonResponse(ret_response)
-
-        public_key = load_pem_public_key(remote_user_from_cache["pubkey"])
-        verified = sig_verify(request, sig_block, public_key)
-
-    if not verified:
+    except InvalidSignature:
         LOGGER.info("Signature verification failed")
-        return JsonResponse(ret_response)
-
-    LOGGER.info("Signature OK")
-
-    address = remote_user_from_cache["address"]
-    # generate and store the OWA token
-    token = generate_token()
-    owa_verification = OwaVerification(token=token, remote_url=address)
-    await owa_verification.asave()
-
-    # encrypt the token with the public key of the remote user
-    encrypted_token = base64.b64encode(
-        public_key.encrypt(token.encode(), padding.PKCS1v15())
-    ).decode()
-
-    avatar_fetch(address)
-    ret_response["success"] = "true"
-    ret_response["encrypted_token"] = encrypted_token
 
     return JsonResponse(ret_response)
