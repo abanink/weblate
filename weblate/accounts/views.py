@@ -1730,18 +1730,18 @@ class AvatarImageMgr:
         except InvalidCacheBackendError:
             self.cache = caches["default"]
 
-    def fetch(self, avatar_key, avatar_link):
+    def fetch(self, address, avatar_link):
         if avatar_link:
             cache = self.cache
 
             # 24 is just one of the ALLOWED_SIZES.
             # Assumption is that, if one of them is there, all sizes will be found from cache
-            avatar_image = cache.get(avatar_key)
+            avatar_image = cache.get(get_avatar_cache_key(address, 24))
             if avatar_image is None:
                 LOGGER.info(f"Requesting avatar on {avatar_link}")
                 avatar_image = weblate_request("get", avatar_link)
                 for size in ALLOWED_SIZES:
-                    self.store(avatar_key, avatar_image, size)
+                    self.store(get_avatar_cache_key(address, size), avatar_image, size)
             else:
                 LOGGER.info("Avatar found in cache!")
 
@@ -1814,8 +1814,7 @@ class VerifiedRemoteUser:
         self.key_id = key_id
 
     def try_fetch_remote_user(self):
-        key_id = self.key_id
-        wf = Webfinger(key_id)
+        wf = Webfinger(self.key_id)
 
         address = wf.extract_address()
         verify_addr_result = self.verify_address(address)
@@ -1835,7 +1834,7 @@ class VerifiedRemoteUser:
             "avatar_link": avatar_link,
         }
         self.remote_user_cache.set(
-            self.create_cache_key_from_remote_user(key_id), remote_user
+            self.create_user_cache_key(), remote_user
         )
         return remote_user
 
@@ -1856,12 +1855,12 @@ class VerifiedRemoteUser:
 
         return False
 
-    def create_cache_key_from_remote_user(self, remote_user):
-        return f"remote_user_{remote_user}"
+    def create_user_cache_key(self):
+        return f"remote_user_{self.key_id}"
 
     def get_remote_user_from_cache(self):
         remote_user_from_cache = self.remote_user_cache.get(
-            self.create_cache_key_from_remote_user()
+            self.create_user_cache_key()
         )
 
         if remote_user_from_cache:
@@ -1912,7 +1911,7 @@ async def owa_server(request):
         avatar_image_mgr = AvatarImageMgr()
         avatar_link = remote_user.get("avatar_link")
         LOGGER.debug(f"Address: {address} - Avatar link: {avatar_link}")
-        avatar_image_mgr.fetch(get_avatar_cache_key(address, 24), avatar_link)
+        avatar_image_mgr.fetch(address, avatar_link)
 
         ret_response["success"] = "true"
         ret_response["encrypted_token"] = encrypted_token
