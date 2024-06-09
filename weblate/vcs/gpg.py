@@ -16,7 +16,7 @@ from weblate.utils.errors import report_error
 GPG_ERRORS = {}
 
 
-def gpg_error(name: str, error: Exception, silent: bool = False):
+def gpg_error(name: str, error: Exception, silent: bool = False) -> None:
     report_error(cause=name)
 
     if not silent:
@@ -71,7 +71,7 @@ def get_gpg_key(silent=False) -> str | None:
         gpg_error("GPG key listing", error, silent)
         return None
     for line in result.stdout.splitlines():
-        if not line.startswith("fpr:"):
+        if not line.startswith("fpr:"):  # codespell:ignore fpr
             continue
         return line.split(":")[9]
     return None

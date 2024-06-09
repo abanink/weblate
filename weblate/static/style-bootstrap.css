@@ -420,6 +420,12 @@ th:hover .sort-icon.sort-up {
   padding: 3em;
 }
 
+@media (max-width: 768px) {
+  .engage .buttons {
+    padding: 3em 0;
+  }
+}
+
 .engage .buttons a {
   margin: 1em;
 }
@@ -711,6 +717,13 @@ legend {
   width: 400px;
   min-width: 30%;
   max-width: 100%;
+  height: 100%;
+}
+.query-field .input-group-btn {
+  height: 100%;
+}
+#query-dropdown {
+  height: 100%;
 }
 
 .forbidden-term svg,
@@ -928,6 +941,9 @@ th.number {
 
 .clickable-row {
   cursor: pointer;
+}
+.unclickable-row {
+  cursor: not-allowed;
 }
 
 .clickable-row:hover {
@@ -1965,4 +1981,26 @@ h5.list-group-item-heading {
 }
 label .text-muted {
   font-weight: normal;
+}
+
+#workflow-enable-target {
+  transition: all 300ms linear;
+  -webkit-transition: all 300ms linear;
+}
+
+.img-check {
+  background-color: #ccc;
+  margin-bottom: 0;
+}
+
+tbody.danger {
+  background-color: #f2dede;
+}
+tbody.warning {
+  background-color: #fcf8e3;
+}
+
+.glossary-embed div.alert {
+  padding: 5px 10px;
+  margin: 0;
 }

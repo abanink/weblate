@@ -52,7 +52,9 @@ if get_env_bool("WEBLATE_DATABASES", True):
             # Use 'postgresql' or 'mysql'.
             "ENGINE": "django.db.backends.postgresql",
             # Database name.
-            "NAME": get_env_str("POSTGRES_DATABASE", required=True),
+            "NAME": get_env_str(
+                "POSTGRES_DB", get_env_str("POSTGRES_DATABASE"), required=True
+            ),
             # Database user.
             "USER": get_env_str("POSTGRES_USER", required=True),
             # Name of role to alter to set parameters in PostgreSQL,
@@ -136,6 +138,7 @@ LANGUAGES = (
     ("sr", "Српски"),
     ("sr-latn", "Srpski"),
     ("sv", "Svenska"),
+    ("ta", "தமிழ்"),
     ("th", "ไทย"),
     ("tr", "Türkçe"),
     ("uk", "Українська"),
@@ -626,15 +629,19 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
     {"NAME": "weblate.accounts.password_validation.CharsPasswordValidator"},
     {"NAME": "weblate.accounts.password_validation.PastPasswordsValidator"},
-    # Optional password strength validation by django-zxcvbn-password
-    # {
-    #     "NAME": "zxcvbn_password.ZXCVBNValidator",
-    #     "OPTIONS": {
-    #         "min_score": 3,
-    #         "user_attributes": ("username", "email", "full_name")
-    #     }
-    # },
 ]
+# Optional password strength validation by django-zxcvbn-password
+MIN_PASSWORD_SCORE = get_env_int("WEBLATE_MIN_PASSWORD_SCORE", 3)
+if MIN_PASSWORD_SCORE:
+    AUTH_PASSWORD_VALIDATORS.append(
+        {
+            "NAME": "zxcvbn_password.ZXCVBNValidator",
+            "OPTIONS": {
+                "min_score": MIN_PASSWORD_SCORE,
+                "user_attributes": ("username", "email", "full_name"),
+            },
+        }
+    )
 
 # Password hashing (prefer Argon)
 PASSWORD_HASHERS = [
@@ -738,7 +745,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "django.contrib.admin.apps.SimpleAdminConfig",
+    "django.contrib.admin",
     "django.contrib.admindocs",
     "django.contrib.sitemaps",
     "django.contrib.humanize",
@@ -813,15 +820,6 @@ LOGGING: dict = {
             "address": "/dev/log",
             "facility": SysLogHandler.LOG_LOCAL2,
         },
-        # Logging to a file
-        # "logfile": {
-        #     "level":"DEBUG",
-        #     "class":"logging.handlers.RotatingFileHandler",
-        #     "filename": "/var/log/weblate/weblate.log",
-        #     "maxBytes": 100000,
-        #     "backupCount": 3,
-        #     "formatter": "logfile",
-        # },
     },
     "loggers": {
         "django.request": {
@@ -884,6 +882,8 @@ SESSION_COOKIE_AGE_AUTHENTICATED = 1209600
 SESSION_COOKIE_SAMESITE = "Lax"
 # Increase allowed upload size
 DATA_UPLOAD_MAX_MEMORY_SIZE = 50000000
+# Allow more fields for case with a lot of subscriptions in profile
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 2000
 
 # Apply session coookie settings to language cookie as ewll
 LANGUAGE_COOKIE_SECURE = SESSION_COOKIE_SECURE
@@ -914,6 +914,10 @@ LOGOUT_URL = f"{URL_PREFIX}/accounts/logout/"
 
 # Default location for login
 LOGIN_REDIRECT_URL = f"{URL_PREFIX}/"
+LOGOUT_REDIRECT_URL = f"{URL_PREFIX}/"
+
+# Opt-in for Django 6.0 default
+FORMS_URLFIELD_ASSUME_HTTPS = True
 
 # Anonymous user name
 ANONYMOUS_USER_NAME = "anonymous"
@@ -976,6 +980,7 @@ CHECK_LIST = [
     "weblate.checks.chars.EndColonCheck",
     "weblate.checks.chars.EndQuestionCheck",
     "weblate.checks.chars.EndExclamationCheck",
+    "weblate.checks.chars.EndInterrobangCheck",
     "weblate.checks.chars.EndEllipsisCheck",
     "weblate.checks.chars.EndSemicolonCheck",
     "weblate.checks.chars.MaxLengthCheck",
@@ -1109,11 +1114,10 @@ CACHES = {
         ),
         # If redis is running on same host as Weblate, you might
         # want to use unix sockets instead:
-        # "LOCATION": "unix:///var/run/redis/redis.sock?db=1",
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
             # If you set password here, adjust CELERY_BROKER_URL as well
-            "PASSWORD": REDIS_PASSWORD if REDIS_PASSWORD else None,
+            "PASSWORD": REDIS_PASSWORD or None,
             "CONNECTION_POOL_KWARGS": {},
         },
         "KEY_PREFIX": "weblate",
@@ -1161,6 +1165,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "weblate.api.pagination.StandardPagination",
     "PAGE_SIZE": 50,
     "VIEW_DESCRIPTION_FUNCTION": "weblate.api.views.get_view_description",
+    "EXCEPTION_HANDLER": "weblate.api.views.weblate_exception_handler",
     "UNAUTHENTICATED_USER": "weblate.auth.models.get_anonymous",
 }
 
@@ -1185,10 +1190,11 @@ LOGIN_REQUIRED_URLS_EXCEPTIONS = get_env_list(
         rf"{URL_PREFIX}/static/(.*)$",  # Required for development mode
         rf"{URL_PREFIX}/widget/(.*)$",  # Allowing public access to widgets
         rf"{URL_PREFIX}/data/(.*)$",  # Allowing public access to data exports
-        rf"{URL_PREFIX}/hooks/(.*)$",  # Allowing public access to notifications
+        rf"{URL_PREFIX}/hooks/(.*)$",  # Allowing public access to notification hooks
         rf"{URL_PREFIX}/healthz/$",  # Allowing public access to health check
         rf"{URL_PREFIX}/api/(.*)$",  # Allowing access to API
-        rf"{URL_PREFIX}/js/i18n/$",  # Javascript localization
+        rf"{URL_PREFIX}/js/i18n/$",  # JavaScript localization
+        rf"{URL_PREFIX}/css/custom\.css$",  # Custom CSS support
         rf"{URL_PREFIX}/contact/$",  # Optional for contact form
         rf"{URL_PREFIX}/legal/(.*)$",  # Optional for legal app
         rf"{URL_PREFIX}/avatar/(.*)$",  # Optional for avatars
@@ -1210,7 +1216,7 @@ EMAIL_PORT = get_env_int("WEBLATE_EMAIL_PORT", 25)
 if "WEBLATE_EMAIL_USE_TLS" in os.environ or "WEBLATE_EMAIL_USE_SSL" in os.environ:
     EMAIL_USE_SSL = get_env_bool("WEBLATE_EMAIL_USE_SSL")
     EMAIL_USE_TLS = get_env_bool("WEBLATE_EMAIL_USE_TLS", not EMAIL_USE_SSL)
-elif EMAIL_PORT in (25, 587):
+elif EMAIL_PORT in {25, 587}:
     EMAIL_USE_TLS = True
 elif EMAIL_PORT == 465:
     EMAIL_USE_SSL = True
@@ -1229,10 +1235,6 @@ SILENCED_SYSTEM_CHECKS = [
 ]
 SILENCED_SYSTEM_CHECKS.extend(get_env_list("WEBLATE_SILENCED_SYSTEM_CHECKS"))
 
-# Celery worker configuration for testing
-# CELERY_TASK_ALWAYS_EAGER = True
-# CELERY_BROKER_URL = "memory://"
-# CELERY_TASK_EAGER_PROPAGATES = True
 # Celery worker configuration for production
 CELERY_TASK_ALWAYS_EAGER = get_env_bool("WEBLATE_CELERY_EAGER")
 CELERY_BROKER_URL = "{}://{}{}:{}/{}".format(
@@ -1248,6 +1250,8 @@ if REDIS_PROTO == "rediss":
         "CERT_REQUIRED" if get_env_bool("REDIS_VERIFY_SSL", True) else "CERT_NONE",
     )
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_RETRY = True
 
 # Celery settings, it is not recommended to change these
 CELERY_WORKER_MAX_MEMORY_PER_CHILD = 200000
@@ -1265,7 +1269,7 @@ CELERY_TASK_ROUTES = {
 
 # CORS allowed origins
 CORS_ALLOWED_ORIGINS = get_env_list("WEBLATE_CORS_ALLOWED_ORIGINS")
-CORS_URLS_REGEX = r"^/api/.*$"
+CORS_URLS_REGEX = rf"^{URL_PREFIX}/api/.*$"
 
 # Database backup type
 DATABASE_BACKUP = get_env_str("WEBLATE_DATABASE_BACKUP", "plain")
@@ -1312,6 +1316,8 @@ SSH_EXTRA_ARGS = get_env_str("WEBLATE_SSH_EXTRA_ARGS", "")
 BORG_EXTRA_ARGS = get_env_list("WEBLATE_BORG_EXTRA_ARGS")
 
 ENABLE_SHARING = get_env_bool("WEBLATE_ENABLE_SHARING")
+
+SUPPORT_STATUS_CHECK = get_env_bool("WEBLATE_SUPPORT_STATUS_CHECK")
 
 EXTRA_HTML_HEAD = get_env_str("WEBLATE_EXTRA_HTML_HEAD", "")
 
@@ -1367,7 +1373,7 @@ if LEGAL_INTEGRATION:
     INSTALLED_APPS.append("weblate.legal")
 
     # TOS confirmation enforcement
-    if LEGAL_INTEGRATION in ("tos-confirm", "wllegal"):
+    if LEGAL_INTEGRATION in {"tos-confirm", "wllegal"}:
         # Social auth pipeline to confirm TOS upon registration/subsequent sign in
         SOCIAL_AUTH_PIPELINE.insert(
             SOCIAL_AUTH_PIPELINE.index(

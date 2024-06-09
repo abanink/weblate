@@ -94,7 +94,9 @@ def change_project_language(request, obj):
         instance = None
 
     if request.method == "POST":
-        settings_form = WorkflowSettingForm(request.POST, instance=instance)
+        settings_form = WorkflowSettingForm(
+            request.POST, instance=instance, project=obj.project
+        )
         if settings_form.is_valid():
             settings_form.instance.project = obj.project
             settings_form.instance.language = obj.language
@@ -105,7 +107,7 @@ def change_project_language(request, obj):
             request, gettext("Invalid settings. Please check the form for errors.")
         )
     else:
-        settings_form = WorkflowSettingForm(instance=instance)
+        settings_form = WorkflowSettingForm(instance=instance, project=obj.project)
 
     return render(
         request,
@@ -281,7 +283,9 @@ def add_category(request, path):
 @login_required
 @require_POST
 def announcement(request, path):
-    obj = parse_path(request, path, (Translation, Component, Project))
+    obj = parse_path(
+        request, path, (ProjectLanguage, Translation, Component, Project, Category)
+    )
 
     if not request.user.has_perm("component.edit", obj):
         raise PermissionDenied
@@ -293,7 +297,13 @@ def announcement(request, path):
 
     # Scope specific attributes
     scope = {}
-    if isinstance(obj, Translation):
+    if isinstance(obj, ProjectLanguage):
+        scope["project"] = obj.project
+        scope["language"] = obj.language
+    elif isinstance(obj, Category):
+        scope["project"] = obj.project
+        scope["category"] = obj
+    elif isinstance(obj, Translation):
         scope["project"] = obj.component.project
         scope["component"] = obj.component
         scope["language"] = obj.language
@@ -345,7 +355,7 @@ def component_progress(request, path):
 
 
 class BackupsMixin:
-    def setup(self, request, *args, **kwargs):
+    def setup(self, request, *args, **kwargs) -> None:
         super().setup(request, *args, **kwargs)
         self.obj = parse_path(request, [kwargs["project"]], (Project,))
         if not request.user.has_perm("project.edit", self.obj):

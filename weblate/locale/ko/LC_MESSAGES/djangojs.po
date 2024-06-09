@@ -1,14 +1,15 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-# 이정희 <daemul72@gmail.com>, 2023.
+# 이정희 <daemul72@gmail.com>, 2023, 2024.
+# simmon <simmon@nplob.com>, 2024.
 msgid ""
 msgstr ""
-"Project-Id-Version: Weblate 5.4\n"
+"Project-Id-Version: Weblate 5.5.4\n"
 "Report-Msgid-Bugs-To: https://github.com/WeblateOrg/weblate/issues\n"
-"POT-Creation-Date: 2024-02-01 18:59+0000\n"
-"PO-Revision-Date: 2023-12-11 12:46+0000\n"
-"Last-Translator: 이정희 <daemul72@gmail.com>\n"
+"POT-Creation-Date: 2024-05-07 11:27+0000\n"
+"PO-Revision-Date: 2024-03-16 09:01+0000\n"
+"Last-Translator: simmon <simmon@nplob.com>\n"
 "Language-Team: Korean <https://hosted.weblate.org/projects/weblate/"
 "javascript/ko/>\n"
 "Language: ko\n"
@@ -16,122 +17,122 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
-"X-Generator: Weblate 5.3-dev\n"
+"X-Generator: Weblate 5.5-dev\n"
 
-#: weblate/static/editor/base.js:94
+#: weblate/static/editor/base.js:89
 msgid "Please select target plural by clicking."
 msgstr "클릭하여 여러 개를 선택하세요."
 
-#: weblate/static/editor/base.js:174
+#: weblate/static/editor/base.js:165
 #, javascript-format
 msgid "Cmd+%s"
-msgstr "커맨드(Cmd)+%s"
+msgstr "Cmd+%s"
 
-#: weblate/static/editor/base.js:176
+#: weblate/static/editor/base.js:167
 #, javascript-format
 msgid "Ctrl+%s"
-msgstr "컨트롤(Ctrl)+%s"
+msgstr "Ctrl+%s"
 
 #: weblate/static/editor/full.js:265
 msgid "Translation memory entry removed."
 msgstr "번역 메모리 항목이 제거되었습니다."
 
-#: weblate/static/editor/full.js:298
+#: weblate/static/editor/full.js:299
 msgid "The request for machine translation has failed:"
 msgstr "자동 번역 요청에 실패하였습니다:"
 
-#: weblate/static/editor/full.js:311
+#: weblate/static/editor/full.js:309
 #, javascript-format
 msgid "The request for machine translation using %s has failed:"
-msgstr "%s을 이용한 자동 번역 요청에 실패하였습니다:"
+msgstr "%s을(를) 사용한 자동 번역 요청에 실패하였습니다:"
 
-#: weblate/static/editor/full.js:346
+#: weblate/static/editor/full.js:344
 #, javascript-format
 msgid "Cmd+M then %s"
-msgstr "커맨드(Cmd)+M을 누른 다음 %s"
+msgstr "Cmd+M을 누른 다음 %s"
 
-#: weblate/static/editor/full.js:348
+#: weblate/static/editor/full.js:346
 #, javascript-format
 msgid "Ctrl+M then %s"
 msgstr "Ctrl+M을 누른 다음 %s"
 
-#: weblate/static/editor/full.js:450
+#: weblate/static/editor/full.js:448
 #, javascript-format
 msgid "Press Cmd+I then %s to dismiss this."
-msgstr "커맨드(Cmd)+I를 누른 뒤 %s로 해제합니다."
+msgstr "Cmd+I를 누른 다음 %s를 누르면 해제됩니다."
 
-#: weblate/static/editor/full.js:455
+#: weblate/static/editor/full.js:453
 #, javascript-format
 msgid "Press Ctrl+I then %s to dismiss this."
-msgstr "Ctrl+I를 누른 뒤 %s로 해제합니다."
+msgstr "Ctrl+I를 누른 다음 %s를 누르면 해제됩니다."
 
-#: weblate/static/editor/full.js:597
+#: weblate/static/editor/full.js:591
 msgid "Clone to translation"
 msgstr "번역에 복제하기"
 
-#: weblate/static/editor/full.js:603
+#: weblate/static/editor/full.js:593
 msgid "Accept"
-msgstr "수락하기"
+msgstr "승인"
 
-#: weblate/static/editor/full.js:614
+#: weblate/static/editor/full.js:602
 msgid "Delete entry"
-msgstr "항목 삭제"
+msgstr "항목 삭제하기"
 
 #: weblate/static/editor/zen.js:105
 msgid "There are some unsaved changes, are you sure you want to leave?"
-msgstr "저장되지 않은 변경 사항이 있습니다. 정말로 이 페이지를 나가시겠습니까?"
+msgstr "저장되지 않은 변경사항이 있습니다. 종료하시겠습니까?"
 
 #: weblate/static/loader-bootstrap.js:171
 msgid "Error loading search results!"
-msgstr "검색 결과 불러오는중 오류!"
+msgstr "검색 결과 불러오는 중 오류가 발생했습니다!"
 
 #: weblate/static/loader-bootstrap.js:175
 msgid "No new matching source strings found."
-msgstr "일치하는 새로운 원본 문자열을 찾을 수 없습니다."
+msgstr "일치하는 새 소스 문자열을 찾을 수 없습니다."
 
-#: weblate/static/loader-bootstrap.js:245
+#: weblate/static/loader-bootstrap.js:259
 msgid "Sort this column"
 msgstr "이 열을 정렬하기"
 
-#: weblate/static/loader-bootstrap.js:548
+#: weblate/static/loader-bootstrap.js:562
 msgid "Error while loading page:"
-msgstr "페이지를 로드하던 중 오류가 발생했습니다:"
-
-#: weblate/static/loader-bootstrap.js:825
-msgid "Text copied to clipboard."
-msgstr "문자가 클립보드에 복사됨."
+msgstr "페이지를 불러오는 중 오류가 발생했습니다:"
 
 #: weblate/static/loader-bootstrap.js:829
+msgid "Text copied to clipboard."
+msgstr "텍스트가 클립보드에 복사되었습니다."
+
+#: weblate/static/loader-bootstrap.js:833
 msgid "Please press Ctrl+C to copy."
-msgstr "컨트롤(Ctrl)+C를 눌러 복사하십시오."
+msgstr "복사하려면 Ctrl+C를 누릅니다."
 
-#: weblate/static/loader-bootstrap.js:853
+#: weblate/static/loader-bootstrap.js:857
 msgid "Search…"
-msgstr "검색…"
+msgstr "검색하기…"
 
-#: weblate/static/loader-bootstrap.js:854
+#: weblate/static/loader-bootstrap.js:858
 msgid "Available:"
 msgstr "가용언어:"
 
-#: weblate/static/loader-bootstrap.js:855
+#: weblate/static/loader-bootstrap.js:859
 msgid "Chosen:"
 msgstr "선택언어:"
 
-#: weblate/static/loader-bootstrap.js:1120
+#: weblate/static/loader-bootstrap.js:1111
 msgid "Weblate is now scanning the repository, please be patient."
 msgstr "웹레이트가 저장소를 확인하는 중입니다. 잠시만 기다려주세요."
 
-#: weblate/static/loader-bootstrap.js:1236
+#: weblate/static/loader-bootstrap.js:1225
 msgid ""
 "Notification settings removed, please do not forget to save the changes."
 msgstr "알림 설정이 제거되었습니다. 변경 사항을 저장하는 것을 잊지 마세요."
 
-#: weblate/static/loader-bootstrap.js:1359
+#: weblate/static/loader-bootstrap.js:1377
 msgctxt "Alert to user when opening browser developer console"
 msgid "Stop!"
-msgstr "멈추세요!"
+msgstr "중단합니다!"
 
-#: weblate/static/loader-bootstrap.js:1365
+#: weblate/static/loader-bootstrap.js:1383
 msgid ""
 "This is a browser feature intended for developers. If someone told you to "
 "copy-paste something here, they are likely trying to compromise your Weblate "
@@ -141,7 +142,7 @@ msgstr ""
 "복사하여 붙여넣으라고 얘기했다면 내 웹레이트 계정을 악용하려 시도하는 것일 "
 "수 있습니다."
 
-#: weblate/static/loader-bootstrap.js:1371
+#: weblate/static/loader-bootstrap.js:1389
 msgid "See https://en.wikipedia.org/wiki/Self-XSS for more information."
 msgstr "자세한 정보는 https://en.wikipedia.org/wiki/Self-XSS 에서 확인하세요."
 
@@ -151,7 +152,7 @@ msgstr "웹레이트 피드백"
 
 #: weblate/static/zammad.js:8
 msgid "Get help"
-msgstr "도움 요청"
+msgstr "도움 받기"
 
 #: weblate/static/zammad.js:10
 #, javascript-format
@@ -165,11 +166,11 @@ msgstr "주제"
 
 #: weblate/static/zammad.js:25
 msgid "Your name"
-msgstr "이름"
+msgstr "사용자 이름"
 
 #: weblate/static/zammad.js:33
 msgid "Your e-mail"
-msgstr "전자우편"
+msgstr "사용자 전자우편"
 
 #: weblate/static/zammad.js:41
 msgid "Message"
@@ -179,7 +180,7 @@ msgstr "메시지"
 msgid ""
 "Please contact us in English, otherwise we might be unable to process your "
 "request."
-msgstr "영어로 문의해주셔야 원활한 지원이 가능합니다."
+msgstr "영어로 문의하지 않으면, 요청을 처리하지 못할 수 있습니다."
 
 #: weblate/static/zammad.js:51
 msgid "Attachments"

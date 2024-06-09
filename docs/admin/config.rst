@@ -1214,19 +1214,7 @@ LOGIN_REQUIRED_URLS_EXCEPTIONS
 List of exceptions for :setting:`LOGIN_REQUIRED_URLS`.
 If not specified, users are allowed to access the sign-in page.
 
-Some of exceptions you might want to include:
-
-.. code-block:: python
-
-    LOGIN_REQUIRED_URLS_EXCEPTIONS = (
-        r"/accounts/(.*)$",  # Required for sign-in
-        r"/static/(.*)$",  # Required for development mode
-        r"/widget/(.*)$",  # Allowing public access to widgets
-        r"/data/(.*)$",  # Allowing public access to data exports
-        r"/hooks/(.*)$",  # Allowing public access to notification hooks
-        r"/api/(.*)$",  # Allowing access to API
-        r"/js/i18n/$",  # JavaScript localization
-    )
+See the :ref:`sample-configuration` for recommended configuration of this setting.
 
 .. setting:: PIWIK_SITE_ID
 .. setting:: MATOMO_SITE_ID
@@ -1825,6 +1813,20 @@ SUGGESTION_CLEANUP_DAYS
 Automatically deletes suggestions after a given number of days.
 Defaults to ``None``, meaning no deletions.
 
+.. setting:: SUPPORT_STATUS_CHECK
+
+SUPPORT_STATUS_CHECK
+--------------------
+
+.. versionadded:: 5.5
+
+Disables semiannual support status check and redirecting superusers upon login
+to the donation page in case there is no active support subscription.
+
+.. hint::
+
+   Improve your Weblate experience by purchasing a support subscription and boosting Weblate progress instead of turning this off.
+
 .. setting:: UNUSED_ALERT_DAYS
 
 UNUSED_ALERT_DAYS
@@ -2000,7 +2002,17 @@ example:
 .. seealso::
 
     :ref:`addons`,
-    :setting:`DEFAULT_ADDONS`
+    :setting:`DEFAULT_ADDONS`,
+    :setting:`ADDON_ACTIVITY_LOG_EXPIRY`
+
+.. setting:: ADDON_ACTIVITY_LOG_EXPIRY
+
+ADDON_ACTIVITY_LOG_EXPIRY
+-------------------------
+
+.. versionadded:: 5.6
+
+Configures how long activity logs for add-ons are kept. Defaults to 180 days.
 
 .. setting:: WEBLATE_EXPORTERS
 
