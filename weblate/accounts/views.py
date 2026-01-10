@@ -1857,9 +1857,7 @@ class VerifiedRemoteUser:
             "address": address,
             "avatar_link": avatar_link,
         }
-        self.remote_user_cache.set(
-            self.create_user_cache_key(), remote_user
-        )
+        self.remote_user_cache.set(self.create_user_cache_key(), remote_user)
         return remote_user
 
     # Check that a claimed address wil resolve to the keyId
