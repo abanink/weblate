@@ -6,13 +6,11 @@
 
 from __future__ import annotations
 
-import datetime
-
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
-from django.utils.html import format_html
 
 from weblate.auth.models import User
+from weblate.checks.flags import Flags
 from weblate.checks.tests.test_checks import MockLanguage, MockUnit
 from weblate.lang.models import Language
 from weblate.trans.models import Component, Project, Translation, Unit
@@ -21,59 +19,19 @@ from weblate.trans.templatetags.translations import (
     get_location_links,
     naturaltime,
 )
+from weblate.trans.templatetags.upload_methods import get_upload_method_help
 from weblate.trans.tests.test_views import FixtureTestCase
-
-TEST_DATA = (
-    (0, "now"),
-    (1, "a second from now"),
-    (-1, "a second ago"),
-    (2, "2 seconds from now"),
-    (-2, "2 seconds ago"),
-    (60, "a minute from now"),
-    (-60, "a minute ago"),
-    (120, "2 minutes from now"),
-    (-120, "2 minutes ago"),
-    (3600, "an hour from now"),
-    (-3600, "an hour ago"),
-    (3600 * 2, "2 hours from now"),
-    (-3600 * 2, "2 hours ago"),
-    (3600 * 24, "tomorrow"),
-    (-3600 * 24, "yesterday"),
-    (3600 * 24 * 2, "2 days from now"),
-    (-3600 * 24 * 2, "2 days ago"),
-    (3600 * 24 * 7, "a week from now"),
-    (-3600 * 24 * 7, "a week ago"),
-    (3600 * 24 * 14, "2 weeks from now"),
-    (-3600 * 24 * 14, "2 weeks ago"),
-    (3600 * 24 * 30, "a month from now"),
-    (-3600 * 24 * 30, "a month ago"),
-    (3600 * 24 * 60, "2 months from now"),
-    (-3600 * 24 * 60, "2 months ago"),
-    (3600 * 24 * 365, "a year from now"),
-    (-3600 * 24 * 365, "a year ago"),
-    (3600 * 24 * 365 * 2, "2 years from now"),
-    (-3600 * 24 * 365 * 2, "2 years ago"),
-)
+from weblate.utils.files import FileUploadMethod
 
 
 class NaturalTimeTest(SimpleTestCase):
     """Testing of natural time conversion."""
 
     def test_natural(self) -> None:
-        now = timezone.now()
-        for diff, expected in TEST_DATA:
-            testdate = now + datetime.timedelta(seconds=diff)
-            result = naturaltime(testdate, now)
-            expected = format_html(
-                '<span title="{}">{}</span>',
-                testdate.replace(microsecond=0).isoformat(),
-                expected,
-            )
-            self.assertEqual(
-                expected,
-                result,
-                f"naturaltime({testdate}) {result!r} != {expected!r}",
-            )
+        result = naturaltime(timezone.now())
+        self.assertIn('title="', result)
+        self.assertIn('data-datetime="', result)
+        self.assertIn('class="naturaltime"', result)
 
 
 class LocationLinksTest(TestCase):
@@ -125,13 +83,13 @@ class LocationLinksTest(TestCase):
             get_location_links(self.user, self.unit),
             """
             <a class="wrap-text"
-                href="http://example.net/foo.bar#L123" target="_blank"
+                href="http://example.net/foo.bar#L123" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             foo.bar:123
             </a>
             <span class="divisor">•</span>
             <a class="wrap-text"
-                href="http://example.net/bar.foo#L321" target="_blank"
+                href="http://example.net/bar.foo#L321" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             bar.foo:321
             </a>
@@ -147,7 +105,7 @@ class LocationLinksTest(TestCase):
             get_location_links(self.user, self.unit),
             """
             <a class="wrap-text"
-                href="http://example.net/foo.bar#L123" target="_blank"
+                href="http://example.net/foo.bar#L123" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             foo.bar:123
             </a>
@@ -164,7 +122,7 @@ class LocationLinksTest(TestCase):
             get_location_links(self.user, self.unit),
             """
             <a class="wrap-text"
-                href="editor://open/?file=foo.bar&amp;line=123" target="_blank"
+                href="editor://open/?file=foo.bar&amp;line=123" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             foo.bar:123
             </a>
@@ -180,7 +138,7 @@ class LocationLinksTest(TestCase):
             get_location_links(self.user, self.unit),
             """
             <a class="wrap-text"
-                href="http://example.net/foo%2Bbar#L321" target="_blank"
+                href="http://example.net/foo%2Bbar#L321" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             foo+bar:321
             </a>
@@ -198,25 +156,25 @@ class LocationLinksTest(TestCase):
             get_location_links(self.user, self.unit),
             """
             <a class="wrap-text"
-                href="http://example.net/foo.bar#L123" target="_blank"
+                href="http://example.net/foo.bar#L123" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             foo.bar:123
             </a>
             <span class="divisor">•</span>
             <a class="wrap-text"
-                href="http://example.net/bar.foo#L321" target="_blank"
+                href="http://example.net/bar.foo#L321" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             bar.foo:321
             </a>
             <span class="divisor">•</span>
             <a class="wrap-text"
-                href="https://example.com/foo" target="_blank"
+                href="https://example.com/foo" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             https://example.com/foo
             </a>
             <span class="divisor">•</span>
             <a class="wrap-text"
-                href="http://example.org/bar" target="_blank"
+                href="http://example.org/bar" tabindex="-1" target="_blank"
                 dir="ltr" rel="noopener noreferrer">
             http://example.org/bar
             </a>
@@ -271,7 +229,7 @@ class TranslationFormatTestCase(FixtureTestCase):
 
     def test_diff_github_9821(self) -> None:
         unit = Unit(translation=self.translation)
-        unit.all_flags = {"python-brace-format"}
+        unit.all_flags = Flags("python-brace-format")
         self.assertHTMLEqual(
             format_translation(
                 ["由 {username} 邀请至 {project} 项目。"],
@@ -388,6 +346,20 @@ class TranslationFormatTestCase(FixtureTestCase):
             """,
         )
 
+    def test_diff_whitespace_leading_added(self) -> None:
+        self.assertHTMLEqual(
+            format_translation(
+                ["新增 :http:get:"],
+                self.component.source_language,
+                diff="新增：http:get:",
+            )["items"][0]["content"],
+            """新增
+            <del>：</del>
+            <ins><span class="hlspace"><span class="space-space"> </span></span>:</ins>
+            http:get:
+            """,
+        )
+
     def test_glossary(self) -> None:
         self.assertHTMLEqual(
             format_translation(
@@ -400,6 +372,27 @@ class TranslationFormatTestCase(FixtureTestCase):
                 title="Glossary term:
 ahoj [hello]">Hello</span>
             world
+            """,
+        )
+
+    def test_glossary_newline(self) -> None:
+        self.assertHTMLEqual(
+            format_translation(
+                ["Hello\nworld"],
+                self.component.source_language,
+                glossary=[self.build_glossary("world", "svět", [(6, 11)])],
+            )["items"][0]["content"],
+            """
+            Hello
+            <span class="hlspace">
+                <span class="space-nl">
+                </span>
+            </span><br>
+            <span class="glossary-term"
+                title="Glossary term:
+svět [world]">
+                world
+            </span>
             """,
         )
 
@@ -501,7 +494,7 @@ glosář [glossary]">glossary</span>
 
     def test_glossary_format(self) -> None:
         unit = Unit(translation=self.translation)
-        unit.all_flags = {"php-format"}
+        unit.all_flags = Flags("php-format")
         self.assertHTMLEqual(
             format_translation(
                 ["%3$sHow"],
@@ -666,14 +659,34 @@ class DiffTestCase(SimpleTestCase):
         self.assertEqual(self.html_diff("first text", "first text"), "first text")
 
     def test_add(self) -> None:
-        self.assertEqual(
-            self.html_diff("first text", "first new text"), "first <ins>new </ins>text"
+        self.assertHTMLEqual(
+            self.html_diff("first text", "first new text"),
+            """
+            first
+            <ins>
+            new
+            <span class="hlspace">
+            <span class="space-space">
+            </span>
+            </span>
+            </ins>
+            text
+            """,
         )
 
     def test_unicode(self) -> None:
-        self.assertEqual(
+        self.assertHTMLEqual(
             self.html_diff("zkouška text", "zkouška nový text"),
-            "zkouška <ins>nový </ins>text",
+            """
+            zkouška
+            <ins>nový
+            <span class="hlspace">
+            <span class="space-space">
+            </span>
+            </span>
+            </ins>
+            text
+            """,
         )
 
     def test_remove(self) -> None:
@@ -684,6 +697,7 @@ class DiffTestCase(SimpleTestCase):
             <del>old
              <span class="hlspace">
              <span class="space-space">
+             </span>
              </span>
             </del>
             text""",
@@ -758,3 +772,13 @@ class DiffTestCase(SimpleTestCase):
             )["items"][0]["content"],
             '<span class="hlmatch">Hello</span> world!',
         )
+
+
+class UploadMethodsHelpTestCase(SimpleTestCase):
+    def test_all_exist(self) -> None:
+        for method in FileUploadMethod:
+            self.assertIsInstance(get_upload_method_help(method), str)
+
+    def test_invalid(self) -> None:
+        with self.assertRaises(ValueError):
+            get_upload_method_help("")

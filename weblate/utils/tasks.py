@@ -2,14 +2,17 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
 import gzip
 import os
 import shutil
 import subprocess
-import sys
 import time
 from importlib import import_module
+from pathlib import Path
 from shutil import copyfile
+from typing import cast
 
 from celery.schedules import crontab
 from django.conf import settings
@@ -21,7 +24,7 @@ import weblate.utils.version
 from weblate.formats.models import FILE_FORMATS
 from weblate.logger import LOGGER
 from weblate.machinery.models import MACHINERY
-from weblate.trans.models import Component, Translation
+from weblate.trans.models import Component, Project, Translation
 from weblate.trans.util import get_clean_env
 from weblate.utils.backup import backup_lock
 from weblate.utils.celery import app
@@ -31,6 +34,9 @@ from weblate.utils.errors import add_breadcrumb, report_error
 from weblate.utils.lock import WeblateLockTimeoutError
 from weblate.vcs.models import VCS_REGISTRY
 
+from .const import HEARTBEAT_FREQUENCY
+from .encoding import get_encoding_list
+
 
 @app.task(trail=False)
 def ping():
@@ -39,8 +45,9 @@ def ping():
         "vcs": sorted(VCS_REGISTRY.keys()),
         "formats": sorted(FILE_FORMATS.keys()),
         "mt_services": sorted(MACHINERY.keys()),
-        "encoding": [sys.getfilesystemencoding(), sys.getdefaultencoding()],
+        "encoding": get_encoding_list(),
         "uid": os.getuid(),
+        "data_dir": settings.DATA_DIR,
     }
 
 
@@ -48,9 +55,7 @@ def ping():
 def heartbeat() -> None:
     cache.set("celery_loaded", time.time())
     cache.set("celery_heartbeat", time.time())
-    cache.set(
-        "celery_encoding", [sys.getfilesystemencoding(), sys.getdefaultencoding()]
-    )
+    cache.set("celery_encoding", get_encoding_list())
 
 
 @app.task(trail=False, autoretry_for=(WeblateLockTimeoutError,))
@@ -59,8 +64,9 @@ def settings_backup() -> None:
         # Expand settings in case it contains non-trivial code
         command = diffsettings.Command()
         kwargs = {"default": None, "all": False, "output": "hash"}
-        with open(data_dir("backups", "settings-expanded.py"), "w") as handle:
-            handle.write(command.handle(**kwargs))
+        Path(data_dir("backups", "settings-expanded.py")).write_text(
+            command.handle(**kwargs), encoding="utf-8"
+        )
 
         # Backup original settings
         if settings.SETTINGS_MODULE:
@@ -69,7 +75,9 @@ def settings_backup() -> None:
                 copyfile(settings_mod.__file__, data_dir("backups", "settings.py"))
 
         # Backup environment (to make restoring Docker easier)
-        with open(data_dir("backups", "environment.yml"), "w") as handle:
+        with open(
+            data_dir("backups", "environment.yml"), "w", encoding="utf-8"
+        ) as handle:
             yaml = YAML()
             yaml.dump(dict(os.environ), handle)
 
@@ -84,6 +92,14 @@ def update_translation_stats_parents(pk: int) -> None:
 def update_language_stats_parents(pk: int) -> None:
     component = Component.objects.get(pk=pk)
     component.stats.update_language_stats_parents()
+
+
+@app.task(trail=False)
+def update_project_stats_link(pk: int) -> None:
+    project = Project.objects.get(pk=pk)
+    for language in project.stats.get_language_stats():
+        language.update_stats(update_parents=False)
+    project.stats.update_stats()
 
 
 @app.task(trail=False, autoretry_for=(WeblateLockTimeoutError,))
@@ -122,7 +138,7 @@ def database_backup() -> None:
             else:
                 cmd.extend(["--file", out_text])
 
-            env["PGPASSWORD"] = database["PASSWORD"]
+            env["PGPASSWORD"] = cast("str", database["PASSWORD"])
         else:
             cmd = [
                 "mysqldump",
@@ -141,7 +157,7 @@ def database_backup() -> None:
 
             cmd.extend(["--databases", database["NAME"]])
 
-            env["MYSQL_PWD"] = database["PASSWORD"]
+            env["MYSQL_PWD"] = cast("str", database["PASSWORD"])
 
         try:
             subprocess.run(
@@ -160,7 +176,7 @@ def database_backup() -> None:
                 stderr=error.stderr,
             )
             LOGGER.error("failed database backup: %s", error.stderr)
-            report_error()
+            report_error("Database backup failed")
             raise
 
         if compress:
@@ -178,4 +194,4 @@ def setup_periodic_tasks(sender, **kwargs) -> None:
     sender.add_periodic_task(
         crontab(hour=1, minute=30), database_backup.s(), name="database-backup"
     )
-    sender.add_periodic_task(60, heartbeat.s(), name="heartbeat")
+    sender.add_periodic_task(HEARTBEAT_FREQUENCY, heartbeat.s(), name="heartbeat")

@@ -9,15 +9,15 @@ from __future__ import annotations
 import os
 from glob import glob
 from itertools import chain
+from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, NoReturn
 
 from django.utils.functional import cached_property
-from django.utils.translation import gettext_lazy
+from django.utils.translation import gettext, gettext_lazy
 
 from weblate.formats.base import (
     BaseItem,
     BaseStore,
-    InnerStore,
     TranslationFormat,
     TranslationUnit,
 )
@@ -25,6 +25,8 @@ from weblate.utils.errors import report_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from weblate.trans.file_format_params import FileFormatParams
 
 
 class MultiparserError(Exception):
@@ -40,7 +42,7 @@ class MultiparserError(Exception):
 class TextItem(BaseItem):
     """Actual text unit object."""
 
-    def __init__(self, filename, line, text, flags=None) -> None:
+    def __init__(self, filename, line, text, flags: str | None = None) -> None:
         self.filename = filename
         self.line = line
         self.text = text
@@ -57,9 +59,8 @@ class TextItem(BaseItem):
 class TextParser:
     """Simple text parser returning all content as single unit."""
 
-    def __init__(self, storefile, filename=None, flags=None) -> None:
-        with open(storefile) as handle:
-            content = handle.read()
+    def __init__(self, storefile, filename=None, flags: str | None = None) -> None:
+        content = Path(storefile).read_text(encoding="utf-8")
         if filename:
             self.filename = filename
         else:
@@ -83,7 +84,11 @@ class MultiParser(BaseStore):
 
     def __init__(self, storefile) -> None:
         if not isinstance(storefile, str):
-            raise TypeError("Needs string as a storefile!")
+            msg = "Needs string as a storefile!"
+            raise TypeError(msg)
+
+        if not os.path.isdir(storefile):
+            raise ValueError(gettext("Should be a directory with metadata files!"))
 
         self.base = storefile
         self.parsers = self.load_parser()
@@ -107,7 +112,7 @@ class MultiParser(BaseStore):
                         match, os.path.relpath(match, self.base), flags
                     )
                 except Exception as error:
-                    raise MultiparserError(match, error)
+                    raise MultiparserError(match, error) from error
         return result
 
     def get_filename(self, name):
@@ -117,9 +122,11 @@ class MultiParser(BaseStore):
 class AppStoreParser(MultiParser):
     filenames = (
         ("title.txt", "max-length:30"),
+        ("name.txt", "max-length:30"),
         ("short[_-]description.txt", "max-length:80"),
+        ("summary.txt", "max-length:80"),
         ("full[_-]description.txt", "max-length:4000"),
-        ("subtitle.txt", "max-length:80"),
+        ("subtitle.txt", "max-length:30"),
         ("description.txt", "max-length:4000"),
         ("keywords.txt", "max-length:100"),
         ("video.txt", "max-length:256, url"),
@@ -135,7 +142,7 @@ class AppStoreParser(MultiParser):
         parts = filename.rsplit("changelogs/", 1)
         if len(parts) == 2:
             try:
-                return "-{}".format(int(parts[1].split(".")[0]))
+                return f"-{int(parts[1].split('.')[0])}"
             except ValueError:
                 pass
         return filename
@@ -173,9 +180,10 @@ class TextUnit(TranslationUnit):
     @cached_property
     def flags(self):
         """Return flags from unit."""
+        flags = super().flags
         if self.mainunit.flags:
-            return self.mainunit.flags
-        return ""
+            flags.merge(self.mainunit.flags)
+        return flags
 
     def set_target(self, target: str | list[str]) -> None:
         """Set translation unit target."""
@@ -188,6 +196,7 @@ class TextUnit(TranslationUnit):
 
 
 class AppStoreFormat(TranslationFormat):
+    # Translators: File format name
     name = gettext_lazy("App store metadata files")
     format_id = "appstore"
     can_add_unit = False
@@ -200,7 +209,9 @@ class AppStoreFormat(TranslationFormat):
     store: AppStoreParser
 
     def load(
-        self, storefile: str | BinaryIO, template_store: InnerStore | None
+        self,
+        storefile: str | BinaryIO,
+        template_store: TranslationFormat | None,
     ) -> AppStoreParser:
         return AppStoreParser(storefile)
 
@@ -210,7 +221,8 @@ class AppStoreFormat(TranslationFormat):
         source: str | list[str],
         target: str | list[str] | None = None,
     ) -> NoReturn:
-        raise ValueError("Create not supported")
+        msg = "Create not supported"
+        raise ValueError(msg)
 
     @classmethod
     def create_new_file(
@@ -219,13 +231,14 @@ class AppStoreFormat(TranslationFormat):
         language: str,  # noqa: ARG003
         base: str,  # noqa: ARG003
         callback: Callable | None = None,  # noqa: ARG003
+        file_format_params: FileFormatParams | None = None,  # noqa: ARG003
     ) -> None:
         """Handle creation of new translation file."""
         os.makedirs(filename)
 
-    def add_unit(self, ttkit_unit) -> None:
+    def add_unit(self, unit: TextUnit) -> None:  # type: ignore[override]
         """Add new unit to underlying store."""
-        self.store.units.append(ttkit_unit)
+        self.store.units.append(unit.unit)
 
     def save(self) -> None:
         """Save underlying store to disk."""
@@ -244,7 +257,7 @@ class AppStoreFormat(TranslationFormat):
         return [self.store.get_filename(unit.filename) for unit in self.store.units]
 
     @classmethod
-    def get_class(cls):
+    def get_class(cls) -> None:
         return None
 
     @classmethod
@@ -252,8 +265,9 @@ class AppStoreFormat(TranslationFormat):
         cls,
         base: str,
         monolingual: bool,  # noqa: ARG003
-        errors: list | None = None,
+        errors: list[Exception] | None = None,
         fast: bool = False,
+        file_format_params: FileFormatParams | None = None,  # noqa: ARG003
     ) -> bool:
         """Check whether base is valid."""
         if not base:
@@ -264,7 +278,7 @@ class AppStoreFormat(TranslationFormat):
         except Exception as exception:
             if errors is not None:
                 errors.append(exception)
-            report_error(cause="File parse error")
+            report_error("File-parsing error")
             return False
         return True
 

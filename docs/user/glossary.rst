@@ -4,7 +4,7 @@ Glossary
 ========
 
 Each project can include one or more glossaries as a shorthand for storing
-terminology. Glossary easify maintaining consistency of the translation.
+terminology. Glossaries help to maintain consistency of the translation.
 
 A glossary for each language can be managed on its own, but they are
 stored together as a single component which helps project admins
@@ -53,6 +53,12 @@ toggle additional features using the :guilabel:`Tools` menu for each term.
 
 .. image:: /screenshots/glossary-tools.webp
 
+.. seealso::
+
+   :ref:`adding-strings`
+
+.. _glossary-untranslatable:
+
 Untranslatable terms
 ++++++++++++++++++++
 
@@ -74,7 +80,7 @@ Forbidden translations
 
 .. versionadded:: 4.5
 
-Flagging certain glossary term translations as ``forbidden``,  by bulk-editing,
+Flagging certain glossary term translations as ``forbidden`` by bulk-editing,
 typing in the flag, or by using :guilabel:`Tools` ↓ :guilabel:`Mark as forbidden translation`
 means they are **not** to be used. Use this to clarify translation when some words are
 ambiguous or could have unexpected meanings.
@@ -90,7 +96,7 @@ Terminology
 
 .. versionadded:: 4.5
 
-Flagging certain glossary terms as ``terminology``  by bulk-editing, typing in the flag,
+Flagging certain glossary terms as ``terminology`` by bulk-editing, typing in the flag,
 or by using :guilabel:`Tools` ↓ :guilabel:`Mark as terminology` adds entries for them
 to all languages in the glossary. Use this for important terms that should
 be well thought out, and retain a consistent meaning across all languages.
@@ -115,6 +121,13 @@ listed in the glossary sidebar when translating.
 
    :ref:`variants`
 
+Glossary import
+---------------
+
+Similar to regular translation components, you can upload existing glossaries
+to Weblate. Formats like :doc:`/formats/csv` or :doc:`/formats/tbx` are
+supported and can be uploaded, see :ref:`upload`.
+
 .. _glossary-mt:
 
 Glossaries in automatic suggestion
@@ -122,11 +135,8 @@ Glossaries in automatic suggestion
 
 .. versionadded:: 5.3
 
-Following automatic suggestion services utilize glossaries during the translation:
-
-* :ref:`mt-openai`
-* :ref:`mt-deepl`
-* :ref:`mt-microsoft-translator`
+Some automatic suggestion services utilize glossaries during the translation,
+please consult their documentation in :doc:`/admin/machine` to see the support.
 
 The glossary is processed before exposed to the service:
 

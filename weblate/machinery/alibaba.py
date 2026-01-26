@@ -1,16 +1,20 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-
+from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, ClassVar
 
 from aliyunsdkalimt.request.v20181012 import TranslateGeneralRequest
 from aliyunsdkcore.client import AcsClient
 from django.utils.functional import cached_property
 
-from .base import DownloadTranslations, MachineTranslation, MachineTranslationError
+from .base import MachineTranslation, MachineTranslationError
 from .forms import AlibabaMachineryForm
+
+if TYPE_CHECKING:
+    from .base import DownloadTranslations
 
 
 class AlibabaTranslation(MachineTranslation):
@@ -19,7 +23,7 @@ class AlibabaTranslation(MachineTranslation):
     name = "Alibaba"
     max_score = 80
 
-    language_map = {
+    language_map: ClassVar[dict[str, str]] = {
         "zh_Hans": "zh",
         "zh_Hant": "zh-tw",
     }
@@ -57,7 +61,7 @@ class AlibabaTranslation(MachineTranslation):
             "om",
             "os",
             "tpi",
-            "ba",
+            "ba",  # codespell:ignore
             "eu",
             "be",
             "ber",
@@ -255,8 +259,8 @@ class AlibabaTranslation(MachineTranslation):
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
         unit,
         user,
@@ -265,9 +269,9 @@ class AlibabaTranslation(MachineTranslation):
         """Download list of possible translations from a service."""
         # Create an API request and set the request parameters.
         request = TranslateGeneralRequest.TranslateGeneralRequest()
-        request.set_SourceLanguage(source)  # source language
+        request.set_SourceLanguage(source_language)  # source language
         request.set_SourceText(text)  # original
-        request.set_TargetLanguage(language)
+        request.set_TargetLanguage(target_language)
         request.set_FormatType("text")
         request.set_method("POST")
 
@@ -275,9 +279,8 @@ class AlibabaTranslation(MachineTranslation):
         response = self.client.do_action_with_exception(request)
         payload = json.loads(response)
         if "Message" in payload:
-            raise MachineTranslationError(
-                f"Error {payload['Code']}: {payload['Message']}"
-            )
+            msg = f"Error {payload['Code']}: {payload['Message']}"
+            raise MachineTranslationError(msg)
 
         yield {
             "text": payload["Data"]["Translated"],

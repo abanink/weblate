@@ -1,4 +1,6 @@
 {% load i18n %}
+
 {% autoescape off %}
-{% blocktrans %}Repository operation in {{ component }}{% endblocktrans %}
+  {# Translators: e-mail subject #}
+  {% blocktranslate %}Repository operation in {{ component }}{% endblocktranslate %}
 {% endautoescape %}

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
+from contextlib import suppress
 from functools import partial
 
 from django.db import transaction
@@ -19,7 +20,8 @@ from weblate.trans.models.comment import Comment
 from weblate.trans.models.component import Component
 from weblate.trans.models.componentlist import AutoComponentList, ComponentList
 from weblate.trans.models.label import Label
-from weblate.trans.models.project import Project
+from weblate.trans.models.pending import PendingUnitChange
+from weblate.trans.models.project import CommitPolicyChoices, Project
 from weblate.trans.models.suggestion import Suggestion, Vote
 from weblate.trans.models.translation import Translation
 from weblate.trans.models.unit import Unit
@@ -35,10 +37,12 @@ __all__ = [
     "Category",
     "Change",
     "Comment",
+    "CommitPolicyChoices",
     "Component",
     "ComponentList",
     "ContributorAgreement",
     "Label",
+    "PendingUnitChange",
     "Project",
     "Suggestion",
     "Translation",
@@ -100,6 +104,16 @@ def component_post_delete(sender, instance, **kwargs) -> None:
 def translation_post_delete(sender, instance, **kwargs) -> None:
     """Delete translation stats on translation deletion."""
     transaction.on_commit(instance.stats.delete)
+
+
+@receiver(m2m_changed, sender=Component.links.through)
+@disable_for_loaddata
+def component_links_updated(sender, instance, action, pk_set, **kwargs) -> None:
+    from weblate.utils.tasks import update_project_stats_link
+
+    if action in {"post_add", "post_remove", "post_clear"}:
+        for pk in pk_set:
+            update_project_stats_link.delay_on_commit(pk)
 
 
 @receiver(m2m_changed, sender=Unit.labels.through)
@@ -182,11 +196,9 @@ def auto_component_list(sender, instance, **kwargs) -> None:
 @disable_for_loaddata
 def post_delete_linked(sender, instance, **kwargs) -> None:
     # When removing project, the linked component might be already deleted now
-    try:
+    with suppress(Component.DoesNotExist):
         if instance.linked_component:
-            instance.linked_component.update_link_alerts(noupdate=True)
-    except Component.DoesNotExist:
-        pass
+            instance.linked_component.update_alerts()
 
 
 @receiver(post_save, sender=Comment)

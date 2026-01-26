@@ -1,9 +1,11 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
 from collections import defaultdict
 from itertools import chain
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.utils.translation import gettext_lazy
 
@@ -12,6 +14,12 @@ from weblate.addons.events import AddonEvent
 from weblate.addons.forms import GitSquashForm
 from weblate.utils.errors import report_error
 from weblate.vcs.base import RepositoryError
+from weblate.vcs.models import VCS_REGISTRY
+
+if TYPE_CHECKING:
+    from weblate.addons.base import CompatDict
+    from weblate.trans.models import Component
+    from weblate.vcs.git import GitRepository
 
 
 class GitSquashAddon(BaseAddon):
@@ -19,25 +27,22 @@ class GitSquashAddon(BaseAddon):
     verbose = gettext_lazy("Squash Git commits")
     description = gettext_lazy("Squash Git commits prior to pushing changes.")
     settings_form = GitSquashForm
-    compat = {
-        "vcs": {
-            "git",
-            "gerrit",
-            "subversion",
-            "github",
-            "pagure",
-            "gitlab",
-            "git-force-push",
-            "gitea",
-            "azure_devops",
-        }
+    compat: ClassVar[CompatDict] = {
+        "vcs": VCS_REGISTRY.git_based,
     }
-    events = (AddonEvent.EVENT_POST_COMMIT,)
+    events: ClassVar[set[AddonEvent]] = {
+        AddonEvent.EVENT_POST_COMMIT,
+    }
     icon = "compress.svg"
     repo_scope = True
 
-    def squash_all(self, component, repository, base=None, author=None) -> None:
-        remote = base or repository.get_remote_branch_name()
+    def squash_repo(
+        self,
+        component: Component,
+        repository: GitRepository,
+        remote: str,
+        author: str | None = None,
+    ) -> None:
         message = self.get_squash_commit_message(repository, "%B", remote)
         repository.execute(["reset", "--mixed", remote])
         # Can happen for added and removed translation
@@ -45,9 +50,12 @@ class GitSquashAddon(BaseAddon):
             author=author, message=message, signals=False, skip_push=True
         )
 
-    def get_filenames(self, component):
-        languages = defaultdict(list)
-        for origin in [component, *list(component.linked_childs)]:
+    def squash_all(self, component: Component, repository: GitRepository) -> None:
+        self.squash_repo(component, repository, repository.get_remote_branch_name())
+
+    def get_filenames(self, component: Component) -> dict[str, list[str]]:
+        languages: dict[str, list[str]] = defaultdict(list)
+        for origin in [component, *list(component.linked_children)]:
             for translation in origin.translation_set.prefetch_related("language"):
                 code = translation.language.code
                 if not translation.filename:
@@ -55,7 +63,13 @@ class GitSquashAddon(BaseAddon):
                 languages[code].extend(translation.filenames)
         return languages
 
-    def get_git_commit_messages(self, repository, log_format, remote, filenames):
+    def get_git_commit_messages(
+        self,
+        repository: GitRepository,
+        log_format: str,
+        remote: str,
+        filenames: list[str] | None,
+    ) -> str:
         command = [
             "log",
             f"--format={log_format}",
@@ -68,7 +82,7 @@ class GitSquashAddon(BaseAddon):
 
     def get_squash_commit_message(
         self,
-        repository,
+        repository: GitRepository,
         log_format: str,
         remote: str,
         filenames: list[str] | None = None,
@@ -132,7 +146,7 @@ class GitSquashAddon(BaseAddon):
 
         return commit_message
 
-    def squash_language(self, component, repository) -> None:
+    def squash_language(self, component: Component, repository: GitRepository) -> None:
         remote = repository.get_remote_branch_name()
         languages = self.get_filenames(component)
 
@@ -153,7 +167,7 @@ class GitSquashAddon(BaseAddon):
                 message=message, files=languages[code], signals=False, skip_push=True
             )
 
-    def squash_file(self, component, repository) -> None:
+    def squash_file(self, component: Component, repository: GitRepository) -> None:
         remote = repository.get_remote_branch_name()
         languages = self.get_filenames(component)
 
@@ -173,10 +187,10 @@ class GitSquashAddon(BaseAddon):
                 message=message, files=[filename], signals=False, skip_push=True
             )
 
-    def squash_author(self, component, repository) -> None:
+    def squash_author(self, component: Component, repository: GitRepository) -> None:
         remote = repository.get_remote_branch_name()
         # Get list of pending commits with authors
-        commits = [
+        commits: list[tuple[str, str]] = [
             x.split(None, 1)
             for x in reversed(
                 repository.execute(
@@ -199,14 +213,20 @@ class GitSquashAddon(BaseAddon):
                 base = repository.get_last_revision()
                 # Cherry pick current commit (this should work
                 # unless something is messed up)
-                repository.execute(["cherry-pick", commit, *gpg_sign])
+                repository.execute(
+                    ["cherry-pick", commit, *gpg_sign],
+                    environment={"WEBLATE_MERGE_SKIP": "1"},
+                )
                 handled = []
                 # Pick other commits by same author
                 for i, other in enumerate(commits):
                     if other[1] != author:
                         continue
                     try:
-                        repository.execute(["cherry-pick", other[0], *gpg_sign])
+                        repository.execute(
+                            ["cherry-pick", other[0], *gpg_sign],
+                            environment={"WEBLATE_MERGE_SKIP": "1"},
+                        )
                         handled.append(i)
                     except RepositoryError:
                         # If fails, continue to another author, we will
@@ -217,7 +237,7 @@ class GitSquashAddon(BaseAddon):
                 for i in reversed(handled):
                     del commits[i]
                 # Squash all current commits from one author
-                self.squash_all(component, repository, base, author)
+                self.squash_repo(component, repository, base, author)
 
             # Update working copy with squashed commits
             repository.execute(["checkout", repository.branch])
@@ -225,14 +245,20 @@ class GitSquashAddon(BaseAddon):
             repository.delete_branch(tmp)
 
         except Exception:
-            report_error(cause="Failed squash", project=component.project)
+            report_error("Failed squash", project=component.project)
             # Revert to original branch without any changes
             repository.execute(["reset", "--hard"])
             repository.execute(["checkout", repository.branch])
             repository.delete_branch(tmp)
 
-    def post_commit(self, component) -> None:
-        repository = component.repository
+    def post_commit(
+        self, component: Component, store_hash: bool, activity_log_id: int | None = None
+    ) -> None:
+        # Operate on parent
+        if component.linked_component:
+            component = component.linked_component
+
+        repository = cast("GitRepository", component.repository)
         branch_updated = False
         with repository.lock:
             # Ensure repository is rebased on current remote prior to squash, otherwise
@@ -246,10 +272,18 @@ class GitSquashAddon(BaseAddon):
                     return
             if not repository.needs_push():
                 return
-            method = getattr(
-                self, "squash_{}".format(self.instance.configuration["squash"])
-            )
-            method(component, repository)
+            match self.instance.configuration["squash"]:
+                case "all":
+                    self.squash_all(component, repository)
+                case "language":
+                    self.squash_language(component, repository)
+                case "file":
+                    self.squash_file(component, repository)
+                case "author":
+                    self.squash_author(component, repository)
+                case _:
+                    msg = f"Unsupported squash style: {self.instance.configuration['squash']}"
+                    raise ValueError(msg)
             # Commit any left files, those were most likely generated
             # by addon and do not exactly match patterns above
             component.commit_files(

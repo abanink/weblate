@@ -9,14 +9,14 @@ from datetime import datetime, timedelta
 from itertools import chain
 from operator import itemgetter
 from types import GeneratorType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import sentry_sdk
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction
-from django.db.models import Count, Model, Q
+from django.db.models import Count, F, Q
 from django.db.models.functions import Length
 from django.urls import reverse
 from django.utils import timezone
@@ -24,20 +24,25 @@ from django.utils.functional import cached_property
 
 from weblate.checks.models import CHECKS
 from weblate.lang.models import Language
+from weblate.trans.checklists import TranslationChecklistMixin
 from weblate.trans.mixins import BaseURLMixin
 from weblate.trans.util import translation_percent
 from weblate.utils.random import get_random_identifier
 from weblate.utils.site import get_site_url
 from weblate.utils.state import (
+    FUZZY_STATES,
     STATE_APPROVED,
     STATE_EMPTY,
-    STATE_FUZZY,
     STATE_READONLY,
     STATE_TRANSLATED,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Generator, Iterable
+
+    from django.db.models import Model
+
+    from weblate.trans.models import Category, Change, Component, Project
 
 StatItem = int | float | str | datetime | None
 StatDict = dict[str, StatItem]
@@ -83,7 +88,7 @@ SOURCE_KEYS = frozenset(
     )
 )
 
-# TODO: Drop in Weblate 5.5
+# TODO: Drop in Weblate 6
 LEGACY_KEYS = {
     "unapproved",
     "unapproved_chars",
@@ -101,12 +106,22 @@ SOURCE_MAP = {
 }
 
 
-def zero_stats(keys):
+def zero_stats(keys: Iterable[str]) -> StatDict:
     stats: StatDict = dict.fromkeys(keys, 0)
     stats["last_changed"] = None
     stats["last_author"] = None
     stats["stats_timestamp"] = 0
     return stats
+
+
+def yield_stats(queryset) -> Iterable[BaseStats]:
+    """
+    Yield stats attribute from the iterable.
+
+    This is an effective wrapper to use iterator over queryset
+    to generate all stats items.
+    """
+    yield from (item.stats for item in queryset.iterator())
 
 
 def prefetch_stats(queryset):
@@ -119,7 +134,7 @@ def prefetch_stats(queryset):
     # is returned.
     # This is needed to allow using such querysets further and to support
     # processing iterator when it is more effective.
-    result = objects if isinstance(queryset, chain | GeneratorType) else queryset
+    result = objects if isinstance(queryset, (chain, GeneratorType)) else queryset
 
     # Bail out in case the query is empty
     if not objects:
@@ -127,6 +142,42 @@ def prefetch_stats(queryset):
 
     # Use stats prefetch
     objects[0].stats.prefetch_many([i.stats for i in objects])
+
+    return result
+
+
+def get_non_glossary_stats(
+    stats_obj: ProjectLanguageStats | ProjectStats | GlobalStats,
+) -> dict[str, int]:
+    """Return a dictionary with all, source_strings, and translated strings count excluding glossary content."""
+    result = {
+        "all": stats_obj.all,
+        "translated": stats_obj.translated,
+        "source_strings": getattr(stats_obj, "source_strings", stats_obj.all),
+    }
+
+    if isinstance(stats_obj, ProjectLanguageStats):
+        from weblate.trans.models import Translation
+
+        glossaries = Translation.objects.filter(
+            language=stats_obj.language, component__in=stats_obj.project.glossaries
+        ).prefetch()
+    elif isinstance(stats_obj, ProjectStats):
+        glossaries = stats_obj._object.glossaries  # noqa: SLF001
+    elif isinstance(stats_obj, GlobalStats):
+        from weblate.trans.models import Component
+
+        glossaries = Component.objects.filter(is_glossary=True)
+    else:
+        # other stat types do not concern glossaries
+        return result
+
+    for glossary in prefetch_stats(glossaries):
+        result["all"] -= glossary.stats.all
+        result["translated"] -= glossary.stats.translated
+        result["source_strings"] -= getattr(
+            glossary.stats, "source_strings", glossary.stats.all
+        )
 
     return result
 
@@ -142,8 +193,8 @@ class BaseStats:
         self._data: StatDict = {}
         self._loaded: bool = False
         self._pending_save: bool = False
-        self.last_change_cache = None
-        self._collected_update_objects: None | list[BaseStats] = None
+        self.last_change_cache: Change | None = None
+        self._collected_update_objects: list[BaseStats] | None = None
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}:{self.cache_key}>"
@@ -235,8 +286,12 @@ class BaseStats:
     def ensure_loaded(self) -> None:
         """Load from cache if not already done."""
         if not self._loaded:
-            self._data = self.load()
-            self._loaded = True
+            self.force_load()
+
+    def force_load(self) -> None:
+        """Enforced loading of stats."""
+        self._data = self.load()
+        self._loaded = True
 
     def aggregate_get(self, name: str) -> StatItem:
         """
@@ -255,14 +310,15 @@ class BaseStats:
             # Legacy keys were calculated on demand before and are precalculated
             # since Weblate 5.2, so they are missing on stats calculated before.
             # Using zero here is most likely a wrong value, but safe and cheap.
-            # TODO: Drop in Weblate 5.5
+            # TODO: Drop in Weblate 6
             if name in LEGACY_KEYS:
                 return 0
             raise
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
-            raise AttributeError(f"Invalid stats for {self}: {name}")
+            msg = f"Invalid stats for {self}: {name}"
+            raise AttributeError(msg)
 
         self.ensure_loaded()
 
@@ -271,9 +327,17 @@ class BaseStats:
             return self.calculate_percent(name)
 
         if name == "stats_timestamp":
-            # TODO: Drop in Weblate 5.5
+            # TODO: Drop in Weblate 6
             # Migration path for legacy stat data
             return self._data.get(name, 0)
+
+        # Virtual fields
+        if name == "translated_without_checks":
+            return self.translated - self.translated_checks
+        if name == "translated_without_checks_words":
+            return self.translated_words - self.translated_checks_words
+        if name == "translated_without_checks_chars":
+            return self.translated_chars - self.translated_checks_chars
 
         # Calculate missing data
         if name not in self._data:
@@ -281,7 +345,9 @@ class BaseStats:
             self._pending_save = True
             self.calculate_by_name(name)
             if name not in self._data:
-                raise AttributeError(f"Unsupported stats for {self}: {name}")
+                msg = f"Unsupported stats for {self}: {name}"
+                self._pending_save = was_pending
+                raise AttributeError(msg)
             if not was_pending:
                 self.save()
                 self._pending_save = False
@@ -303,16 +369,22 @@ class BaseStats:
         """Save stats to cache."""
         cache.set(self.cache_key, self._data, 30 * 86400)
 
-    def get_update_objects(self):
+    def get_update_objects(self, *, full: bool = True) -> Generator[BaseStats]:
         yield GlobalStats()
 
     def collect_update_objects(self) -> None:
+        """
+        Collect update objects.
+
+        This is used on the pre_delete signal as the objects
+        cannot be collected once the object is deleted.
+        """
         # Use list to force materializing the generator
         self._collected_update_objects = list(self.get_update_objects())
 
     def _iterate_update_objects(
         self, *, extra_objects: Iterable[BaseStats] | None = None
-    ):
+    ) -> Generator[BaseStats]:
         """Get list of stats to update."""
         stat_objects: Iterable[BaseStats]
         if self._collected_update_objects is not None:
@@ -343,6 +415,7 @@ class BaseStats:
 
     def clear(self) -> None:
         """Clear local cache."""
+        self._loaded = True
         self._data = {}
 
     def store(self, key: str, value: StatItem) -> None:
@@ -360,9 +433,7 @@ class BaseStats:
             self.save(update_parents=update_parents)
 
     def calculate_basic(self) -> None:
-        with sentry_sdk.start_span(
-            op="stats", description=f"CALCULATE {self.cache_key}"
-        ):
+        with sentry_sdk.start_span(op="stats", name=f"CALCULATE {self.cache_key}"):
             self.ensure_loaded()
             self._calculate_basic()
 
@@ -470,7 +541,7 @@ class TranslationStats(BaseStats):
                 pk = self._object.pk
                 update_translation_stats_parents.delay_on_commit(pk)
 
-    def get_update_objects(self, *, full: bool = True):
+    def get_update_objects(self, *, full: bool = True) -> Generator[BaseStats]:
         translation = self._object
         component = translation.component
 
@@ -479,6 +550,10 @@ class TranslationStats(BaseStats):
 
         # Project / language
         yield component.project.stats.get_single_language_stats(translation.language)
+
+        # Linked project / language
+        for link in component.cached_links:
+            yield link.stats.get_single_language_stats(translation.language)
 
         # Category / language
         category = component.category
@@ -507,6 +582,7 @@ class TranslationStats(BaseStats):
             "active_checks_count",
             "dismissed_checks_count",
             "suggestion_count",
+            "source_label_count",
             "label_count",
             "comment_count",
             "num_chars",
@@ -520,6 +596,7 @@ class TranslationStats(BaseStats):
             active_checks_count=Count("check", filter=Q(check__dismissed=False)),
             dismissed_checks_count=Count("check", filter=Q(check__dismissed=True)),
             suggestion_count=Count("suggestion"),
+            source_label_count=Count("source_unit__labels"),
             label_count=Count("source_unit__labels"),
             comment_count=Count("comment", filter=Q(comment__resolved=False)),
             num_chars=Length("source"),
@@ -531,6 +608,7 @@ class TranslationStats(BaseStats):
             get_active_checks_count,
             get_dismissed_checks_count,
             get_suggestion_count,
+            get_source_label_count,
             get_label_count,
             get_comment_count,
             get_num_chars,
@@ -538,7 +616,7 @@ class TranslationStats(BaseStats):
 
         # Sum stats in Python, this is way faster than conditional sums in the database
         units_all = units
-        units_fuzzy = [unit for unit in units if get_state(unit) == STATE_FUZZY]
+        units_fuzzy = [unit for unit in units if get_state(unit) in FUZZY_STATES]
         units_readonly = [unit for unit in units if get_state(unit) == STATE_READONLY]
         units_nottranslated = [unit for unit in units if get_state(unit) == STATE_EMPTY]
         units_unapproved = [
@@ -549,7 +627,11 @@ class TranslationStats(BaseStats):
             unit for unit in units if get_state(unit) >= STATE_TRANSLATED
         ]
         units_todo = [unit for unit in units if get_state(unit) < STATE_TRANSLATED]
-        units_unlabeled = [unit for unit in units if not get_label_count(unit)]
+        units_unlabeled = [
+            unit
+            for unit in units
+            if not get_source_label_count(unit) and not get_label_count(unit)
+        ]
         units_allchecks = [unit for unit in units if get_active_checks_count(unit)]
         units_translated_checks = [
             unit
@@ -788,8 +870,6 @@ class TranslationStats(BaseStats):
 
     def calculate_labels(self) -> None:
         """Prefetch check stats."""
-        from weblate.trans.models.label import TRANSLATION_LABELS
-
         self.ensure_loaded()
         alllabels = set(
             self._object.component.project.label_set.values_list("name", flat=True)
@@ -799,14 +879,8 @@ class TranslationStats(BaseStats):
             .annotate_stats()
             .values_list("source_unit__labels__name", "strings", "words", "chars")
         )
-        translation_stats = (
-            self._object.unit_set.filter(labels__name__in=TRANSLATION_LABELS)
-            .values("labels__name")
-            .annotate_stats()
-            .values_list("labels__name", "strings", "words", "chars")
-        )
 
-        for label_name, strings, words, chars in chain(stats, translation_stats):
+        for label_name, strings, words, chars in stats:
             # Filtering here is way more effective than in SQL
             if label_name is None:
                 continue
@@ -836,18 +910,22 @@ class AggregatingStats(BaseStats):
     def calculate_source(self, stats: dict, all_stats: list) -> None:
         return
 
-    def _calculate_basic(self) -> None:
-        stats = zero_stats(self.basic_keys)
-        all_stats = [
+    @cached_property
+    def aggregated_stats(self) -> list[BaseStats]:
+        return [
             obj.stats
             for obj in prefetch_stats(
                 chain(self.get_child_objects(), self.get_category_objects())
             )
         ]
 
+    def _calculate_basic(self) -> None:
+        stats = zero_stats(self.basic_keys)
+        all_stats: list[BaseStats] = self.aggregated_stats
+
         # Ensure all objects have data available so that we can use _dict directly
         for stats_obj in all_stats:
-            if "all" not in stats_obj._data:
+            if "all" not in stats_obj._data:  # noqa: SLF001
                 stats_obj.calculate_basic()
                 stats_obj.save()
 
@@ -860,7 +938,7 @@ class AggregatingStats(BaseStats):
             values = (stats_obj.aggregate_get(item) for stats_obj in all_stats)
 
             if item == "stats_timestamp":
-                stats[item] = max(values, default=time.time())
+                stats[item] = max(cast("Generator[float]", values), default=time.time())
             elif item == "last_changed":
                 # We need to access values twice here
                 values_list = list(values)
@@ -874,7 +952,7 @@ class AggregatingStats(BaseStats):
                 # The last_author is calculated together with last_changed
                 continue
             else:
-                stats[item] = sum(values)
+                stats[item] = sum(cast("Generator[float]", values))
 
         if not self.sum_source_keys:
             self.calculate_source(stats, all_stats)
@@ -904,6 +982,10 @@ class LanguageStats(AggregatingStats):
     def get_child_objects(self):
         return self._object.translation_set.only("id", "language")
 
+    @property
+    def language(self):
+        return self._object
+
 
 class ComponentStats(AggregatingStats):
     sum_source_keys = False
@@ -924,10 +1006,12 @@ class ComponentStats(AggregatingStats):
                 stats["source_strings"] = obj.all
                 break
 
-    def get_update_objects(self) -> Iterable[BaseStats]:
+    def get_update_objects(self, *, full: bool = True) -> Generator[BaseStats]:
         # Component lists
-        for clist in self._object.componentlist_set.all():
-            yield clist.stats
+        yield from yield_stats(self._object.componentlist_set.only("id", "slug"))
+
+        # Projects this component is shared to
+        yield from yield_stats(self._object.cached_links)
 
         if self._object.category:
             # Category
@@ -1004,7 +1088,7 @@ class ProjectLanguageComponent:
         return self.translation_set[0].component.source_language
 
 
-class ProjectLanguage(BaseURLMixin):
+class ProjectLanguage(BaseURLMixin, TranslationChecklistMixin):
     """Wrapper class used in project-language listings and stats."""
 
     remove_permission = "translation.delete"
@@ -1017,6 +1101,18 @@ class ProjectLanguage(BaseURLMixin):
 
     def __str__(self) -> str:
         return f"{self.project} - {self.language}"
+
+    @property
+    def enable_review(self) -> bool:
+        return self.project.enable_review
+
+    @property
+    def enable_suggestions(self) -> bool:
+        return True
+
+    @property
+    def is_readonly(self) -> bool:
+        return False
 
     @property
     def code(self):
@@ -1050,7 +1146,7 @@ class ProjectLanguage(BaseURLMixin):
     def get_url_path(self):
         return [*self.project.get_url_path(), "-", self.language.code]
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("show", kwargs={"path": self.get_url_path()})
 
     def get_translate_url(self):
@@ -1059,9 +1155,10 @@ class ProjectLanguage(BaseURLMixin):
     @cached_property
     def translation_set(self):
         all_langs = self.language.translation_set.prefetch()
-        result = all_langs.filter(component__project=self.project).union(
-            all_langs.filter(component__links=self.project)
-        )
+        result = all_langs.filter(component__project=self.project)
+        if self.project.has_shared_components:
+            result |= all_langs.filter(component__links=self.project)
+        result = result.distinct()
         for item in result:
             item.is_shared = (
                 None
@@ -1088,19 +1185,48 @@ class ProjectLanguage(BaseURLMixin):
         workflow_settings = WorkflowSetting.objects.filter(
             Q(project=None) | Q(project=self.project),
             language=self.language,
-        )
+        ).order_by(F("project").desc(nulls_last=True))
         if len(workflow_settings) == 0:
             return None
-        if len(workflow_settings) == 1:
-            return workflow_settings[0]
-        # We should have two objects here, return project specific one
-        for workflow_setting in workflow_settings:
-            if workflow_setting.project_id == self.project.id:
-                return workflow_setting
-        raise WorkflowSetting.DoesNotExist
+        # Project specific is first, project NULL is last
+        return workflow_settings[0]
 
 
-class ProjectLanguageStats(SingleLanguageStats):
+class ChecklistStats(SingleLanguageStats):
+    def calculate_by_name(self, name: str) -> None:
+        super().calculate_by_name(name)
+        if name.startswith("check:"):
+            self.calculate_checks()
+        elif name.startswith("label:"):
+            self.calculate_labels()
+
+    def aggregate_stats(self, keys: Iterable[str]) -> None:
+        self.ensure_loaded()
+        all_stats: list[BaseStats] = self.aggregated_stats
+        suffixes: tuple[str, ...] = ("", "_words", "_chars")
+        for key in keys:
+            for suffix in suffixes:
+                name = f"{key}{suffix}"
+                # The attribute might be missing in some corner cases such as
+                # when component is shared in different project and calculating
+                # label stats.
+                values = (getattr(stats_obj, name, 0) for stats_obj in all_stats)
+                self.store(name, sum(values))
+        self.save()
+
+    def calculate_checks(self) -> None:
+        """Prefetch check stats."""
+        self.aggregate_stats(check.url_id for check in CHECKS.values())
+
+    def calculate_labels(self) -> None:
+        """Prefetch check stats."""
+        self.aggregate_stats(
+            f"label:{name}"
+            for name in self._object.project.label_set.values_list("name", flat=True)
+        )
+
+
+class ProjectLanguageStats(ChecklistStats):
     def __init__(self, obj: ProjectLanguage) -> None:
         self.language = obj.language
         self.project = obj.project
@@ -1112,23 +1238,39 @@ class ProjectLanguageStats(SingleLanguageStats):
         return self.project.source_review or self.project.translation_review
 
     def get_child_objects(self):
-        return self.language.translation_set.filter(
-            component__project=self.project
-        ).only("id", "language")
+        return (
+            self.language.translation_set.filter(
+                Q(component__project=self.project) | Q(component__links=self.project)
+            )
+            .distinct()
+            .only("id", "language")
+        )
 
 
-class CategoryLanguage(BaseURLMixin):
+class CategoryLanguage(BaseURLMixin, TranslationChecklistMixin):
     """Wrapper class used in category-language listings and stats."""
 
     remove_permission = "translation.delete"
 
-    def __init__(self, category, language: Language) -> None:
+    def __init__(self, category: Category, language: Language) -> None:
         self.category = category
         self.language = language
         self.component = ProjectLanguageComponent(self)
 
     def __str__(self) -> str:
         return f"{self.category} - {self.language}"
+
+    @property
+    def project(self) -> Project:
+        return self.category.project
+
+    @property
+    def enable_review(self) -> bool:
+        return self.project.enable_review
+
+    @property
+    def is_readonly(self) -> bool:
+        return False
 
     @property
     def code(self):
@@ -1153,7 +1295,7 @@ class CategoryLanguage(BaseURLMixin):
     def get_url_path(self):
         return [*self.category.get_url_path(), "-", self.language.code]
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("show", kwargs={"path": self.get_url_path()})
 
     def get_translate_url(self):
@@ -1184,7 +1326,7 @@ class CategoryLanguage(BaseURLMixin):
         return self.language.change_set.for_category(self.category)
 
 
-class CategoryLanguageStats(SingleLanguageStats):
+class CategoryLanguageStats(ChecklistStats):
     def __init__(self, obj: CategoryLanguage) -> None:
         self.language = obj.language
         self.category = obj.category
@@ -1211,7 +1353,7 @@ class CategoryLanguageStats(SingleLanguageStats):
 
 
 class CategoryStats(ParentAggregatingStats):
-    def get_update_objects(self):
+    def get_update_objects(self, *, full: bool = True) -> Generator[BaseStats]:
         if self._object.category:
             yield self._object.category.stats
             yield from self._object.category.stats.get_update_objects()
@@ -1220,10 +1362,10 @@ class CategoryStats(ParentAggregatingStats):
             yield from self._object.project.stats.get_update_objects()
 
     def get_child_objects(self):
-        return self._object.component_set.only("id", "category")
+        return self._object.component_set.only("id", "slug", "category", "check_flags")
 
     def get_category_objects(self):
-        return self._object.category_set.only("id", "category")
+        return self._object.category_set.only("id", "slug", "category")
 
     def get_single_language_stats(self, language):
         return CategoryLanguageStats(CategoryLanguage(self._object, language))
@@ -1241,12 +1383,16 @@ class ProjectStats(ParentAggregatingStats):
         return self._object.enable_review
 
     def get_child_objects(self):
-        return self._object.component_set.only("id", "project")
+        own = self._object.component_set.only("id", "project", "check_flags")
+        shared = self._object.shared_components.only("id", "project", "check_flags")
+        if shared:
+            return (own | shared).distinct()
+        return own
 
-    def get_single_language_stats(self, language):
+    def get_single_language_stats(self, language: Language) -> ProjectLanguageStats:
         return ProjectLanguageStats(ProjectLanguage(self._object, language))
 
-    def get_language_stats(self):
+    def get_language_stats(self) -> list[ProjectLanguageStats]:
         return prefetch_stats(
             self.get_single_language_stats(language)
             for language in self._object.languages
@@ -1259,7 +1405,9 @@ class ProjectStats(ParentAggregatingStats):
 
 class ComponentListStats(ParentAggregatingStats):
     def get_child_objects(self):
-        return self._object.components.only("id", "componentlist")
+        return self._object.components.only(
+            "id", "slug", "componentlist", "check_flags"
+        )
 
 
 class GlobalStats(ParentAggregatingStats):
@@ -1269,7 +1417,7 @@ class GlobalStats(ParentAggregatingStats):
     def get_child_objects(self):
         from weblate.trans.models import Project
 
-        return Project.objects.only("id", "access_control")
+        return Project.objects.only("id", "slug")
 
     def _calculate_basic(self) -> None:
         super()._calculate_basic()
@@ -1278,6 +1426,62 @@ class GlobalStats(ParentAggregatingStats):
     @cached_property
     def cache_key(self) -> str:
         return "stats-global"
+
+    def get_single_language_stats(self, language):
+        return LanguageStats(language)
+
+    def get_language_stats(self):
+        return prefetch_stats(
+            self.get_single_language_stats(language)
+            for language in Language.objects.have_translation()
+        )
+
+    # The following fields are used in MetricsSerializer in API
+    def get_languages(self):
+        return Language.objects.count()
+
+    def get_users(self):
+        from weblate.auth.models import User
+
+        return User.objects.count()
+
+    def get_projects(self):
+        from weblate.trans.models import Project
+
+        return Project.objects.count()
+
+    def get_components(self):
+        from weblate.trans.models import Component
+
+        return Component.objects.count()
+
+    def get_translations(self):
+        from weblate.trans.models import Translation
+
+        return Translation.objects.count()
+
+    def get_checks(self):
+        from weblate.checks.models import Check
+
+        return Check.objects.count()
+
+    def get_configuration_errors(self):
+        from weblate.wladmin.models import ConfigurationError
+
+        return ConfigurationError.objects.filter(ignored=False).count()
+
+    def get_suggestions(self):
+        from weblate.trans.models import Suggestion
+
+        return Suggestion.objects.count()
+
+    def get_celery_queues(self):
+        from weblate.utils.celery import get_queue_stats
+
+        return get_queue_stats()
+
+    def get_name(self):
+        return settings.SITE_TITLE
 
 
 class GhostStats(BaseStats):
@@ -1295,11 +1499,12 @@ class GhostStats(BaseStats):
     def _calculate_basic(self) -> None:
         stats = zero_stats(self.basic_keys)
         if self.base is not None:
-            for key in "all", "all_words", "all_chars":
-                stats[key] = getattr(self.base, key)
-            stats["todo"] = stats["all"]
-            stats["todo_words"] = stats["all_words"]
-            stats["todo_chars"] = stats["all_chars"]
+            for skey, dkey, tkey in (
+                ("source_strings", "all", "todo"),
+                ("source_words", "all_words", "todo_words"),
+                ("source_chars", "all_chars", "todo_chars"),
+            ):
+                stats[tkey] = stats[dkey] = getattr(self.base, skey)
         for key, value in stats.items():
             self.store(key, value)
 
@@ -1316,10 +1521,34 @@ class GhostStats(BaseStats):
     def get_absolute_url(self) -> str:
         return ""
 
+    def base_obj(self) -> Project | Component:
+        raise NotImplementedError
+
 
 class GhostProjectLanguageStats(GhostStats):
-    def __init__(self, component, language, is_shared=None) -> None:
-        super().__init__(component.stats)
+    language: Language
+    project: Project
+    is_source: bool = False
+
+    def __init__(self, project: Project, language: Language) -> None:
+        super().__init__(project.stats)
+        self.project = project
         self.language = language
-        self.component = component
-        self.is_shared = is_shared
+
+    def base_obj(self):
+        return self.project
+
+
+class GhostCategoryLanguageStats(GhostStats):
+    category: Category
+    language: Language
+    is_source: bool = False
+
+    def __init__(self, category: Category, language: Language) -> None:
+        super().__init__(category.stats)
+        self.project = category.project
+        self.category = category
+        self.language = language
+
+    def base_obj(self):
+        return self.category

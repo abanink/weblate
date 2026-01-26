@@ -4,7 +4,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from siphashc import siphash
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 def raw_hash(*parts: str) -> int:
@@ -18,7 +23,7 @@ def raw_hash(*parts: str) -> int:
     return siphash("Weblate Sip Hash", data)
 
 
-def calculate_dict_hash(data: dict) -> int:
+def calculate_dict_hash(data: Mapping[str, Any]) -> int:
     """
     Calculate checksum of a dict.
 
@@ -36,16 +41,16 @@ def calculate_hash(*parts: str) -> int:
     return raw_hash(*parts) - 2**63
 
 
-def calculate_checksum(*parts: str):
+def calculate_checksum(*parts: str) -> str:
     """Calculate siphashc checksum for given strings."""
     return format(raw_hash(*parts), "016x")
 
 
-def checksum_to_hash(checksum: str):
+def checksum_to_hash(checksum: str) -> int:
     """Convert hex to id_hash (signed 64-bit int)."""
     return int(checksum, 16) - 2**63
 
 
-def hash_to_checksum(id_hash: int):
+def hash_to_checksum(id_hash: int) -> str:
     """Convert id_hash (signed 64-bit int) to unsigned hex."""
     return format(id_hash + 2**63, "016x")

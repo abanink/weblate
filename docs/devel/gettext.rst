@@ -211,6 +211,13 @@ Then you can update individual translation files to match newly created template
 
     $ msgmerge --previous --update po/cs.po po/hello.pot
 
+.. note::
+
+   When using Weblate, you typically don't need to run msgmerge manually.
+   Weblate can handle this automatically through the :ref:`addon-weblate.gettext.msgmerge`
+   add-on, or you can upload the updated POT file using the :guilabel:`Update source strings`
+   upload method. See :ref:`updating-target-files` for details.
+
 Importing to Weblate
 ++++++++++++++++++++
 
@@ -218,19 +225,19 @@ To import such translation into Weblate, all you need to define are the followin
 fields when creating component (see :ref:`component` for detailed description
 of the fields):
 
-=============================== ==================================================
-Field                           Value
-=============================== ==================================================
-Source code repository          URL of the VCS repository with your project
-
-File mask                       ``po/*.po``
-
-Template for new translations   ``po/hello.pot``
-
-File format                     Choose :guilabel:`gettext PO file`
-
-New language                    Choose :guilabel:`Create new language file`
-=============================== ==================================================
++-------------------------------+--------------------------------------------------+
+| Field                         | Value                                            |
++===============================+==================================================+
+| Source code repository        | URL of the VCS repository with your project      |
++-------------------------------+--------------------------------------------------+
+| File mask                     | ``po/*.po``                                      |
++-------------------------------+--------------------------------------------------+
+| Template for new translations | ``po/hello.pot``                                 |
++-------------------------------+--------------------------------------------------+
+| File format                   | Choose :guilabel:`gettext PO file`               |
++-------------------------------+--------------------------------------------------+
+| New language                  | Choose :guilabel:`Create new language file`      |
++-------------------------------+--------------------------------------------------+
 
 And that's it, you're now ready to start translating your software!
 
@@ -244,5 +251,5 @@ And that's it, you're now ready to start translating your software!
 .. _msgmerge: https://www.gnu.org/software/gettext/manual/html_node/msgmerge-Invocation.html
 .. _msgfmt: https://www.gnu.org/software/gettext/manual/html_node/msgfmt-Invocation.html
 .. _msginit: https://www.gnu.org/software/gettext/manual/html_node/msginit-Invocation.html
-.. _intltool: https://freedesktop.org/wiki/Software/intltool/
-.. _pybabel: http://babel.pocoo.org/
+.. _intltool: https://www.freedesktop.org/wiki/Software/intltool/
+.. _pybabel: https://babel.pocoo.org/

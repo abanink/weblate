@@ -4,8 +4,10 @@
 
 import json
 import os
+from datetime import timedelta
 from io import StringIO
 from tempfile import TemporaryDirectory
+from unittest import TestCase
 
 import responses
 from django.conf import settings
@@ -22,7 +24,9 @@ from weblate.trans.models import Announcement
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.tests.utils import get_test_file
 from weblate.utils.apps import check_data_writable
+from weblate.utils.data import data_path
 from weblate.utils.unittest import tempdir_setting
+from weblate.wladmin.forms import ThemeColorField, ThemeColorWidget
 from weblate.wladmin.models import BackupService, ConfigurationError, SupportStatus
 
 TEST_BACKENDS = ("weblate.accounts.auth.WeblateUserBackend",)
@@ -50,7 +54,7 @@ class AdminTest(ViewTestCase):
 
     @tempdir_setting("DATA_DIR")
     def test_ssh_generate(self) -> None:
-        self.assertEqual(check_data_writable(), [])
+        self.assertEqual(check_data_writable(app_configs=None, databases=None), [])
         response = self.client.get(reverse("manage-ssh"))
         self.assertContains(response, "Generate RSA SSH key")
         self.assertContains(response, "Generate Ed25519 SSH key")
@@ -75,26 +79,53 @@ class AdminTest(ViewTestCase):
 
     @tempdir_setting("DATA_DIR")
     def test_ssh_add(self) -> None:
-        self.assertEqual(check_data_writable(), [])
+        self.assertEqual(check_data_writable(app_configs=None, databases=None), [])
         oldpath = os.environ["PATH"]
+        hostsfile = data_path("ssh") / "known_hosts"
         try:
-            os.environ["PATH"] = ":".join((get_test_file(""), os.environ["PATH"]))
+            os.environ["PATH"] = f"{get_test_file('')}:{os.environ['PATH']}"
             # Verify there is button for adding
             response = self.client.get(reverse("manage-ssh"))
             self.assertContains(response, "Add host key")
+
+            # Invalid parameters
+            response = self.client.post(
+                reverse("manage-ssh"), {"action": "add-host", "host": "-github.com"}
+            )
+            self.assertContains(response, "Enter a valid domain name or IP address.")
+            self.assertFalse(hostsfile.exists())
+
+            # Non-responding host
+            response = self.client.post(
+                reverse("manage-ssh"), {"action": "add-host", "host": "1.2.3.4"}
+            )
+            self.assertContains(response, "Could not fetch public key for a host.")
+            self.assertFalse(hostsfile.exists())
+
+            # Error response
+            response = self.client.post(
+                reverse("manage-ssh"),
+                {
+                    "action": "add-host",
+                    "host": "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+                },
+            )
+            self.assertContains(
+                response, "Could not fetch public key for a host: test error"
+            )
+            self.assertFalse(hostsfile.exists())
 
             # Add the key
             response = self.client.post(
                 reverse("manage-ssh"), {"action": "add-host", "host": "github.com"}
             )
             self.assertContains(response, "Added host key for github.com")
+            self.assertTrue(hostsfile.exists())
         finally:
             os.environ["PATH"] = oldpath
 
         # Check the file contains it
-        hostsfile = os.path.join(settings.DATA_DIR, "ssh", "known_hosts")
-        with open(hostsfile) as handle:
-            self.assertIn("github.com", handle.read())
+        self.assertIn("github.com", hostsfile.read_text())
 
     @tempdir_setting("BACKUP_DIR")
     def test_backup(self) -> None:
@@ -111,7 +142,7 @@ class AdminTest(ViewTestCase):
         response = do_post(service=service.pk, remove="1")
         self.assertNotContains(response, settings.BACKUP_DIR)
 
-    def test_performace(self) -> None:
+    def test_performance(self) -> None:
         response = self.client.get(reverse("manage-performance"))
         self.assertContains(response, "weblate.E005")
 
@@ -175,7 +206,7 @@ class AdminTest(ViewTestCase):
         response = self.client.get(reverse("manage-tools"))
         self.assertContains(response, "announcement")
         self.assertFalse(Announcement.objects.exists())
-        response = self.client.post(
+        self.client.post(
             reverse("manage-tools"),
             {"message": "Test message", "severity": "info"},
             follow=True,
@@ -219,7 +250,7 @@ class AdminTest(ViewTestCase):
         response = self.client.get(
             reverse("manage-users-check"), {"email": "nonexisting"}, follow=True
         )
-        self.assertRedirects(response, reverse("manage-users") + "?q=nonexisting")
+        self.assertRedirects(response, f"{reverse('manage-users')}?q=nonexisting")
 
     @override_settings(
         EMAIL_HOST="nonexisting.weblate.org",
@@ -270,6 +301,7 @@ class AdminTest(ViewTestCase):
                     "backup_repository": "",
                     "expiry": timezone.now(),
                     "in_limits": True,
+                    "has_subscription": False,
                     "limits": {},
                 },
                 cls=DjangoJSONEncoder,
@@ -299,6 +331,7 @@ class AdminTest(ViewTestCase):
                         "backup_repository": tempdir,
                         "expiry": timezone.now(),
                         "in_limits": True,
+                        "has_subscription": True,
                         "limits": {},
                     },
                     cls=DjangoJSONEncoder,
@@ -313,9 +346,49 @@ class AdminTest(ViewTestCase):
 
             self.assertFalse(status.discoverable)
 
+            # Toggle discovery
             self.client.post(reverse("manage-discovery"))
             status = SupportStatus.objects.get()
             self.assertTrue(status.discoverable)
+
+            # Use different payload for second registration
+            responses.delete(responses.POST, settings.SUPPORT_API_URL)
+            responses.add(
+                responses.POST,
+                settings.SUPPORT_API_URL,
+                body=json.dumps(
+                    {
+                        "name": "hosted",
+                        "backup_repository": tempdir,
+                        "expiry": timezone.now() - timedelta(days=1),
+                        "in_limits": True,
+                        "has_subscription": True,
+                        "limits": {},
+                    },
+                    cls=DjangoJSONEncoder,
+                ),
+            )
+            # Changing secret
+            self.client.post(reverse("manage-activate"), {"secret": "654321"})
+            old_status = SupportStatus.objects.get(pk=status.pk)
+            self.assertFalse(old_status.enabled)
+            new_status = SupportStatus.objects.filter(enabled=True).get()
+            self.assertEqual(new_status.name, "hosted")
+            self.assertEqual(SupportStatus.objects.get_current(), new_status)
+
+            # Refresh
+            self.client.post(reverse("manage-activate"), {"refresh": "1"})
+            new_status = SupportStatus.objects.get_current()
+            self.assertEqual(new_status.name, "hosted")
+            self.assertTrue(new_status.enabled)
+
+            # Unlink
+            self.client.post(reverse("manage-activate"), {"unlink": "1"})
+            self.assertFalse(SupportStatus.objects.filter(enabled=True).exists())
+            new_status = SupportStatus.objects.get_current()
+            self.assertEqual(new_status.pk, None)
+            self.assertEqual(new_status.name, "community")
+            self.assertFalse(new_status.enabled)
 
     def test_group_management(self) -> None:
         # Add form
@@ -408,3 +481,41 @@ class AdminTest(ViewTestCase):
         out = StringIO()
         call_command("configuration_health_check", stdout=out)
         self.assertEqual(out.getvalue(), "")
+
+
+class TestThemeColorField(TestCase):
+    """Tests for ThemeColorField widget."""
+
+    def setUp(self) -> None:
+        self.field = ThemeColorField()
+        self.widget = ThemeColorWidget()
+
+    def test_decompress_two_colors(self) -> None:
+        value = "#ffffff,#000000"
+        expected = ["#ffffff", "#000000"]
+        self.assertEqual(self.widget.decompress(value), expected)
+
+    def test_decompress_one_color(self) -> None:
+        value = "#ffffff"
+        expected = ["#ffffff", "#ffffff"]
+        self.assertEqual(self.widget.decompress(value), expected)
+
+    def test_decompress_no_value(self) -> None:
+        value = None
+        expected = [None, None]
+        self.assertEqual(self.widget.decompress(value), expected)
+
+    def test_compress_two_colors(self) -> None:
+        data_list = ["#ffffff", "#000000"]
+        expected = "#ffffff,#000000"
+        self.assertEqual(self.field.compress(data_list), expected)
+
+    def test_compress_one_color(self) -> None:
+        data_list = ["#ffffff", "#ffffff"]
+        expected = "#ffffff,#ffffff"
+        self.assertEqual(self.field.compress(data_list), expected)
+
+    def test_compress_no_data(self) -> None:
+        data_list: list[str] = []
+        expected = None
+        self.assertEqual(self.field.compress(data_list), expected)

@@ -16,9 +16,9 @@ Install it, or use the Hosted Weblate service at `weblate.org`_.
     :alt: Translation status
     :target: https://hosted.weblate.org/engage/weblate/
 
-.. image:: https://bestpractices.coreinfrastructure.org/projects/552/badge
+.. image:: https://www.bestpractices.dev/projects/552/badge
     :alt: CII Best Practices
-    :target: https://bestpractices.coreinfrastructure.org/projects/552
+    :target: https://www.bestpractices.dev/en/projects/552
 
 .. image:: https://api.reuse.software/badge/github.com/WeblateOrg/weblate
     :alt: REUSE status
@@ -60,11 +60,11 @@ Please report feature requests and problems to:
 
 https://github.com/WeblateOrg/weblate/issues
 
+Stats
+-----
 
-Live chat
----------
-
-Live chat about Weblate is available at `Libera.Chat <https://libera.chat/>`_ IRC network. The channel name is ``#weblate``. This can be accessed by, for example, https://web.libera.chat/#weblate or an IRC client installed on your computer.
+.. image:: https://repobeats.axiom.co/api/embed/e0cfcc1b19f13f78669d3a93ca26b59974faaa22.svg
+   :alt: Repobeats analytics image
 
 License
 -------

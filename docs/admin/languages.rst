@@ -11,7 +11,7 @@ text direction, plural definitions and language code is needed.
 Built-in language definitions
 -----------------------------
 
-Definitions for about 650 languages are included in Weblate and the list is
+Definitions for about 800 languages are included in Weblate and the list is
 extended in every release. Whenever Weblate is upgraded (more specifically
 whenever :wladmin:`migrate` is executed, see
 :ref:`generic-upgrade-instructions`) the database of languages is updated to
@@ -23,8 +23,8 @@ enforce updating the database to match Weblate built-in data using
 
 .. seealso::
 
-   :ref:`extending-languages`,
-   `Current language definitions <https://github.com/WeblateOrg/language-data/blob/main/languages.csv>`_
+   * :ref:`extending-languages`
+   * `Current language definitions <https://github.com/WeblateOrg/language-data/blob/main/languages.csv>`_
 
 .. _language-parsing-codes:
 
@@ -62,8 +62,8 @@ upcoming Weblate release.
 
 .. seealso::
 
-    :ref:`language-code`,
-    :ref:`adding-translation`
+   * :ref:`language-code`
+   * :ref:`adding-translation`
 
 
 .. _changing-languages:
@@ -78,6 +78,10 @@ While editing, ensure all fields are correct (especially plurals and
 text direction), otherwise translators will be unable to properly edit
 those translations.
 
+.. hint::
+
+   Please consider contributing your changes back, see :ref:`extending-languages`.
+
 .. _ambiguous-languages:
 
 Ambiguous language codes and macrolanguages
@@ -91,8 +95,9 @@ only and avoid macrolanguages.
 
 .. seealso::
 
-   `Macrolanguages definition <https://iso639-3.sil.org/about/scope#Macrolanguages>`_,
-   `List of macrolanguages <https://iso639-3.sil.org/code_tables/macrolanguage_mappings/data>`_
+   `Macrolanguages at Wikipedia <https://en.wikipedia.org/wiki/ISO_639_macrolanguage>`_
+
+.. _language-definitions:
 
 Language definitions
 --------------------
@@ -114,8 +119,8 @@ have two letter code. It can also support extended codes as defined by `BCP 47`_
 
 .. seealso::
 
-   :ref:`language-parsing-codes`,
-   :ref:`adding-translation`
+   * :ref:`language-parsing-codes`
+   * :ref:`adding-translation`
 
 .. _language-name:
 
@@ -174,8 +179,9 @@ Gettext compatible plural formula used to determine which plural form is used fo
 
 .. seealso::
 
-   :ref:`plurals`,
-   `GNU gettext utilities: Plural forms <https://www.gnu.org/software/gettext/manual/html_node/Plural-forms.html>`_,
-   `Language Plural Rules by the Unicode Consortium`_
+   * :ref:`plurals`
+   * `Additional functions for plural forms in GNU gettext`_
+   * `Language Plural Rules by the Unicode Consortium`_
 
+.. _Additional functions for plural forms in GNU gettext: https://www.gnu.org/software/gettext/manual/html_node/Plural-forms.html
 .. _Language Plural Rules by the Unicode Consortium: https://www.unicode.org/cldr/charts/43/supplemental/language_plural_rules.html

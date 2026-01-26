@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.utils.translation import gettext, gettext_lazy
 
 from weblate.lang.models import Language
+from weblate.trans.actions import ActionEvents
 
 
 class AnnouncementManager(models.Manager["Announcement"]):
@@ -27,7 +28,7 @@ class AnnouncementManager(models.Manager["Announcement"]):
             if language:
                 return base.filter(
                     (Q(component=component) & Q(language=language))
-                    | (Q(component=None) & Q(language=language))
+                    | (Q(project=None) & Q(component=None) & Q(language=language))
                     | (Q(component=component) & Q(language=None))
                     | (Q(project=component.project) & Q(component=None))
                 )
@@ -49,7 +50,7 @@ class AnnouncementManager(models.Manager["Announcement"]):
         result = super().create(**kwargs)
 
         Change.objects.create(
-            action=Change.ACTION_ANNOUNCEMENT,
+            action=ActionEvents.ANNOUNCEMENT,
             project=result.project,
             category=result.category,
             component=result.component,
@@ -124,7 +125,7 @@ class Announcement(models.Model):
     )
     notify = models.BooleanField(
         blank=True,
-        default=True,
+        default=False,
         verbose_name=gettext_lazy("Notify users"),
         help_text=gettext_lazy("Send notification to subscribed users."),
     )

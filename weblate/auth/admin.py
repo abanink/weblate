@@ -2,6 +2,10 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
@@ -15,15 +19,18 @@ from weblate.auth.data import ROLES
 from weblate.auth.models import AutoGroup, Group, Role, User
 from weblate.wladmin.models import WeblateModelAdmin
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
+
 BUILT_IN_ROLES = {role[0] for role in ROLES}
 
 
-def block_group_edit(obj):
+def block_group_edit(obj: Group):
     """Whether to allow user editing of a group."""
     return obj and obj.internal
 
 
-def block_role_edit(obj):
+def block_role_edit(obj: Role):
     return obj and obj.name in BUILT_IN_ROLES
 
 
@@ -46,17 +53,17 @@ class InlineAutoGroupAdmin(admin.TabularInline):
     form = AutoGroupChangeForm
     extra = 0
 
-    def has_add_permission(self, request, obj=None):
+    def has_add_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if block_group_edit(obj):
             return False
         return super().has_add_permission(request, obj)
 
-    def has_change_permission(self, request, obj=None):
+    def has_change_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if block_group_edit(obj):
             return False
         return super().has_change_permission(request, obj)
 
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if block_group_edit(obj):
             return False
         return super().has_delete_permission(request, obj)
@@ -67,12 +74,12 @@ class RoleAdmin(WeblateModelAdmin):
     list_display = ("name",)
     filter_horizontal = ("permissions",)
 
-    def has_change_permission(self, request, obj=None):
+    def has_change_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if block_role_edit(obj):
             return False
         return super().has_change_permission(request, obj)
 
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if block_role_edit(obj):
             return False
         return super().has_delete_permission(request, obj)
@@ -82,7 +89,10 @@ class WeblateUserChangeForm(UserChangeForm):
     class Meta:
         model = User
         fields = "__all__"
-        field_classes = {"username": UniqueUsernameField, "full_name": FullNameField}
+        field_classes = {  # noqa: RUF012
+            "username": UniqueUsernameField,
+            "full_name": FullNameField,
+        }
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -96,7 +106,10 @@ class WeblateUserCreationForm(UserCreationForm, UniqueEmailMixin):
     class Meta:
         model = User
         fields = ("username", "email", "full_name")
-        field_classes = {"username": UniqueUsernameField, "full_name": FullNameField}
+        field_classes = {  # noqa: RUF012
+            "username": UniqueUsernameField,
+            "full_name": FullNameField,
+        }
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -104,7 +117,7 @@ class WeblateUserCreationForm(UserCreationForm, UniqueEmailMixin):
 
 
 class WeblateAuthAdmin(WeblateModelAdmin):
-    def get_deleted_objects(self, objs, request):
+    def get_deleted_objects(self, objs, request: AuthenticatedHttpRequest):
         (
             deleted_objects,
             model_count,
@@ -158,7 +171,10 @@ class WeblateUserAdmin(WeblateAuthAdmin, UserAdmin):
             gettext_lazy("Permissions"),
             {"fields": ("is_active", "is_bot", "is_superuser", "groups")},
         ),
-        (gettext_lazy("Important dates"), {"fields": ("last_login", "date_joined")}),
+        (
+            gettext_lazy("Important dates"),
+            {"fields": ("last_login", "date_joined", "date_expires")},
+        ),
     )
     list_filter = ("is_superuser", "is_active", "is_bot", "groups")
     filter_horizontal = ("groups",)
@@ -172,16 +188,16 @@ class WeblateUserAdmin(WeblateAuthAdmin, UserAdmin):
             return ""
         return super().action_checkbox(obj)
 
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if obj and obj.is_anonymous:
             return False
         return super().has_delete_permission(request, obj)
 
-    def delete_model(self, request, obj) -> None:
+    def delete_model(self, request: AuthenticatedHttpRequest, obj) -> None:
         """Given a model instance delete it from the database."""
         remove_user(obj, request)
 
-    def delete_queryset(self, request, queryset) -> None:
+    def delete_queryset(self, request: AuthenticatedHttpRequest, queryset) -> None:
         """Given a queryset, delete it from the database."""
         for obj in queryset.iterator():
             self.delete_model(request, obj)
@@ -229,7 +245,7 @@ class WeblateGroupAdmin(WeblateAuthAdmin):
     save_as = True
     model = Group
     form = GroupChangeForm
-    inlines = [InlineAutoGroupAdmin]
+    inlines = (InlineAutoGroupAdmin,)
     search_fields = ("name", "defining_project__name")
     ordering = ("defining_project__name", "name")
     list_filter = ("internal", "project_selection", "language_selection")
@@ -242,24 +258,24 @@ class WeblateGroupAdmin(WeblateAuthAdmin):
     )
     list_display = ("name", "defining_project")
 
-    new_obj = None
+    new_obj: Group
 
     def action_checkbox(self, obj):
         if obj.internal:
             return ""
         return super().action_checkbox(obj)
 
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if obj and obj.internal:
             return False
         return super().has_delete_permission(request, obj)
 
-    def has_change_permission(self, request, obj=None):
+    def has_change_permission(self, request: AuthenticatedHttpRequest, obj=None):
         if block_group_edit(obj):
             return False
         return super().has_change_permission(request, obj)
 
-    def save_model(self, request, obj, form, change) -> None:
+    def save_model(self, request: AuthenticatedHttpRequest, obj, form, change) -> None:
         """
         Fix saving of automatic language/project selection, part 1.
 
@@ -268,7 +284,9 @@ class WeblateGroupAdmin(WeblateAuthAdmin):
         super().save_model(request, obj, form, change)
         self.new_obj = obj
 
-    def save_related(self, request, form, formsets, change) -> None:
+    def save_related(
+        self, request: AuthenticatedHttpRequest, form, formsets, change
+    ) -> None:
         """
         Fix saving of automatic language/project selection, part 2.
 

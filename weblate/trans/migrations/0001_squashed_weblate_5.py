@@ -14,7 +14,6 @@ from django.db import migrations, models
 import weblate.lang.models
 import weblate.trans.fields
 import weblate.trans.mixins
-import weblate.trans.models.unit
 import weblate.trans.validators
 import weblate.utils.fields
 import weblate.utils.render
@@ -64,7 +63,8 @@ def create_index(apps, schema_editor) -> None:
             "CREATE INDEX unit_context_index ON trans_unit(context(255))"
         )
     else:
-        raise ImproperlyConfigured(f"Unsupported database: {vendor}")
+        msg = f"Unsupported database: {vendor}"
+        raise ImproperlyConfigured(msg)
 
 
 def drop_index(apps, schema_editor) -> None:
@@ -78,7 +78,8 @@ def drop_index(apps, schema_editor) -> None:
         schema_editor.execute("ALTER TABLE trans_unit DROP INDEX unit_source_index")
         schema_editor.execute("ALTER TABLE trans_unit DROP INDEX unit_context_index")
     else:
-        raise ImproperlyConfigured(f"Unsupported database: {vendor}")
+        msg = f"Unsupported database: {vendor}"
+        raise ImproperlyConfigured(msg)
 
 
 class Migration(migrations.Migration):
@@ -867,7 +868,7 @@ class Migration(migrations.Migration):
                     models.JSONField(
                         blank=True,
                         default=list,
-                        help_text="List of checks which can not be ignored.",
+                        help_text="List of checks which can not be dismissed.",
                         verbose_name="Enforced checks",
                     ),
                 ),
@@ -1027,7 +1028,7 @@ class Migration(migrations.Migration):
                             (10, "Needs editing"),
                             (20, "Translated"),
                             (30, "Approved"),
-                            (100, "Read only"),
+                            (100, "Read-only"),
                         ],
                         default=0,
                     ),
@@ -1040,7 +1041,7 @@ class Migration(migrations.Migration):
                             (10, "Needs editing"),
                             (20, "Translated"),
                             (30, "Approved"),
-                            (100, "Read only"),
+                            (100, "Read-only"),
                         ],
                         default=0,
                     ),
@@ -1067,7 +1068,7 @@ class Migration(migrations.Migration):
                 ("timestamp", models.DateTimeField(auto_now_add=True)),
                 (
                     "labels",
-                    weblate.trans.models.unit.LabelsField(
+                    models.ManyToManyField(
                         blank=True, to="trans.label", verbose_name="Labels"
                     ),
                 ),
@@ -1087,7 +1088,6 @@ class Migration(migrations.Migration):
                 "verbose_name": "string",
                 "verbose_name_plural": "strings",
                 "unique_together": {("translation", "id_hash")},
-                "index_together": set(),
             },
         ),
         migrations.CreateModel(
@@ -1789,7 +1789,7 @@ class Migration(migrations.Migration):
             model_name="change",
             index=models.Index(
                 fields=["language", "action", "timestamp"],
-                name="trans_chang_languag_33816c_idx",
+                name="trans_chang_languag_33816c_idx",  # codespell:ignore
             ),
         ),
         migrations.AddIndex(
@@ -1824,7 +1824,7 @@ class Migration(migrations.Migration):
             model_name="change",
             index=models.Index(
                 fields=["user", "action", "timestamp"],
-                name="trans_chang_user_id_88ba38_idx",
+                name="trans_chang_user_id_88ba38_idx",  # codespell:ignore
             ),
         ),
         migrations.AddIndex(

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import string
 import subprocess
+from pathlib import Path
 from random import SystemRandom
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ from django.conf import settings
 from weblate.trans.util import get_clean_env
 from weblate.utils.data import data_dir
 from weblate.utils.errors import add_breadcrumb, report_error
+from weblate.utils.files import cleanup_error_message
 from weblate.utils.lock import WeblateLock
 from weblate.vcs.ssh import SSH_WRAPPER, add_host_key
 
@@ -37,7 +39,14 @@ def ensure_backup_dir():
 def backup_lock():
     backup_dir = ensure_backup_dir()
     return WeblateLock(
-        backup_dir, "backuplock", 0, "", "lock:{scope}", ".{scope}", timeout=120
+        lock_path=backup_dir,
+        scope="backuplock",
+        key=0,
+        slug="",
+        cache_template="lock:{scope}",
+        file_template=".{scope}",
+        timeout=120,
+        expiry_timeout=4 * 3600,
     )
 
 
@@ -47,7 +56,7 @@ class BackupError(Exception):
 
 def make_password(length: int = 50):
     generator = SystemRandom()
-    chars = string.ascii_letters + string.digits + "!@#$%^&*()"
+    chars = f"{string.ascii_letters}{string.digits}!@#$%^&*()"
     return "".join(generator.choice(chars) for i in range(length))
 
 
@@ -72,8 +81,7 @@ def tag_cache_dirs() -> None:
     for name in dirs:
         tagfile = os.path.join(name, "CACHEDIR.TAG")
         if os.path.exists(name) and not os.path.exists(tagfile):
-            with open(tagfile, "w") as handle:
-                handle.write(CACHEDIR)
+            Path(tagfile).write_text(CACHEDIR, encoding="utf-8")
 
 
 def run_borg(cmd: list[str], env: dict[str, str] | None = None) -> str:
@@ -88,14 +96,15 @@ def run_borg(cmd: list[str], env: dict[str, str] | None = None) -> str:
                 text=True,
             )
         except OSError as error:
-            report_error()
-            raise BackupError(f"Could not execute borg program: {error}") from error
+            report_error("Borg could not be executed")
+            msg = f"Could not execute borg program: {error}"
+            raise BackupError(msg) from error
         except subprocess.CalledProcessError as error:
             add_breadcrumb(
                 category="backup", message="borg output", stdout=error.stdout
             )
-            report_error()
-            raise BackupError(error.stdout) from error
+            report_error("Borg failed")
+            raise BackupError(cleanup_error_message(error.stdout)) from error
 
 
 def initialize(location: str, passphrase: str) -> str:
@@ -152,6 +161,8 @@ def prune(location: str, passphrase: str) -> str:
         [
             "prune",
             "--list",
+            "--keep-within",
+            "2d",
             "--keep-daily",
             "14",
             "--keep-weekly",

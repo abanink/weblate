@@ -15,8 +15,7 @@ from weblate.auth.models import User
 from weblate.trans.tests.test_views import FixtureTestCase
 
 TEST_URL = (
-    "https://www.gravatar.com/avatar/"
-    "55502f40dc8b7c769880b10874abc9d0?d=identicon&s=32"
+    "https://www.gravatar.com/avatar/55502f40dc8b7c769880b10874abc9d0?d=identicon&s=32"
 )
 
 
@@ -68,7 +67,10 @@ class AvatarTest(FixtureTestCase):
             reverse("user_avatar", kwargs={"user": anonymous.username, "size": 32})
         )
         self.assertRedirects(
-            response, "/static/weblate-32.png", fetch_redirect_response=False
+            response,
+            "/static/weblate-32.png",
+            fetch_redirect_response=False,
+            status_code=301,
         )
 
     def test_fallback_avatar(self) -> None:

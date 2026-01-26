@@ -2,6 +2,11 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
+from collections import UserString
+from typing import TYPE_CHECKING
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.template import Context, Engine, Template, TemplateSyntaxError
@@ -12,16 +17,17 @@ from django.utils.translation import gettext, override
 from weblate.utils.site import get_site_url
 from weblate.utils.validators import WeblateEditorURLValidator, WeblateURLValidator
 
+if TYPE_CHECKING:
+    from django.core.validators import URLValidator
 
-class InvalidString(str):
-    __slots__ = ()
 
-    def __mod__(self, other):
+class InvalidString(UserString):
+    def __mod__(self, other: str):
         raise TemplateSyntaxError(gettext('Undefined variable: "%s"') % other)
 
 
 class RestrictedEngine(Engine):
-    default_builtins = [
+    default_builtins: list[str] = [  # noqa: RUF012
         "django.template.defaultfilters",
         "weblate.utils.templatetags.safe_render",
     ]
@@ -32,7 +38,7 @@ class RestrictedEngine(Engine):
         super().__init__(*args, **kwargs)
 
 
-def render_template(template, **kwargs):
+def render_template(template: str, **kwargs):
     """Render string template with Weblate context."""
     from weblate.trans.models import Component, Project, Translation
 
@@ -73,8 +79,8 @@ def render_template(template, **kwargs):
             )
         )
         if component.pk:
-            kwargs["component_linked_childs"] = SimpleLazyObject(
-                component.get_linked_childs_for_template
+            kwargs["component_linked_children"] = SimpleLazyObject(
+                component.get_linked_children_for_template
             )
         project = component.project
         kwargs.pop("component", None)
@@ -95,7 +101,7 @@ def render_template(template, **kwargs):
         )
 
 
-def validate_render(value, **kwargs) -> str:
+def validate_render(value: str, **kwargs) -> str:
     """Validate rendered template."""
     try:
         return render_template(value, **kwargs)
@@ -105,7 +111,7 @@ def validate_render(value, **kwargs) -> str:
         ) from err
 
 
-def validate_render_component(value, translation: bool = False, **kwargs) -> str:
+def validate_render_mock(value: str, *, translation: bool = False, **kwargs) -> str:
     from weblate.lang.models import Language
     from weblate.trans.models import Component, Project, Translation
     from weblate.utils.stats import DummyTranslationStats
@@ -135,12 +141,20 @@ def validate_render_component(value, translation: bool = False, **kwargs) -> str
     return validate_render(value, **kwargs)
 
 
-def validate_render_addon(value) -> None:
-    validate_render_component(value, hook_name="addon", addon_name="addon")
+def validate_render_translation(value: str) -> None:
+    validate_render_mock(value, translation=True)
 
 
-def validate_render_commit(value) -> None:
-    validate_render_component(value, translation=True, author="author")
+def validate_render_component(value: str) -> None:
+    validate_render_mock(value)
+
+
+def validate_render_addon(value: str) -> None:
+    validate_render_mock(value, hook_name="addon", addon_name="addon")
+
+
+def validate_render_commit(value: str) -> None:
+    validate_render_mock(value, translation=True, author="author")
 
 
 def validate_repoweb(val: str, allow_editor: bool = False) -> None:
@@ -156,11 +170,12 @@ def validate_repoweb(val: str, allow_editor: bool = False) -> None:
                 "please use the template language instead."
             )
         )
-    url = validate_render_component(val, filename="file.po", line=9, branch="main")
+    url = validate_render_mock(val, filename="file.po", line=9, branch="main")
 
+    validator: URLValidator
     if (
         allow_editor
-        and val.split("://")[0].lower() in WeblateEditorURLValidator.schemes
+        and val.split("://", 1)[0].lower() in WeblateEditorURLValidator.schemes
     ):
         validator = WeblateEditorURLValidator()
     else:
@@ -178,14 +193,3 @@ def validate_editor(val: str) -> None:
     if not val:
         return
     validate_repoweb(val, allow_editor=True)
-
-
-def migrate_repoweb(val):
-    return val % {
-        "file": "{{filename}}",
-        "../file": "{{filename|parentdir}}",
-        "../../file": "{{filename|parentdir|parentdir}}",
-        "../../../file": "{{filename|parentdir|parentdir}}",
-        "line": "{{line}}",
-        "branch": "{{branch}}",
-    }

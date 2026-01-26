@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
 import re
+from typing import TYPE_CHECKING
 
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Field, Layout
@@ -10,19 +13,38 @@ from django import forms
 from django.http import QueryDict
 from django.utils.functional import cached_property
 from django.utils.translation import gettext, gettext_lazy
+from fedora_messaging.exceptions import ConfigurationException
 from lxml.cssselect import CSSSelector
 
 from weblate.formats.models import FILE_FORMATS
+from weblate.trans.actions import ActionEvents
 from weblate.trans.discovery import ComponentDiscovery
 from weblate.trans.forms import AutoForm, BulkEditForm
 from weblate.trans.models import Translation
-from weblate.utils.forms import CachedModelChoiceField, ContextDiv
-from weblate.utils.render import validate_render, validate_render_component
-from weblate.utils.validators import validate_filename, validate_re
+from weblate.utils.forms import (
+    CachedModelChoiceField,
+    ContextDiv,
+    SortedSelectMultiple,
+    WeblateServiceURLField,
+)
+from weblate.utils.render import validate_render, validate_render_translation
+from weblate.utils.validators import (
+    DomainOrIPValidator,
+    validate_filename,
+    validate_re,
+    validate_re_nonempty,
+    validate_webhook_secret_string,
+)
+
+if TYPE_CHECKING:
+    from weblate.auth.models import User
+    from weblate.trans.models import Component, Project
 
 
 class BaseAddonForm(forms.Form):
-    def __init__(self, user, addon, instance=None, *args, **kwargs) -> None:
+    def __init__(
+        self, user: User | None, addon, instance=None, *args, **kwargs
+    ) -> None:
         self._addon = addon
         self.user = user
         forms.Form.__init__(self, *args, **kwargs)
@@ -64,7 +86,7 @@ class GenerateMoForm(BaseAddonForm):
         )
 
     def test_render(self, value) -> None:
-        validate_render_component(value, translation=True)
+        validate_render_translation(value)
 
     def clean_path(self):
         self.test_render(self.cleaned_data["path"])
@@ -94,7 +116,7 @@ class GenerateForm(BaseAddonForm):
         )
 
     def test_render(self, value) -> None:
-        validate_render_component(value, translation=True)
+        validate_render_translation(value)
 
     def clean_filename(self):
         self.test_render(self.cleaned_data["filename"])
@@ -104,47 +126,6 @@ class GenerateForm(BaseAddonForm):
     def clean_template(self):
         self.test_render(self.cleaned_data["template"])
         return self.cleaned_data["template"]
-
-
-class GettextCustomizeForm(BaseAddonForm):
-    width = forms.ChoiceField(
-        label=gettext_lazy("Long lines wrapping"),
-        choices=[
-            (
-                77,
-                gettext_lazy(
-                    "Wrap lines at 77 characters and at newlines (xgettext default)"
-                ),
-            ),
-            (
-                65535,
-                gettext_lazy("Only wrap lines at newlines (like 'xgettext --no-wrap')"),
-            ),
-            (-1, gettext_lazy("No line wrapping")),
-        ],
-        required=True,
-        initial=77,
-        help_text=gettext_lazy(
-            "By default gettext wraps lines at 77 characters and at newlines. "
-            "With the --no-wrap parameter, wrapping is only done at newlines."
-        ),
-    )
-
-
-class MsgmergeForm(BaseAddonForm):
-    previous = forms.BooleanField(
-        label=gettext_lazy("Keep previous msgids of translated strings"),
-        required=False,
-        initial=True,
-    )
-    no_location = forms.BooleanField(
-        label=gettext_lazy("Remove locations of translated strings"),
-        required=False,
-        initial=False,
-    )
-    fuzzy = forms.BooleanField(
-        label=gettext_lazy("Use fuzzy matching"), required=False, initial=True
-    )
 
 
 class GitSquashForm(BaseAddonForm):
@@ -189,64 +170,6 @@ class GitSquashForm(BaseAddonForm):
             Field("commit_message"),
             ContextDiv(template="addons/squash_help.html", context={"user": self.user}),
         )
-
-
-class JSONCustomizeForm(BaseAddonForm):
-    sort_keys = forms.BooleanField(label=gettext_lazy("Sort JSON keys"), required=False)
-    indent = forms.IntegerField(
-        label=gettext_lazy("JSON indentation"), min_value=0, initial=4, required=True
-    )
-    style = forms.ChoiceField(
-        label=gettext_lazy("JSON indentation style"),
-        choices=[
-            ("spaces", gettext_lazy("Spaces")),
-            ("tabs", gettext_lazy("Tabs")),
-        ],
-        required=True,
-        initial="space",
-    )
-
-
-class XMLCustomizeForm(BaseAddonForm):
-    """Class defining user Form to configure XML Formatting AddOn."""
-
-    closing_tags = forms.BooleanField(
-        label=gettext_lazy("Include closing tag for blank XML tags"),
-        required=False,
-        initial=True,
-    )
-
-
-class YAMLCustomizeForm(BaseAddonForm):
-    indent = forms.IntegerField(
-        label=gettext_lazy("YAML indentation"),
-        min_value=1,
-        max_value=10,
-        initial=2,
-        required=True,
-    )
-    width = forms.ChoiceField(
-        label=gettext_lazy("Long lines wrapping"),
-        choices=[
-            ("80", gettext_lazy("Wrap lines at 80 chars")),
-            ("100", gettext_lazy("Wrap lines at 100 chars")),
-            ("120", gettext_lazy("Wrap lines at 120 chars")),
-            ("180", gettext_lazy("Wrap lines at 180 chars")),
-            ("65535", gettext_lazy("No line wrapping")),
-        ],
-        required=True,
-        initial=80,
-    )
-    line_break = forms.ChoiceField(
-        label=gettext_lazy("Line breaks"),
-        choices=[
-            ("dos", gettext_lazy("DOS (\\r\\n)")),
-            ("unix", gettext_lazy("UNIX (\\n)")),
-            ("mac", gettext_lazy("MAC (\\r)")),
-        ],
-        required=True,
-        initial="unix",
-    )
 
 
 class RemoveForm(BaseAddonForm):
@@ -312,7 +235,7 @@ class DiscoveryForm(BaseAddonForm):
         label=gettext_lazy("Language filter"),
         max_length=200,
         initial="^[^.]+$",
-        validators=[validate_re],
+        validators=[validate_re_nonempty],
         help_text=gettext_lazy(
             "Regular expression to filter "
             "translation files against when scanning for file mask."
@@ -454,7 +377,7 @@ class DiscoveryForm(BaseAddonForm):
 
 
 class AutoAddonForm(BaseAddonForm, AutoForm):
-    def __init__(self, user, addon, instance=None, **kwargs) -> None:
+    def __init__(self, user: User, addon, instance=None, **kwargs) -> None:
         BaseAddonForm.__init__(self, user, addon)
         AutoForm.__init__(
             self, obj=addon.instance.component or addon.instance.project, **kwargs
@@ -462,13 +385,19 @@ class AutoAddonForm(BaseAddonForm, AutoForm):
 
 
 class BulkEditAddonForm(BaseAddonForm, BulkEditForm):
-    def __init__(self, user, addon, instance=None, **kwargs) -> None:
+    def __init__(self, user: User | None, addon, instance=None, **kwargs) -> None:
         BaseAddonForm.__init__(self, user, addon)
-        component = addon.instance.component
+        obj: Project | Component | None = None
+        project: Project | None = None
+        if addon.instance.component:
+            obj = addon.instance.component
+            project = addon.instance.component.project
+        elif addon.instance.project:
+            obj = project = addon.instance.project
         BulkEditForm.__init__(
             self,
-            obj=component,
-            project=component.project if component else None,
+            obj=obj,
+            project=project,
             user=None,
             **kwargs,
         )
@@ -490,7 +419,9 @@ class CDNJSForm(BaseAddonForm):
         max_value=100,
         min_value=0,
         required=True,
-        help_text=gettext_lazy("Threshold for inclusion of translations."),
+        help_text=gettext_lazy(
+            "The percentage of translated strings that must be present for translation to be included."
+        ),
     )
     css_selector = forms.CharField(
         label=gettext_lazy("CSS selector"),
@@ -539,7 +470,7 @@ class CDNJSForm(BaseAddonForm):
         except Exception as error:
             raise forms.ValidationError(
                 gettext("Could not parse CSS selector: %s") % error
-            )
+            ) from error
         return self.cleaned_data["css_selector"]
 
 
@@ -562,31 +493,31 @@ class PseudolocaleAddonForm(BaseAddonForm):
     )
     # This shadows prefix from the Form class
     prefix = forms.CharField(  # type: ignore[assignment]
-        label=gettext_lazy("Fixed string prefix"),
+        label=gettext_lazy("Prepended static text"),
         required=False,
         initial="",
     )
     var_prefix = forms.CharField(
-        label=gettext_lazy("Variable string prefix"),
+        label=gettext_lazy("Prepended variable text"),
         required=False,
         initial="",
     )
     suffix = forms.CharField(
-        label=gettext_lazy("Fixed string suffix"),
+        label=gettext_lazy("Appended static text"),
         required=False,
         initial="",
     )
     var_suffix = forms.CharField(
-        label=gettext_lazy("Variable string suffix"),
+        label=gettext_lazy("Appended variable text"),
         required=False,
         initial="",
     )
     var_multiplier = forms.FloatField(
-        label=gettext_lazy("Variable part multiplier"),
+        label=gettext_lazy("Variable text multiplier"),
         required=False,
         initial=0.1,
         help_text=gettext_lazy(
-            "How many times to repeat the variable part depending on "
+            "How many times to repeat the variable text depending on "
             "the length of the source string."
         ),
     )
@@ -630,3 +561,135 @@ class PseudolocaleAddonForm(BaseAddonForm):
         result["source"] = result["source"].pk
         result["target"] = result["target"].pk
         return result
+
+
+class PropertiesSortAddonForm(BaseAddonForm):
+    case_sensitive = forms.BooleanField(
+        label=gettext_lazy("Enable case-sensitive key sorting"),
+        required=False,
+        initial=False,
+    )
+
+
+class ChangeBaseAddonForm(BaseAddonForm):
+    """Base form for Change-based addons."""
+
+    events = forms.MultipleChoiceField(
+        label=gettext_lazy("Change events"),
+        required=False,
+        widget=SortedSelectMultiple(),
+        choices=ActionEvents.choices,
+    )
+
+
+class BaseWebhooksAddonForm(ChangeBaseAddonForm):
+    """Form for webhook add-on configuration."""
+
+    webhook_url = WeblateServiceURLField(
+        label=gettext_lazy("Webhook URL"),
+        required=True,
+    )
+
+    field_order = [  # noqa: RUF012
+        "webhook_url",
+        "events",
+    ]
+
+
+class WebhooksAddonForm(BaseWebhooksAddonForm):
+    """Form for webhook add-on configuration."""
+
+    secret = forms.CharField(
+        label=gettext_lazy("Webhook secret"),
+        validators=[
+            validate_webhook_secret_string,
+        ],
+        required=False,
+        help_text=gettext_lazy(
+            "The Standard Webhooks secret is a base64 encoded string."
+        ),
+    )
+
+    field_order = [  # noqa: RUF012
+        "webhook_url",
+        "secret",
+        "events",
+    ]
+
+
+class FedoraMessagingAddonForm(ChangeBaseAddonForm):
+    amqp_host = forms.CharField(
+        label=gettext_lazy("AMQP broker host"),
+        help_text=gettext_lazy("The AMQP broker to connect to."),
+        validators=[DomainOrIPValidator()],
+    )
+    amqp_ssl = forms.BooleanField(
+        label=gettext_lazy("Use SSL for AMQP connection"),
+        required=False,
+    )
+    ca_cert = forms.CharField(
+        widget=forms.Textarea(),
+        label=gettext_lazy("CA certificates"),
+        help_text=gettext_lazy(
+            "Bundle of PEM encoded CA certificates used to validate the certificate presented by the server."
+        ),
+        required=False,
+    )
+    client_key = forms.CharField(
+        widget=forms.Textarea(),
+        label=gettext_lazy("Client SSL key"),
+        help_text=gettext_lazy("PEM encoded client private SSL key."),
+        required=False,
+    )
+
+    client_cert = forms.CharField(
+        widget=forms.Textarea(),
+        label=gettext_lazy("Client SSL certificates"),
+        help_text=gettext_lazy("PEM encoded client SSL certificate."),
+        required=False,
+    )
+
+    def clean(self) -> None:
+        from .fedora_messaging import FedoraMessagingAddon
+
+        amqp_ssl = self.cleaned_data.get("amqp_ssl")
+        if amqp_ssl is not None:
+            if amqp_ssl:
+                if (
+                    not self.cleaned_data.get("ca_cert")
+                    or not self.cleaned_data.get("client_key")
+                    or not self.cleaned_data.get("client_cert")
+                ):
+                    raise forms.ValidationError(
+                        {
+                            "amqp_ssl": gettext(
+                                "The SSL certificates have to be provided for SSL connection."
+                            )
+                        }
+                    )
+
+            elif (
+                self.cleaned_data.get("ca_cert")
+                or self.cleaned_data.get("client_key")
+                or self.cleaned_data.get("client_cert")
+            ):
+                raise forms.ValidationError(
+                    {
+                        "amqp_ssl": gettext(
+                            "The SSL certificates are not used without a SSL connection."
+                        )
+                    }
+                )
+
+        if amqp_host := self.cleaned_data.get("amqp_host"):
+            try:
+                FedoraMessagingAddon.configure_fedora_messaging(
+                    amqp_host=amqp_host,
+                    amqp_ssl=self.cleaned_data.get("amqp_ssl", False),
+                    ca_cert=self.cleaned_data.get("ca_cert"),
+                    client_key=self.cleaned_data.get("client_key"),
+                    client_cert=self.cleaned_data.get("client_cert"),
+                    force_update=True,
+                )
+            except ConfigurationException as error:
+                raise forms.ValidationError(error.message) from error

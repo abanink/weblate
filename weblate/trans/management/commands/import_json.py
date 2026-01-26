@@ -1,9 +1,11 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
-import argparse
 import json
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from django.core.exceptions import ValidationError
 from django.core.management.base import CommandError
@@ -12,13 +14,16 @@ from django.utils.text import slugify
 from weblate.trans.models import Component, Project
 from weblate.utils.management.base import BaseCommand
 
+if TYPE_CHECKING:
+    from django.core.management.base import CommandParser
+
 
 class Command(BaseCommand):
     """Command for mass importing of repositories into Weblate based on JSON data."""
 
     help = "imports projects based on JSON data"
 
-    def add_arguments(self, parser) -> None:
+    def add_arguments(self, parser: CommandParser) -> None:
         super().add_arguments(parser)
         parser.add_argument(
             "--project", default=None, required=True, help="Project where to operate"
@@ -42,7 +47,7 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "json-file",
-            type=argparse.FileType("r"),
+            type=Path,
             help="JSON file containing component definition",
         )
 
@@ -51,8 +56,9 @@ class Command(BaseCommand):
         # Get project
         try:
             project = Project.objects.get(slug=options["project"])
-        except Project.DoesNotExist:
-            raise CommandError("Project does not exist!")
+        except Project.DoesNotExist as error:
+            msg = "Project does not exist!"
+            raise CommandError(msg) from error
 
         # Get main component
         main_component = None
@@ -61,19 +67,23 @@ class Command(BaseCommand):
                 main_component = Component.objects.get(
                     project=project, slug=options["main_component"]
                 )
-            except Component.DoesNotExist:
-                raise CommandError("Main component does not exist!")
-
+            except Component.DoesNotExist as error:
+                msg = "Main component does not exist!"
+                raise CommandError(msg) from error
         try:
-            data = json.load(options["json-file"])
-        except ValueError:
-            raise CommandError("Could not parse JSON file!")
-        finally:
-            options["json-file"].close()
+            with options["json-file"].open("r") as handle:
+                try:
+                    data = json.load(handle)
+                except json.JSONDecodeError as error:
+                    msg = "Could not parse JSON file!"
+                    raise CommandError(msg) from error
+        except OSError as error:
+            msg = f"Could not open file: {error}"
+            raise CommandError(msg) from error
 
         allfields = {
             field.name
-            for field in Component._meta.get_fields()
+            for field in Component._meta.get_fields()  # noqa: SLF001
             if field.editable and not field.is_relation
         }
 
@@ -83,14 +93,16 @@ class Command(BaseCommand):
 
         for item in data:
             if "filemask" not in item or "name" not in item:
-                raise CommandError("Missing required fields in JSON!")
+                msg = "Missing required fields in JSON!"
+                raise CommandError(msg)
 
             if "slug" not in item:
                 item["slug"] = slugify(item["name"])
 
             if "repo" not in item:
                 if main_component is None:
-                    raise CommandError("No main component and no repository URL!")
+                    msg = "No main component and no repository URL!"
+                    raise CommandError(msg)
                 item["repo"] = main_component.get_repo_link_url()
 
             try:
@@ -102,10 +114,9 @@ class Command(BaseCommand):
                     component.full_clean()
                 except ValidationError as error:
                     for key, value in error.message_dict.items():
-                        self.stderr.write(
-                            "Error in {}: {}".format(key, ", ".join(value))
-                        )
-                    raise CommandError("Component failed validation!")
+                        self.stderr.write(f"Error in {key}: {', '.join(value)}")
+                    msg = "Component failed validation!"
+                    raise CommandError(msg) from error
                 component.save(force_insert=True)
                 self.stdout.write(
                     f"Imported {component} with {component.translation_set.count()} translations"
@@ -121,6 +132,5 @@ class Command(BaseCommand):
                         setattr(component, key, item[key])
                     component.save()
                     continue
-                raise CommandError(
-                    "Component already exists, use --ignore or --update!"
-                )
+                msg = "Component already exists, use --ignore or --update!"
+                raise CommandError(msg)

@@ -2,9 +2,11 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
 
 from celery.schedules import crontab
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from weblate.utils.celery import app
@@ -13,9 +15,9 @@ from weblate.wladmin.models import BackupService, SupportStatus
 
 
 @app.task(trail=False)
+@transaction.atomic
 def support_status_update() -> None:
-    support = SupportStatus.objects.get_current()
-    if support.secret:
+    for support in SupportStatus.objects.filter(enabled=True).select_for_update():
         support.refresh()
         support.save()
 
@@ -27,8 +29,12 @@ def backup() -> None:
 
 
 @app.task(trail=False, autoretry_for=(WeblateLockTimeoutError,))
-def backup_service(pk) -> None:
-    service = BackupService.objects.get(pk=pk)
+def backup_service(pk: int) -> None:
+    try:
+        service = BackupService.objects.get(pk=pk)
+    except BackupService.DoesNotExist:
+        # The service was removed meanwhile
+        return
     service.ensure_init()
     service.backup()
     service.prune()

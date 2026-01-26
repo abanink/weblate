@@ -1,12 +1,24 @@
 # Copyright © AlexEbenrode <alexebenrode@gmail.com>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 from urllib.parse import unquote_plus
 
-from .base import DownloadTranslations, MachineTranslation, MachineTranslationError
+from requests.exceptions import RequestException
+
+from .base import MachineTranslation, MachineTranslationError
 from .forms import KeyMachineryForm
+
+if TYPE_CHECKING:
+    from requests import Response
+
+    from weblate.auth.models import User
+    from weblate.trans.models import Unit
+
+    from .base import DownloadTranslations
 
 
 class YandexV2Translation(MachineTranslation):
@@ -16,13 +28,14 @@ class YandexV2Translation(MachineTranslation):
     max_score = 90
     settings_form = KeyMachineryForm
 
-    def check_failure(self, response) -> None:
+    def check_failure(self, response: Response) -> None:
         super().check_failure(response)
         payload = response.json()
         if "message" in payload:
             raise MachineTranslationError(payload["message"])
         if "code" in payload and payload["code"] != 200:
-            raise MachineTranslationError("Error: {}".format(payload["code"]))
+            msg = f"Error: {payload['code']}"
+            raise MachineTranslationError(msg)
 
     def download_languages(self):
         """Download list of supported languages from a service."""
@@ -38,11 +51,11 @@ class YandexV2Translation(MachineTranslation):
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
-        unit,
-        user,
+        unit: Unit | None,
+        user: User | None,
         threshold: int = 75,
     ) -> DownloadTranslations:
         """Download list of possible translations from a service."""
@@ -52,8 +65,8 @@ class YandexV2Translation(MachineTranslation):
             "https://translate.api.cloud.yandex.net/translate/v2/translate",
             params={
                 "texts": text,
-                "sourceLanguageCode": source,
-                "targetLanguageCode": language,
+                "sourceLanguageCode": source_language,
+                "targetLanguageCode": target_language,
             },
             headers={"Authorization": f"Api-Key {key}"},
         )
@@ -67,8 +80,10 @@ class YandexV2Translation(MachineTranslation):
                 "source": text,
             }
 
-    def get_error_message(self, exc):
-        try:
-            return exc.response.json()["message"]
-        except Exception:
-            return super().get_error_message(exc)
+    def get_error_message(self, exc: Exception) -> str:
+        if isinstance(exc, RequestException):
+            try:
+                return exc.response.json()["message"]
+            except Exception:  # noqa: S110
+                pass
+        return super().get_error_message(exc)

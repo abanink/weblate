@@ -2,17 +2,26 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
 import re
+import threading
+from typing import TYPE_CHECKING
 
 from pyparsing import Optional, QuotedString, Regex, ZeroOrMore
+
+if TYPE_CHECKING:
+    from pyparsing import ParserElement
 
 
 def single_value_flag(func, validation=None):
     def parse_values(val):
         if not val:
-            raise ValueError("Missing required parameter")
+            msg = "Missing required parameter"
+            raise ValueError(msg)
         if len(val) > 1:
-            raise ValueError("Too many parameters")
+            msg = "Too many parameters"
+            raise ValueError(msg)
         result = func(val[0])
         if validation is not None:
             validation(result)
@@ -24,26 +33,32 @@ def single_value_flag(func, validation=None):
 def length_validation(length: int):
     def validate_length(val) -> None:
         if len(val) > length:
-            raise ValueError("String too long")
+            msg = "String too long"
+            raise ValueError(msg)
 
     return validate_length
 
 
-def multi_value_flag(func, minimum=1, maximum=None, modulo=None):
+def multi_value_flag(
+    func, minimum: int = 1, maximum: int | None = None, modulo: int | None = None
+):
     def parse_values(val):
         if modulo and len(val) % modulo != 0:
-            raise ValueError("Number of parameter is not even")
+            msg = "Number of parameter is not even"
+            raise ValueError(msg)
         if minimum and len(val) < minimum:
-            raise ValueError("Missing required parameter")
+            msg = "Missing required parameter"
+            raise ValueError(msg)
         if maximum and len(val) > maximum:
-            raise ValueError("Too many parameters")
+            msg = "Too many parameters"
+            raise ValueError(msg)
         return [func(x) for x in val]
 
     return parse_values
 
 
 class RawQuotedString(QuotedString):
-    def __init__(self, quote_char, esc_char="\\") -> None:
+    def __init__(self, quote_char: str, esc_char: str = "\\") -> None:
         super().__init__(quote_char, esc_char=esc_char, convert_whitespace_escapes=True)
         # unlike the QuotedString this replaces only escaped quotes and not all chars
         self.unquote_scan_re = re.compile(
@@ -54,14 +69,20 @@ class RawQuotedString(QuotedString):
 
 SYNTAXCHARS = {",", ":", '"', "'", "\\"}
 
-FlagName = Regex(r"""[^,:"' \r\n\t]([^,:"']*[^,:"' \r\n\t])?""")
 
-RegexString = "r" + RawQuotedString('"')
+def get_flags_parser() -> ParserElement:
+    flag_name = Regex(r"""[^,:"' \r\n\t]([^,:"']*[^,:"' \r\n\t])?""")
 
-FlagParam = Optional(
-    RegexString | FlagName | RawQuotedString("'") | RawQuotedString('"')
-)
+    regex_string = "r" + RawQuotedString('"')
 
-Flag = FlagName + ZeroOrMore(":" + FlagParam)
+    flag_param = Optional(
+        regex_string | flag_name | RawQuotedString("'") | RawQuotedString('"')
+    )
 
-FlagsParser = Optional(Flag) + ZeroOrMore("," + Optional(Flag))
+    flag = flag_name + ZeroOrMore(":" + flag_param)
+
+    return Optional(flag) + ZeroOrMore("," + Optional(flag))
+
+
+FLAGS_PARSER: ParserElement = get_flags_parser()
+FLAGS_PARSER_LOCK = threading.Lock()

@@ -1,36 +1,42 @@
 {% extends "base.html" %}
-{% load i18n %}
-{% load translations %}
-{% load permissions %}
-{% load crispy_forms_tags %}
-{% load humanize %}
-{% load icons %}
+
+{% load crispy_forms_tags humanize i18n icons permissions translations %}
 
 {% block breadcrumbs %}
-{% if project %}
-<li><a href="{{ project.get_absolute_url }}">{{ project }}</a></li>
-<li><a href="{% url 'machinery-list' project=project.slug %}">{% trans "Automatic suggestions" %}</a></li>
-<li><a href="{% url 'machinery-edit' project=project.slug machinery=machinery_id %}">{{ machinery_name }}</a></li>
-{% else %}
-<li><a href="{% url 'manage' %}">{% trans "Manage" %}</a></li>
-<li><a href="{% url 'manage-machinery' %}">{% trans "Automatic suggestions" %}</a></li>
-{% endif %}
-{% endblock %}
+  {% if project %}
+    <li class="breadcrumb-item">
+      <a href="{{ project.get_absolute_url }}">{{ project }}</a>
+    </li>
+    <li class="breadcrumb-item">
+      <a href="{% url 'machinery-list' project=project.slug %}">{% translate "Automatic suggestions" %}</a>
+    </li>
+    <li class="breadcrumb-item">
+      <a href="{% url 'machinery-edit' project=project.slug machinery=machinery_id %}">{{ machinery_name }}</a>
+    </li>
+  {% else %}
+    <li class="breadcrumb-item">
+      <a href="{% url 'manage' %}">{% translate "Manage" %}</a>
+    </li>
+    <li class="breadcrumb-item">
+      <a href="{% url 'manage-machinery' %}">{% translate "Automatic suggestions" %}</a>
+    </li>
+  {% endif %}
+{% endblock breadcrumbs %}
 
 {% block content %}
-<form method="post">
-<div class="panel panel-default">
-  <div class="panel-heading"><h4 class="panel-title">
-    {% documentation_icon 'admin/machine' machinery_doc_anchor right=True %}
-    {{ machinery_name }}
-  </h4></div>
-  <div class="panel-body">
-  {% crispy form %}
-  </div>
-  <div class="panel-footer">
-  <input type="submit" value="{% trans "Save" %}" class="btn btn-primary" />
-  </div>
-</div>
-</form>
+  <form method="post">
+    <div class="card">
+      <div class="card-header">
+        <h4 class="card-title">
+          {% documentation_icon 'admin/machine' machinery_doc_anchor right=True %}
+          {{ machinery_name }}
+        </h4>
+      </div>
+      <div class="card-body">{% crispy form %}</div>
+      <div class="card-footer">
+        <input type="submit" value="{% translate "Save" %}" class="btn btn-primary" />
+      </div>
+    </div>
+  </form>
 
-{% endblock %}
+{% endblock content %}

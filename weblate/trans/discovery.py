@@ -1,23 +1,28 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
 import os
 import re
 from itertools import chain
+from typing import TYPE_CHECKING
 
 from django.core.exceptions import ValidationError
-from django.db.models import Q
 from django.utils.functional import cached_property
 from django.utils.text import slugify
 from django.utils.translation import gettext
 
+from weblate.formats.models import FILE_FORMATS
 from weblate.logger import LOGGER
 from weblate.trans.defines import COMPONENT_NAME_LENGTH
 from weblate.trans.models import Component
 from weblate.trans.tasks import create_component
 from weblate.trans.util import path_separator
 from weblate.utils.render import render_template
+
+if TYPE_CHECKING:
+    from weblate.formats.base import TranslationFormat
 
 # Attributes to copy from main component
 COPY_ATTRIBUTES = (
@@ -46,6 +51,8 @@ COPY_ATTRIBUTES = (
     "manage_units",
     "variant_regex",
     "category_id",
+    "key_filter",
+    "secondary_language",
 )
 
 
@@ -78,6 +85,10 @@ class ComponentDiscovery:
         self.language_match = re.compile(language_regex)
         self.file_format = file_format
         self.copy_addons = copy_addons
+
+    @cached_property
+    def file_format_cls(self) -> type[TranslationFormat]:
+        return FILE_FORMATS[self.file_format]
 
     @staticmethod
     def extract_kwargs(params):
@@ -187,7 +198,17 @@ class ComponentDiscovery:
         else:
             LOGGER.info(*args)
 
-    def create_component(self, main, match, background=False, preview=False, **kwargs):
+    def create_component(
+        self,
+        main: Component | None,
+        match,
+        *,
+        background: bool = False,
+        preview: bool = False,
+        existing_slugs: set[str],
+        existing_names: set[str],
+        **kwargs,
+    ):
         max_length = COMPONENT_NAME_LENGTH
 
         def get_val(key, extra=0):
@@ -204,16 +225,22 @@ class ComponentDiscovery:
         for key in COPY_ATTRIBUTES:
             if key not in kwargs and main is not None:
                 kwargs[key] = getattr(main, key)
+        # Copy file format parameters if the format is same
+        if main is not None and self.file_format == main.file_format:
+            kwargs["file_format_params"] = main.file_format_params
+
+        # Disable template editing if not supported by format
+        if not self.file_format_cls.can_edit_base:
+            kwargs["edit_template"] = False
 
         # Fill in repository
         if "repo" not in kwargs:
+            if main is None:
+                raise ValueError
             kwargs["repo"] = main.get_repo_link_url()
 
         # Deal with duplicate name or slug in the same (or none) category
-        components = kwargs["project"].component_set.filter(
-            category=main.category if main is not None else None
-        )
-        if components.filter(Q(slug__iexact=slug) | Q(name__iexact=name)).exists():
+        if slug.lower() in existing_slugs or name.lower() in existing_names:
             base_name = get_val("name", 4)
             base_slug = get_val("slug", 4)
 
@@ -221,11 +248,11 @@ class ComponentDiscovery:
                 name = f"{base_name} {i}"
                 slug = f"{base_slug}-{i}"
 
-                if components.filter(
-                    Q(slug__iexact=slug) | Q(name__iexact=name)
-                ).exists():
+                if slug.lower() in existing_slugs or name.lower() in existing_names:
                     continue
                 break
+        existing_slugs.add(slug.lower())
+        existing_names.add(name.lower())
 
         # Fill in remaining attributes
         kwargs.update(
@@ -260,10 +287,10 @@ class ComponentDiscovery:
         # This might raise an exception
         component.full_clean()
 
-        self.log("Creating component %s", name)
-
         if preview:
             return component
+
+        self.log("Creating component %s", name)
 
         # Can't pass objects, pass only IDs
         kwargs["project"] = kwargs["project"].pk
@@ -275,7 +302,7 @@ class ComponentDiscovery:
 
     def cleanup(self, main, processed, preview=False):
         deleted = []
-        for component in main.linked_childs.exclude(pk__in=processed):
+        for component in main.linked_children.exclude(pk__in=processed):
             if component.has_template():
                 # Valid template?
                 if os.path.exists(component.get_template_filename()):
@@ -320,6 +347,16 @@ class ComponentDiscovery:
         processed = set()
 
         main = self.component
+        category_components = main.project.component_set.filter(category=main.category)
+        existing_children: dict[str, Component] = {
+            component.filemask: component for component in main.linked_children.all()
+        }
+        existing_slugs: set[str] = {
+            slug.lower() for slug in category_components.values_list("slug", flat=True)
+        }
+        existing_names: set[str] = {
+            name.lower() for name in category_components.values_list("name", flat=True)
+        }
 
         for match in self.matched_components.values():
             # Skip invalid matches
@@ -329,22 +366,30 @@ class ComponentDiscovery:
                 continue
 
             try:
-                found = main.linked_childs.filter(filemask=match["mask"])[0]
-                # Component exists
-                matched.append((match, found))
-                processed.add(found.id)
-            except IndexError:
+                found = existing_children[match["mask"]]
+            except KeyError:
                 # Create new component
                 try:
                     component = self.create_component(
-                        main, match, background=background, preview=preview
+                        main,
+                        match,
+                        background=background,
+                        preview=preview,
+                        existing_slugs=existing_slugs,
+                        existing_names=existing_names,
                     )
                 except ValidationError as error:
                     skipped.append((match, str(error)))
                 else:
+                    # Correctly created
                     if component is not None and component.id:
                         processed.add(component.id)
                     created.append((match, component))
+                    existing_children[match["mask"]] = component
+            else:
+                # Component already exists
+                matched.append((match, found))
+                processed.add(found.id)
 
         if remove:
             deleted = self.cleanup(main, processed, preview)

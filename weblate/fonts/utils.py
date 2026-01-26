@@ -9,18 +9,21 @@ from __future__ import annotations
 import os
 from functools import cache, lru_cache
 from io import BytesIO
-from tempfile import NamedTemporaryFile
 from typing import NamedTuple
 
 import cairo
 import gi
-from django.conf import settings
 from django.core.cache import cache as django_cache
+from django.db.models.fields.files import FieldFile
 
-from weblate.utils.data import data_dir
+from weblate.utils.data import data_path
+from weblate.utils.hash import calculate_hash
+from weblate.utils.icons import find_static_file
 
 gi.require_version("PangoCairo", "1.0")
 gi.require_version("Pango", "1.0")
+
+# pylint: disable-next=wrong-import-position,wrong-import-order
 from gi.repository import Pango, PangoCairo  # noqa: E402
 
 
@@ -97,45 +100,49 @@ FONT_WEIGHTS = {
 @cache
 def configure_fontconfig() -> None:
     """Configure fontconfig to use custom configuration."""
-    fonts_dir = data_dir("fonts")
-    config_name = os.path.join(fonts_dir, "fonts.conf")
-
-    if not os.path.exists(fonts_dir):
-        os.makedirs(fonts_dir)
+    fonts_dir = data_path("fonts")
+    cache_dir = data_path("cache") / "fonts"
+    fonts_dir.mkdir(parents=True, exist_ok=True)
+    config_file = fonts_dir / "fonts.conf"
 
     # Generate the configuration
-    with open(config_name, "w") as handle:
-        handle.write(
-            FONTCONFIG_CONFIG.format(
-                data_dir("cache", "fonts"),
-                fonts_dir,
-                os.path.join(settings.STATIC_ROOT, "vendor", "font-source", "TTF"),
-                os.path.join(settings.STATIC_ROOT, "vendor", "font-kurinto"),
-            )
+    config_file.write_text(
+        FONTCONFIG_CONFIG.format(
+            cache_dir.as_posix(),
+            fonts_dir.as_posix(),
+            os.path.dirname(
+                find_static_file(
+                    "weblate_fonts/source-sans/ttf/SourceSans3-Regular.ttf"
+                )
+            ),
+            os.path.dirname(
+                find_static_file("weblate_fonts/kurinto/ttf/KurintoSans-Rg.ttf")
+            ),
         )
+    )
 
     # Inject into environment
-    os.environ["FONTCONFIG_FILE"] = config_name
+    os.environ["FONTCONFIG_FILE"] = config_file.as_posix()
 
 
-def get_font_weight(weight: str) -> int:
+def get_font_weight(weight: str) -> Pango.Weight | None:
     return FONT_WEIGHTS[weight]
 
 
-@lru_cache(maxsize=512)
-def render_size(
+@lru_cache(maxsize=32)
+def _render_size(
     text: str,
     *,
     font: str = "Kurinto Sans",
-    weight: int | None = Pango.Weight.NORMAL,
+    weight: int | Pango.Weight | None = Pango.Weight.NORMAL,
     size: int = 11,
     spacing: int = 0,
     width: int = 1000,
     lines: int = 1,
-    cache_key: str | None = None,
+    needs_output: bool = False,
     surface_height: int | None = None,
     surface_width: int | None = None,
-) -> tuple[Dimensions, int]:
+) -> tuple[Dimensions, int, bytes]:
     """Check whether rendered text fits."""
     configure_fontconfig()
 
@@ -172,12 +179,14 @@ def render_size(
 
     # Calculate dimensions
     line_count = layout.get_line_count()
-    pixel_size = layout.get_pixel_size()
+    pixel_size = Dimensions(*layout.get_pixel_size())
 
-    if cache_key:
+    buffer = b""
+
+    if needs_output:
         # Adjust surface dimensions if we're actually rendering
         if pixel_size.height > surface_height or pixel_size.width > surface_width:
-            return render_size(
+            return _render_size(
                 text,
                 font=font,
                 weight=weight,
@@ -185,7 +194,7 @@ def render_size(
                 spacing=spacing,
                 width=width,
                 lines=lines,
-                cache_key=cache_key,
+                needs_output=needs_output,
                 surface_height=pixel_size.height,
                 surface_width=pixel_size.width,
             )
@@ -226,9 +235,48 @@ def render_size(
 
         with BytesIO() as buff:
             surface.write_to_png(buff)
-            django_cache.set(cache_key, buff.getvalue())
+            buffer = buff.getvalue()
 
-    return pixel_size, line_count
+    return pixel_size, line_count, buffer
+
+
+def render_size(
+    text: str,
+    *,
+    font: str = "Kurinto Sans",
+    weight: int | None = Pango.Weight.NORMAL,
+    size: int = 11,
+    spacing: int = 0,
+    width: int = 1000,
+    lines: int = 1,
+    cache_key: str | None = None,
+    surface_height: int | None = None,
+    surface_width: int | None = None,
+    use_cache: bool = True,
+) -> tuple[Dimensions, int]:
+    render_cache_key = f"render:{calculate_hash(text)}:{calculate_hash(font)}:{int(weight) if weight is not None else ''}:{size}:{spacing}:{width}:{lines}:{cache_key}:{surface_height}:{surface_width}"
+    if use_cache:
+        cached: tuple[Dimensions, int] | None = django_cache.get(render_cache_key)
+        if cached and (cache_key is None or django_cache.get(cache_key)):
+            return cached
+    pixel_size, line_count, buffer = _render_size(
+        text,
+        font=font,
+        weight=weight,
+        size=size,
+        spacing=spacing,
+        width=width,
+        lines=lines,
+        needs_output=cache_key is not None,
+        surface_height=surface_height,
+        surface_width=surface_width,
+    )
+    if cache_key:
+        # Longer expiry for rendered results so that it can be recalculated
+        django_cache.set(cache_key, buffer, timeout=4200)
+    result = pixel_size, line_count
+    django_cache.set(render_cache_key, result, timeout=3600)
+    return result
 
 
 def check_render_size(
@@ -260,16 +308,10 @@ def get_font_name(filelike):
     """Return tuple of font family and style, for example ('Ubuntu', 'Regular')."""
     from PIL import ImageFont
 
+    # Form uploaded file
+    if isinstance(filelike, FieldFile):
+        filelike = filelike.file
+
     if not hasattr(filelike, "loaded_font"):
-        # The tempfile creation is workaround for Pillow crashing on invalid font
-        # see https://github.com/python-pillow/Pillow/issues/3853
-        # Once this is fixed, it should be possible to directly operate on filelike
-        temp = NamedTemporaryFile(delete=False)
-        try:
-            temp.write(filelike.read())
-            filelike.seek(0)
-            temp.close()
-            filelike.loaded_font = ImageFont.truetype(temp.name)
-        finally:
-            os.unlink(temp.name)
+        filelike.loaded_font = ImageFont.truetype(filelike)
     return filelike.loaded_font.getname()

@@ -5,11 +5,13 @@ Ruby YAML files
 
 .. index::
     pair: Ruby YAML; file format
-    pair: Ruby YAML Ain't Markup Language; file format
 
 Ruby i18n YAML files with language as root node.
 
-.. seealso:: :doc:`tt:formats/yaml`, :ref:`yaml`
+.. seealso::
+
+   * :doc:`tt:formats/yaml`
+   * :ref:`yaml`
 
 Example Ruby i18n YAML file:
 

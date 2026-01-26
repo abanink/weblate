@@ -22,7 +22,8 @@ class ModelTest(FixtureTestCase):
 
     def test_num_queries(self) -> None:
         with self.assertNumQueries(8):
-            self.user._fetch_permissions()
+            self.assertEqual(len(self.user.component_permissions), 0)
+            self.assertEqual(len(self.user.project_permissions), 2)
 
     def test_project(self) -> None:
         # No permissions
@@ -129,9 +130,33 @@ class ModelTest(FixtureTestCase):
     def test_user(self) -> None:
         # Create user with Django User fields
         user = User.objects.create(
-            first_name="First", last_name="Last", is_staff=True, is_superuser=True
+            username="test",
+            first_name="First",
+            last_name="Last",
+            is_staff=True,
+            is_superuser=True,
         )
         self.assertEqual(user.full_name, "First Last")
+        self.assertTrue(user.is_superuser)
+
+        user, created = User.objects.get_or_create(
+            username="test", defaults={"first_name": "Test First"}
+        )
+        self.assertFalse(created)
+        self.assertEqual(user.full_name, "First Last")
+        self.assertTrue(user.is_superuser)
+
+        user, created = User.objects.get_or_create(
+            username="test2",
+            defaults={
+                "first_name": "Test First",
+                "is_staff": True,
+                "is_superuser": True,
+            },
+        )
+        self.assertTrue(created)
+        self.assertEqual(user.full_name, "Test First")
+        self.assertEqual(user.username, "test2")
         self.assertTrue(user.is_superuser)
 
     def test_projects(self) -> None:

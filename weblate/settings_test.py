@@ -8,6 +8,7 @@
 
 import os
 import warnings
+from tempfile import TemporaryDirectory
 
 from weblate.settings_example import *  # noqa: F403
 
@@ -33,8 +34,10 @@ elif CI_DATABASE == "postgresql":
     default_user = "postgres"
 else:
     if not CI_DATABASE:
-        raise ValueError("Missing CI_DATABASE configuration in the environment")
-    raise ValueError(f"Not supported database: {CI_DATABASE}")
+        msg = "Missing CI_DATABASE configuration in the environment"
+        raise ValueError(msg)
+    msg = f"Not supported database: {CI_DATABASE}"
+    raise ValueError(msg)
 
 DATABASES["default"]["HOST"] = os.environ.get("CI_DB_HOST", "")
 DATABASES["default"]["NAME"] = os.environ.get("CI_DB_NAME", default_name)
@@ -49,13 +52,25 @@ ADMINS = (("Weblate test", "noreply@weblate.org"),)
 SECRET_KEY = "secret key used for tests only"  # noqa: S105
 
 SITE_DOMAIN = "example.com"
+OTP_WEBAUTHN_RP_NAME = SITE_DOMAIN
+OTP_WEBAUTHN_RP_ID = SITE_DOMAIN
+OTP_WEBAUTHN_ALLOWED_ORIGINS = [f"https://{SITE_DOMAIN}"]
 
 # Different root for test repos
 if "CI_BASE_DIR" in os.environ:
     BASE_DIR = os.environ["CI_BASE_DIR"]
 else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 DATA_DIR = os.path.join(BASE_DIR, "data-test")
+
+# Use random data directory when running in parallel
+if "PYTEST_XDIST_TESTRUNUID" in os.environ:
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR, exist_ok=True)
+    DATA_DIR_TMP = TemporaryDirectory(dir=DATA_DIR, prefix="xdist-")
+    DATA_DIR = DATA_DIR_TMP.name
+
 CACHE_DIR = os.path.join(DATA_DIR, "cache")
 MEDIA_ROOT = os.path.join(DATA_DIR, "media")
 STATIC_ROOT = os.path.join(DATA_DIR, "static")
@@ -68,7 +83,8 @@ CELERY_RESULT_BACKEND = None
 STATS_LAZY = True
 
 VCS_API_DELAY = 0
-VCS_FILE_PROTOCOL = True
+# Allow file protocol for tests
+VCS_ALLOW_SCHEMES = {"https", "ssh", "file"}
 
 # Localize CDN addon
 LOCALIZE_CDN_URL = "https://cdn.example.com/"
@@ -113,9 +129,7 @@ CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"
 if "CI_REDIS_HOST" in os.environ:
     CACHES["avatar"] = {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://{}:{}/0".format(
-            os.environ["CI_REDIS_HOST"], os.environ.get("CI_REDIS_PORT", "6379")
-        ),
+        "LOCATION": f"redis://{os.environ['CI_REDIS_HOST']}:{os.environ.get('CI_REDIS_PORT', '6379')}/0",
     }
 
 # Selenium can not clear HttpOnly cookies in MSIE
@@ -136,6 +150,7 @@ AUTHENTICATION_BACKENDS = (
 
 # Disable random admin checks trigger
 BACKGROUND_ADMIN_CHECKS = False
+
 
 # Use weak password hasher for testing
 PASSWORD_HASHERS = [

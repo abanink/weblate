@@ -1,7 +1,7 @@
 Building a translators community
 ================================
 
-Following these recommendations supports the creation of a full, multilingual post-editing tool. Good translations are defined through the systemic-functional model of House which aims at a contextual correct translation. Write your own `post-editing guide <https://en.wikipedia.org/wiki/Postediting>`_ and alter these recommendations to fit your own definitions. In most cases the `browser-plugin of languageTool <https://languagetool.org/#firefox_chrome>`_  is useful as a proof-reading tool.
+Following these recommendations supports the creation of a full, multilingual post-editing tool. Good translations are defined through the systemic-functional model of House which aims at a contextual correct translation. Write your own `post-editing guide <https://en.wikipedia.org/wiki/Postediting>`_ and alter these recommendations to fit your own definitions. In most cases the `browser-plugin of languageTool <https://languagetool.org/#firefox_chrome>`_ is useful as a proof-reading tool.
 
 Many times translators will find problems with the source strings. Make sure it is easy for them to report such problems.
 To gather this feedback, you can set up the :ref:`component-repoweb` field on your Weblate component, for translators to
@@ -47,5 +47,5 @@ The degree of quality of a translation is based on the degree of equivalence, th
 Sources
 -------
 1. Marina Sanchez-Torron and Philipp Koehn in Machine Translation Quality and Post-Editor Productivity, Figure 1: https://www.cs.jhu.edu/~phi/publications/machine-translation-quality.pdf
-2. Joanna Best und Sylvia Kalina.Übersetzen und Dolmetschen: eine Orientierungs-hilfe. A. Francke Verlag Tübingen und Base, 2002. Möglichkeiten der Übersetzungskritik starting on page number 101
+2. Joanna Best und Sylvia Kalina. Übersetzen und Dolmetschen: eine Orientierungshilfe. A. Francke Verlag Tübingen und Base, 2002. Möglichkeiten der Übersetzungskritik starting on page number 101
 3. neural fuzzy repair, Bram Bulté and Arda Tezcan in Neural Fuzzy Repair: Integrating Fuzzy Matches into Neural Machine Translation, 2019 https://aclanthology.org/P19-1175.pdf

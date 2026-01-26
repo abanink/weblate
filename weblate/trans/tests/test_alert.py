@@ -8,12 +8,13 @@ from django.test.utils import override_settings
 from django.urls import reverse
 
 from weblate.lang.models import Language
+from weblate.trans.models import Unit
 from weblate.trans.tests.test_views import ViewTestCase
 
 
 class AlertTest(ViewTestCase):
     def create_component(self):
-        return self._create_component("po", "po-duplicates/*.dpo")
+        return self._create_component("po", "po-duplicates/*.dpo", manage_units=True)
 
     def test_duplicates(self) -> None:
         self.assertEqual(
@@ -28,8 +29,24 @@ class AlertTest(ViewTestCase):
         alert = self.component.alert_set.get(name="DuplicateLanguage")
         self.assertEqual(alert.details["occurrences"][0]["language_code"], "cs")
         alert = self.component.alert_set.get(name="DuplicateString")
+        occurrences = alert.details["occurrences"]
+        self.assertEqual(len(occurrences), 1)
+        self.assertEqual(occurrences[0]["source"], "Thank you for using Weblate.")
+        # There should be single unit
+        unit = Unit.objects.filter(
+            pk__in={item["unit_pk"] for item in occurrences}
+        ).get()
+        # Remove the unit
+        unit.translation.delete_unit(None, unit)
+
+        # The alert should have been removed now
         self.assertEqual(
-            alert.details["occurrences"][0]["source"], "Thank you for using Weblate."
+            set(self.component.alert_set.values_list("name", flat=True)),
+            {
+                "DuplicateLanguage",
+                "BrokenBrowserURL",
+                "BrokenProjectURL",
+            },
         )
 
     def test_unused_enforced(self) -> None:
@@ -62,7 +79,7 @@ class AlertTest(ViewTestCase):
             reverse("dismiss-alert", kwargs=self.kw_component),
             {"dismiss": "BrokenBrowserURL"},
         )
-        self.assertRedirects(response, self.component.get_absolute_url() + "#alerts")
+        self.assertRedirects(response, f"{self.component.get_absolute_url()}#alerts")
         self.assertTrue(self.component.alert_set.get(name="BrokenBrowserURL").dismissed)
 
     def test_view(self) -> None:
@@ -112,6 +129,24 @@ class AlertTest(ViewTestCase):
             component.alert_set.filter(name="MonolingualTranslation").exists()
         )
 
+    def test_duplicate_mask(self) -> None:
+        component = self.component
+        self.assertFalse(component.alert_set.filter(name="DuplicateFilemask").exists())
+        response = self.client.get(component.get_absolute_url())
+        self.assertNotContains(
+            response, "The following files were found multiple times"
+        )
+
+        other = self.create_link_existing()
+
+        self.assertTrue(component.alert_set.filter(name="DuplicateFilemask").exists())
+        response = self.client.get(component.get_absolute_url())
+        self.assertContains(response, "The following files were found multiple times")
+
+        other.delete()
+
+        self.assertFalse(component.alert_set.filter(name="DuplicateFilemask").exists())
+
 
 class LanguageAlertTest(ViewTestCase):
     def create_component(self):
@@ -120,10 +155,8 @@ class LanguageAlertTest(ViewTestCase):
     def test_ambiguous_language(self) -> None:
         component = self.component
         self.assertFalse(component.alert_set.filter(name="AmbiguousLanguage").exists())
-        self.component.add_new_language(
-            Language.objects.get(code="ku"), self.get_request()
-        )
-        self.component.update_alerts()
+        component.add_new_language(Language.objects.get(code="ku"), self.get_request())
+        component.update_alerts()
         self.assertTrue(component.alert_set.filter(name="AmbiguousLanguage").exists())
 
 

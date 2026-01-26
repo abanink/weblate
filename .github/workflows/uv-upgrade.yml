@@ -1,0 +1,102 @@
+# Copyright © Michal Čihař <michal@weblate.org>
+#
+# SPDX-License-Identifier: CC0-1.0
+
+name: uv lock update
+
+on:
+  push:
+    branches:
+    - renovate/**
+    - main
+    paths:
+    - pyproject.toml
+    - .github/workflows/uv-upgrade.yml
+  schedule:
+  - cron: 30 6 * * 0
+  workflow_dispatch:
+  pull_request:
+    paths:
+    - pyproject.toml
+    - .github/workflows/uv-upgrade.yml
+
+permissions:
+  contents: read
+
+jobs:
+  uv-update:
+    if: startsWith(github.repository, 'WeblateOrg/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      if: github.event_name != 'pull_request'
+      with:
+        token: ${{ secrets.WEBLATE_CI_TOKEN }}
+        persist-credentials: true
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      if: github.event_name == 'pull_request'
+      with:
+        persist-credentials: false
+    - uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+      with:
+        path: ~/.cache/pre-commit
+        key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+    - name: Set up Python
+      id: setup_python
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: '3.14'
+    - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+      with:
+        save-cache: ${{ github.ref == 'refs/heads/main' }}
+        cache-suffix: ${{ steps.setup_python.outputs.python-version }}
+
+        version: 0.9.26
+    - name: Install apt dependencies
+      run: |
+        if [ -f ./ci/apt-install ] ; then
+          sudo ./ci/apt-install
+        fi
+
+
+    - name: Lockfile maintenance
+      if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      run: uv lock --upgrade
+
+    - run: uv sync --all-extras
+      name: Update lock file
+      if: hashFiles('uv.lock') != ''
+
+    - name: Update SBOM
+      if: hashFiles('docs/specs/sbom/partial/python.json') != ''
+      run: |
+        uv export --preview-features sbom-export --format cyclonedx1.5 --all-extras --no-dev > docs/specs/sbom/partial/python.json
+        ./scripts/reproducible-sbom.py docs/specs/sbom/partial/python.json
+
+    - name: Merge SBOM
+      if: hashFiles('docs/specs/sbom/partial/python.json') != ''
+      env:
+        # renovate: datasource=github-releases depName=CycloneDX/cyclonedx-cli versioning=loose
+        CYCLONEDX_CLI_VERSION: v0.29.2
+      run: |
+        curl -L "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CYCLONEDX_CLI_VERSION/cyclonedx-linux-x64" > /tmp/cyclonedx-linux-x64
+        chmod +x /tmp/cyclonedx-linux-x64
+        /tmp/cyclonedx-linux-x64 merge --input-files docs/specs/sbom/partial/* --output-file docs/specs/sbom/sbom.json
+        ./scripts/reproducible-sbom.py docs/specs/sbom/sbom.json
+
+    - run: uv run --only-group pre-commit pre-commit run --all
+      continue-on-error: true
+
+    - run: git diff
+
+    - name: Commit or create pull request
+      uses: ./.github/actions/auto-commit
+      with:
+        message: 'chore(deps): update lockfile'
+        pr-branch: create-pull-request/uv-lock-update
+        pr-labels: |
+          dependencies
+        github-token: ${{ secrets.WEBLATE_CI_TOKEN }}

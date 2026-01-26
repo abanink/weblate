@@ -12,17 +12,22 @@ from siphashc import siphash
 
 from weblate.trans.util import get_clean_env
 from weblate.utils.errors import report_error
+from weblate.utils.files import cleanup_error_message
 
-GPG_ERRORS = {}
+GPG_ERRORS: dict[str, str] = {}
 
 
 def gpg_error(name: str, error: Exception, silent: bool = False) -> None:
-    report_error(cause=name)
+    report_error(name)
 
     if not silent:
-        GPG_ERRORS[name] = "{}\n{}\n{}".format(
-            error, getattr(error, "stderr", ""), getattr(error, "stdout", "")
+        GPG_ERRORS[name] = (
+            f"{cleanup_error_message(str(error))}\n{cleanup_error_message(getattr(error, 'stderr', ''))}\n{cleanup_error_message(getattr(error, 'stdout', ''))}"
         )
+
+
+def get_gpg_errors() -> dict[str, str]:
+    return GPG_ERRORS
 
 
 def generate_gpg_key() -> str | None:
@@ -78,9 +83,7 @@ def get_gpg_key(silent=False) -> str | None:
 
 
 def gpg_cache_key(suffix: str) -> str:
-    return "gpg:{}:{}".format(
-        siphash("Weblate GPG hash", settings.WEBLATE_GPG_IDENTITY), suffix
-    )
+    return f"gpg:{siphash('Weblate GPG hash', settings.WEBLATE_GPG_IDENTITY)}:{suffix}"
 
 
 def get_gpg_sign_key() -> str | None:

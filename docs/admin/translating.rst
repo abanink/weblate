@@ -55,9 +55,9 @@ Access this directly from the translation interface by clicking the
 
 .. seealso::
 
-   :ref:`format-location`,
-   :ref:`format-description`,
-   :ref:`format-context`
+   * :ref:`format-location`
+   * :ref:`format-description`
+   * :ref:`format-context`
 
 Strings prioritization
 ++++++++++++++++++++++
@@ -69,7 +69,9 @@ using the ``priority`` flag.
 
     This can be used to order the flow of translation in a logical manner.
 
-.. seealso:: :ref:`checks`
+.. seealso::
+
+   :ref:`checks`
 
 .. _additional-flags:
 
@@ -85,8 +87,8 @@ The string flags are also inherited from the :ref:`component-check_flags` at
 
 .. seealso::
 
-   :ref:`checks`,
-   :ref:`custom-checks`
+   * :ref:`checks`
+   * :ref:`custom-checks`
 
 .. _additional-explanation:
 
@@ -125,7 +127,7 @@ The uploaded screenshot is shown in the translation context sidebar:
 .. image:: /screenshots/screenshot-context.webp
 
 In addition to :ref:`additional`, screenshots have a separate management
-interface under the :guilabel:`Tools` menu.
+interface under the :guilabel:`Operations` menu.
 Upload screenshots, assign them to source strings manually, or use optical
 character recognition (OCR) to do so by pressing the :guilabel:`Automatically
 recognize` button.
@@ -134,6 +136,12 @@ Once a screenshot is uploaded, this interface handles
 management and source string association:
 
 .. image:: /screenshots/screenshot-ocr.webp
+
+You can upload a screenshot from a local file or provide a URL to download an image
+from an external source. URL-based uploads may be restricted based on the
+:setting:`ALLOWED_ASSET_DOMAINS` setting, which controls which domains are trusted
+for downloading external assets, and :setting:`ALLOWED_ASSET_SIZE` which
+limits maximal size for the asset.
 
 You can add or update screenshots directly from your
 Version Control System (VCS) repository.

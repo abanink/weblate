@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from typing import NoReturn
+from typing import ClassVar
 
 from django.core.exceptions import ValidationError
 from django.urls import reverse
@@ -18,7 +18,7 @@ from weblate.utils.data import data_dir
 
 
 class BaseURLMixin:
-    def get_url_path(self) -> NoReturn:
+    def get_url_path(self) -> tuple[str, ...]:
         raise NotImplementedError
 
     @cached_property
@@ -29,14 +29,14 @@ class BaseURLMixin:
 class URLMixin(BaseURLMixin):
     """Mixin for models providing standard shortcut API for few standard URLs."""
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("show", kwargs={"path": self.get_url_path()})
 
 
 class LoggerMixin(BaseURLMixin):
     """Mixin for models with logging."""
 
-    def log_hook(self, level, msg, *args) -> None:
+    def log_hook(self, level: str, msg: str, *args) -> None:
         return
 
     def log_debug(self, msg, *args):
@@ -71,11 +71,11 @@ class PathMixin(LoggerMixin, URLMixin):
         if "full_path" in self.__dict__:
             del self.__dict__["full_path"]
 
-    def check_rename(self, old, validate=False) -> None:
+    def check_rename(self, old, validate=False) -> bool:
         """Detect slug changes and possibly renames underlying directory."""
         # No moving for links
         if getattr(self, "is_repo_link", False) or getattr(old, "is_repo_link", False):
-            return
+            return False
 
         old_path = old.full_path
         # Invalidate path cache (otherwise we would still get old path)
@@ -87,12 +87,14 @@ class PathMixin(LoggerMixin, URLMixin):
                 # Patch using old path for validation
                 # the actual rename happens only on save
                 self.__dict__["full_path"] = old_path
-                return
+                return True
 
             self.log_info("path changed from %s to %s", old_path, new_path)
             if os.path.exists(old_path) and not os.path.exists(new_path):
                 self.log_info('renaming "%s" to "%s"', old_path, new_path)
                 os.rename(old_path, new_path)
+            return True
+        return False
 
     def create_path(self) -> None:
         """Create filesystem directory for storing data."""
@@ -152,3 +154,18 @@ class ComponentCategoryMixin:
             ),
             self.name,
         )
+
+
+class LockMixin:
+    is_lockable: ClassVar[bool] = False
+    lockable_count: ClassVar[bool] = False
+
+    @property
+    def locked(self) -> bool:
+        return False
+
+    def can_unlock(self) -> bool:
+        return self.locked
+
+    def can_lock(self) -> bool:
+        return not self.locked

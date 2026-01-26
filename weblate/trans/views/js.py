@@ -1,22 +1,37 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.utils.http import urlencode
 from django.views.decorators.cache import cache_control
 from django.views.decorators.http import require_POST
 
 from weblate.checks.flags import Flags
 from weblate.checks.models import Check
-from weblate.trans.models import Change, Component, Project, Translation, Unit
+from weblate.trans.models import (
+    Change,
+    Component,
+    PendingUnitChange,
+    Project,
+    Translation,
+    Unit,
+)
 from weblate.trans.util import sort_unicode
 from weblate.utils.views import parse_path
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
 
-def get_unit_translations(request, unit_id):
+
+def get_unit_translations(request: AuthenticatedHttpRequest, unit_id):
     """Return unit's other translations."""
     unit = get_object_or_404(Unit, pk=int(unit_id))
     user = request.user
@@ -39,21 +54,23 @@ def get_unit_translations(request, unit_id):
 
 @require_POST
 @login_required
-def ignore_check(request, check_id):
-    obj = get_object_or_404(Check, pk=int(check_id))
+@transaction.atomic
+def ignore_check(request: AuthenticatedHttpRequest, check_id):
+    obj = get_object_or_404(Check.objects.select_for_update(), pk=int(check_id))
 
     if not request.user.has_perm("unit.check", obj):
         raise PermissionDenied
 
     # Mark check for ignoring
-    obj.set_dismiss("revert" not in request.GET)
+    obj.set_dismiss(state="revert" not in request.GET)
     # response for AJAX
     return HttpResponse("ok")
 
 
 @require_POST
 @login_required
-def ignore_check_source(request, check_id):
+@transaction.atomic
+def ignore_check_source(request: AuthenticatedHttpRequest, check_id):
     obj = get_object_or_404(Check, pk=int(check_id))
     unit = obj.unit.source_unit
 
@@ -63,12 +80,15 @@ def ignore_check_source(request, check_id):
         raise PermissionDenied
 
     # Mark check for ignoring
-    ignore = obj.check_obj.ignore_string
+    if obj.check_obj is None:
+        # Disabled check
+        ignore = f"ignore-{obj.name.replace('_', '-')}"
+    else:
+        ignore = obj.check_obj.ignore_string
     flags = Flags(unit.extra_flags)
     if ignore not in flags:
         flags.merge(ignore)
-        unit.extra_flags = flags.format()
-        unit.save(same_content=True)
+        unit.update_extra_flags(flags.format(), request.user)
 
     # response for AJAX
     return JsonResponse(
@@ -80,8 +100,25 @@ def ignore_check_source(request, check_id):
     )
 
 
+@require_POST
 @login_required
-def git_status(request, path):
+@transaction.atomic
+def dismiss_automatically_translated(request: AuthenticatedHttpRequest, unit_id):
+    unit = get_object_or_404(Unit, pk=int(unit_id))
+    if not request.user.has_perm("unit.edit", unit):
+        raise PermissionDenied
+
+    unit.translate(
+        request.user,
+        unit.target,
+        unit.state,
+        request=request,
+    )
+    return JsonResponse({})
+
+
+@login_required
+def git_status(request: AuthenticatedHttpRequest, path):
     obj = parse_path(request, path, (Project, Component, Translation))
     if not request.user.has_perm("meta:vcs.status", obj):
         raise PermissionDenied
@@ -103,20 +140,27 @@ def git_status(request, path):
     except IndexError:
         push_label = ""
 
+    pending_units = PendingUnitChange.objects.detailed_count(obj)
+
     return render(
         request,
         "js/git-status.html",
         {
             "object": obj,
             "changes": changes,
+            "changes_url_query": urlencode(
+                ("action", action) for action in Change.ACTIONS_REPOSITORY
+            ),
             "repositories": repo_components,
-            "pending_units": obj.count_pending_units,
+            "pending_units": pending_units,
             "outgoing_commits": sum(
                 repo.count_repo_outgoing for repo in repo_components
             ),
             "has_push_branch": any(repo.push_branch for repo in repo_components),
             "push_branch_outgoing_commits": sum(
-                repo.count_push_branch_outgoing for repo in repo_components
+                repo.count_push_branch_outgoing
+                for repo in repo_components
+                if repo.push_branch
             ),
             "missing_commits": sum(repo.count_repo_missing for repo in repo_components),
             "supports_push": any(
@@ -128,7 +172,7 @@ def git_status(request, path):
 
 
 @cache_control(max_age=3600)
-def matomo(request):
+def matomo(request: AuthenticatedHttpRequest):
     return render(
         request, "js/matomo.js", content_type='text/javascript; charset="utf-8"'
     )

@@ -6,19 +6,23 @@ from datetime import timedelta
 
 from celery.schedules import crontab
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
 from django.utils.translation import gettext
 
 from weblate.accounts.notifications import send_notification_email
-from weblate.billing.models import Billing
+from weblate.billing.models import Billing, BillingEvent
 from weblate.trans.tasks import project_removal
 from weblate.utils.celery import app
 
 
 @app.task(trail=False)
-def billing_check() -> None:
-    Billing.objects.check_limits()
+def billing_check(billing_id: int | None = None) -> None:
+    if billing_id is None:
+        Billing.objects.check_limits()
+    else:
+        Billing.objects.get(pk=billing_id).check_limits()
 
 
 @app.task(trail=False)
@@ -76,6 +80,9 @@ def notify_expired() -> None:
             )
 
         for user in bill.get_notify_users():
+            bill.billinglog_set.create(
+                event=BillingEvent.EMAIL, summary="Billing expired", user=user
+            )
             send_notification_email(
                 user.profile.language,
                 [user.email],
@@ -90,19 +97,30 @@ def notify_expired() -> None:
 
 
 @app.task(trail=False)
+@transaction.atomic
 def schedule_removal() -> None:
     removal = timezone.now() + timedelta(days=settings.BILLING_REMOVAL_PERIOD)
-    for bill in Billing.objects.filter(state=Billing.STATE_ACTIVE, removal=None):
+    for bill in Billing.objects.filter(
+        state=Billing.STATE_ACTIVE, removal=None
+    ).select_for_update():
         if bill.check_payment_status():
             continue
+        bill.billinglog_set.create(
+            event=BillingEvent.UNPAID,
+            summary=f"Scheduled removal at {removal.isoformat()}",
+        )
         bill.removal = removal
         bill.save(update_fields=["removal"])
 
 
 @app.task(trail=False)
+@transaction.atomic
 def remove_single_billing(billing_id: int) -> None:
-    bill = Billing.objects.get(pk=billing_id)
+    bill = Billing.objects.select_for_update().get(pk=billing_id)
     for user in bill.get_notify_users():
+        bill.billinglog_set.create(
+            event=BillingEvent.EMAIL, summary="Billing removed", user=user
+        )
         send_notification_email(
             user.profile.language,
             [user.email],
@@ -111,11 +129,15 @@ def remove_single_billing(billing_id: int) -> None:
             info=bill,
         )
     for prj in bill.projects.iterator():
+        bill.billinglog_set.create(
+            event=BillingEvent.REMOVED, summary=f"Removed project {prj}"
+        )
         prj.log_warning("removing due to unpaid billing")
         project_removal(prj.id, None)
     bill.removal = None
     bill.state = Billing.STATE_TERMINATED
     bill.save()
+    bill.billinglog_set.create(event=BillingEvent.REMOVED, summary="Terminated billing")
 
 
 @app.task(trail=False)

@@ -1,20 +1,24 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
-import json
+from typing import TYPE_CHECKING
 
 from django.core.management.base import CommandError
 
-from weblate.configuration.models import Setting
-from weblate.machinery.models import MACHINERY
+from weblate.configuration.models import Setting, SettingCategory
+from weblate.machinery.models import validate_service_configuration
 from weblate.utils.management.base import BaseCommand
+
+if TYPE_CHECKING:
+    from django.core.management.base import CommandParser
 
 
 class Command(BaseCommand):
     help = "installs site-wide automatic suggestion service"
 
-    def add_arguments(self, parser) -> None:
+    def add_arguments(self, parser: CommandParser) -> None:
         super().add_arguments(parser)
         parser.add_argument("--service", required=True, help="Service name")
         parser.add_argument(
@@ -26,30 +30,19 @@ class Command(BaseCommand):
             help="Update existing service configuration",
         )
 
-    def validate_form(self, form) -> None:
-        if not form.is_valid():
-            for error in form.non_field_errors():
-                self.stderr.write(error)
-            for field in form:
-                for error in field.errors:
-                    self.stderr.write(f"Error in {field.name}: {error}")
-            raise CommandError("Invalid add-on configuration!")
-
     def handle(self, *args, **options) -> None:
-        try:
-            service = MACHINERY[options["service"]]
-        except KeyError:
-            raise CommandError("Service not found: {}".format(options["service"]))
-        try:
-            configuration = json.loads(options["configuration"])
-        except ValueError as error:
-            raise CommandError(f"Invalid service configuration: {error}")
-        if service.settings_form is not None:
-            form = service.settings_form(service, data=configuration)
-            self.validate_form(form)
+        service, configuration, errors = validate_service_configuration(
+            options["service"], options["configuration"]
+        )
+
+        if service is None or errors:
+            for error in errors:
+                self.stderr.write(error)
+            msg = "Invalid add-on configuration!"
+            raise CommandError(msg)
 
         setting, created = Setting.objects.get_or_create(
-            category=Setting.CATEGORY_MT,
+            category=SettingCategory.MT,
             name=options["service"],
             defaults={"value": configuration},
         )

@@ -9,7 +9,7 @@ Custom automatic fixups
 You can also implement your own automatic fixup in addition to the standard ones and
 include them in :setting:`AUTOFIX_LIST`.
 
-The automatic fixes are powerful, but can also cause damage;  be careful when
+The automatic fixes are powerful, but can also cause damage; be careful when
 writing one.
 
 For example, the following automatic fixup would replace every occurrence of the string
@@ -30,11 +30,17 @@ You can fine-tune Weblate's behavior by using flags. The flags provide visual
 feedback to the translators and help them to improve their translation.
 The flags are merged from following sources:
 
-* Source string, see :ref:`additional`.
+* Source string additional flags:
+
+  * :ref:`additional` describes manual editing.
+  * :ref:`bulk-edit` can be used to apply flags in batch.
+  * :ref:`addon-weblate.flags.bulk` add-on can apply flags automatically.
+
 * Per-string flags extracted from the file format, see :ref:`formats`.
 * Translation flags (currently only ``read-only`` flag for bilingual source string).
 * File-format specific flags.
 * :ref:`component` (:ref:`component-check_flags`).
+* :ref:`project` (:ref:`project-check_flags`).
 
 The flags are comma-separated; if they have parameters, they are separated
 with colon. You can use quotes to include whitespaces or special characters
@@ -54,8 +60,8 @@ Both single and double quotes are accepted, special characters are being escaped
 
    placeholders:r"^#*"
 
-To verify that translators do not change the heading of a Markdown document:
-A failing check will be triggered if the string '### Index' is translated as '# Indice'
+To verify that translators do not change the heading of a Markdown document.
+A failing check will be triggered if the string ``### Index`` is translated as ``# Indice``.
 
 .. code-block:: text
 
@@ -64,12 +70,18 @@ A failing check will be triggered if the string '### Index' is translated as '# 
 To ensure that internal links are not being translated (i.e. `[test](../checks)`
 does not become `[test](../chequeos)`.
 
-
+The flags defined on a higher level can be discarded using the
+``discard:NAME`` syntax. For example, if a component is configured to
+``safe-html``, you can add ``discard:safe-html`` to the string flags to skip it
+for this particular string.
 
 Here is a list of flags currently accepted:
 
 ``rst-text``
     Treat a text as an reStructuredText document, affects :ref:`check-same`.
+    Turns on :ref:`check-rst-syntax` and :ref:`check-rst-references`.
+``bbcode-text``
+    Treat a text as an Bulletin Board Code (BBCode) document, affects :ref:`check-same`.
 ``dos-eol``
     Uses DOS end-of-line markers instead of Unix ones (``\r\n`` instead of ``\n``).
 ``read-only``
@@ -107,10 +119,12 @@ Here is a list of flags currently accepted:
     Mark this string as a variant of string with matching source. See :ref:`variants`.
 ``regex:REGEX``
     Regular expression to match translation, see :ref:`check-regex`.
+``discard:NAME``
+    Discards flag defined on a higher level.
 ``forbidden``
     Indicates forbidden translation in a glossary, see :ref:`glossary-forbidden`.
 ``strict-same``
-    Make "Unchanged translation" avoid using built-in words blacklist, see :ref:`check-same`.
+    Make the :ref:`check-same` avoid using the built-in words exceptions.
 ``strict-format``
     Make format checks enforce using format even for plural forms with a single value, see :ref:`check-formats`.
 ``check-glossary``
@@ -171,6 +185,12 @@ Here is a list of flags currently accepted:
     Enable the :ref:`check-url` quality check.
 ``ignore-all-checks``
     Ignore all quality checks.
+``fluent-source-inner-html``
+    Enable the :ref:`check-fluent-source-inner-html` quality check.
+``fluent-source-syntax``
+    Enable the :ref:`check-fluent-source-syntax` quality check.
+``icu-message-format``
+    Enable the :ref:`check-icu-message-format-syntax` quality check.
 ``ignore-bbcode``
     Skip the :ref:`check-bbcode` quality check.
 ``ignore-duplicate``
@@ -179,8 +199,18 @@ Here is a list of flags currently accepted:
     Skip the :ref:`check-check-glossary` quality check.
 ``ignore-double-space``
     Skip the :ref:`check-double-space` quality check.
+``ignore-fluent-parts``
+    Skip the :ref:`check-fluent-parts` quality check.
+``ignore-fluent-references``
+    Skip the :ref:`check-fluent-references` quality check.
+``ignore-fluent-target-inner-html``
+    Skip the :ref:`check-fluent-target-inner-html` quality check.
+``ignore-fluent-target-syntax``
+    Skip the :ref:`check-fluent-target-syntax` quality check.
 ``ignore-angularjs-format``
     Skip the :ref:`check-angularjs-format` quality check.
+``ignore-automattic-components-format``
+    Skip the :ref:`check-automattic-components-format` quality check.
 ``ignore-c-format``
     Skip the :ref:`check-c-format` quality check.
 ``ignore-c-sharp-format``
@@ -227,6 +257,8 @@ Here is a list of flags currently accepted:
     Skip the :ref:`check-translated` quality check.
 ``ignore-inconsistent``
     Skip the :ref:`check-inconsistent` quality check.
+``ignore-rst-references``
+    Skip the :ref:`check-rst-references` quality check.
 ``ignore-kashida``
     Skip the :ref:`check-kashida` quality check.
 ``ignore-md-link``
@@ -249,6 +281,8 @@ Here is a list of flags currently accepted:
     Skip the :ref:`check-end-exclamation` quality check.
 ``ignore-end-stop``
     Skip the :ref:`check-end-stop` quality check.
+``ignore-end-interrobang``
+    Skip the :ref:`check-end-interrobang` quality check.
 ``ignore-end-question``
     Skip the :ref:`check-end-question` quality check.
 ``ignore-end-semicolon``
@@ -257,12 +291,18 @@ Here is a list of flags currently accepted:
     Skip the :ref:`check-newline-count` quality check.
 ``ignore-plurals``
     Skip the :ref:`check-plurals` quality check.
+``ignore-kabyle-characters``
+    Skip the :ref:`check-kabyle-characters` quality check.
 ``ignore-placeholders``
     Skip the :ref:`check-placeholders` quality check.
+``ignore-prohibited-initial-character``
+    Skip the :ref:`check-prohibited-initial-character` quality check.
 ``ignore-punctuation-spacing``
     Skip the :ref:`check-punctuation-spacing` quality check.
 ``ignore-regex``
     Skip the :ref:`check-regex` quality check.
+``ignore-rst-syntax``
+    Skip the :ref:`check-rst-syntax` quality check.
 ``ignore-reused``
     Skip the :ref:`check-reused` quality check.
 ``ignore-same-plurals``
@@ -289,7 +329,11 @@ Here is a list of flags currently accepted:
     Skip the :ref:`check-zero-width-space` quality check.
 ``ignore-ellipsis``
     Skip the :ref:`check-ellipsis` quality check.
-``ignore-icu-message-format-syntax``
+``ignore-fluent-source-inner-html``
+    Skip the :ref:`check-fluent-source-inner-html` quality check.
+``ignore-fluent-source-syntax``
+    Skip the :ref:`check-fluent-source-syntax` quality check.
+``ignore-icu-message-format``
     Skip the :ref:`check-icu-message-format-syntax` quality check.
 ``ignore-long-untranslated``
     Skip the :ref:`check-long-untranslated` quality check.
@@ -308,25 +352,47 @@ Here is a list of flags currently accepted:
 These flags are understood both in :ref:`component` settings, per source string
 settings and in the translation file itself (for example in GNU gettext).
 
+.. _location-based-flags:
+
+Location-based flags
+--------------------
+
+Some flags are added to strings by default, based on their locations.
+This means that certain checks will be automatically enabled depending on where the string is used.
+
+* ``rst-text``: This flag is automatically added to strings in reStructuredText files, if location extension is ``.rst``.
+* ``md-text``: This flag is automatically added to strings in Markdown files, if location extension is ``.md`` or ``.markdown``.
+
 .. _enforcing-checks:
 
 Enforcing checks
 ----------------
 
-You can configure a list of checks which can not be ignored by setting
-:ref:`component-enforced_checks` in :ref:`component`. Each listed check can not
-be dismissed in the user interface and any string failing this check is marked as
-:guilabel:`Needs editing` (see :ref:`states`).
+The enforced checks cannot be dismissed and mark string as :guilabel:`Needs
+editing` (see :ref:`states`). This prevents translators from hiding such
+checks.
 
-.. note::
+.. hint::
 
-   Turning on check enforcing doesn't enable it automatically. The check can be
-   turned on by adding the corresponding flag to string or component flags.
+   Turning on check enforcing doesn't enable it automatically. Some checks have
+   to be turned on by adding the corresponding flag to the string or component
+   flags.
 
-   .. seealso::
+This is best used with checks that can cause serious issues when used like
+checks for :ref:`check-formats`. Using for style checks like :ref:`check-same`
+is not recommended because dismissal is sometimes a reasonable approach in these.
 
-      :ref:`additional`,
-      :ref:`component-check_flags`
+The :ref:`project-commit_policy` can then be used to exclude strings needing
+editing from being committed to the version control.
+
+
+.. seealso::
+
+   * :ref:`states`
+   * :ref:`component-enforced_checks`
+   * :ref:`project-commit_policy`
+   * :ref:`additional`
+   * :ref:`component-check_flags`
 
 .. _fonts:
 
@@ -343,7 +409,7 @@ The :ref:`check-max-size` check used to calculate dimensions of the rendered
 text needs font to be loaded into Weblate and selected using a translation flag
 (see :ref:`custom-checks`).
 
-Weblate font management tool in :guilabel:`Fonts` under the :guilabel:`Manage`
+Weblate font management tool in :guilabel:`Fonts` under the :guilabel:`Operations`
 menu of your translation project provides interface to upload and manage fonts.
 TrueType or OpenType fonts can be uploaded, set up font-groups and use those in
 the check.

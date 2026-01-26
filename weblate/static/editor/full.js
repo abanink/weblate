@@ -5,7 +5,7 @@
 (() => {
   const EditorBase = WLT.Editor.Base;
 
-  const TM_SERVICE_NAME = "weblate-translation-memory";
+  const _tmServiceName = "weblate-translation-memory";
 
   const $window = $(window);
 
@@ -24,9 +24,8 @@
       const $el = $(e.target);
       const raw = $el.parent().parent().data("raw");
 
-      // biome-ignore lint/complexity/noForEach: TODO
-      raw.plural_forms.forEach((plural_form) => {
-        $(this.$translationArea.get(plural_form)).replaceValue(raw.text);
+      raw.plural_forms.forEach((pluralForm) => {
+        $(this.$translationArea.get(pluralForm)).replaceValue(raw.text);
       });
       autosize.update(this.$translationArea);
       WLT.Utils.markFuzzy(this.$translationForm);
@@ -37,12 +36,24 @@
       const $el = $(e.target);
       const raw = $el.parent().parent().data("raw");
 
-      // biome-ignore lint/complexity/noForEach: TODO
-      raw.plural_forms.forEach((plural_form) => {
-        $(this.$translationArea.get(plural_form)).replaceValue(raw.text);
+      raw.plural_forms.forEach((pluralForm) => {
+        $(this.$translationArea.get(pluralForm)).replaceValue(raw.text);
       });
       autosize.update(this.$translationArea);
       WLT.Utils.markTranslated(this.$translationForm);
+      submitForm({ target: this.$translationArea });
+    });
+
+    /* Copy, approve and save machinery results */
+    this.$editor.on("click", ".js-copy-approve-save-machinery", (e) => {
+      const $el = $(e.target);
+      const raw = $el.parent().parent().data("raw");
+
+      raw.plural_forms.forEach((pluralForm) => {
+        $(this.$translationArea.get(pluralForm)).replaceValue(raw.text);
+      });
+      autosize.update(this.$translationArea);
+      WLT.Utils.markApproved(this.$translationForm);
       submitForm({ target: this.$translationArea });
     });
 
@@ -60,7 +71,7 @@
         $deleteEntriesDialog.find(".modal-body").append(modalBody);
       });
 
-      this.$editor.on("hide.bs.modal", "#delete-url-modal", (e) => {
+      this.$editor.on("hide.bs.modal", "#delete-url-modal", (_e) => {
         $deleteEntriesDialog = null;
       });
 
@@ -72,7 +83,6 @@
         }
         $deleteEntriesDialog.modal("hide");
 
-        // biome-ignore lint/complexity/noForEach: TODO
         Object.entries($deleteEntries).forEach(([_, entry]) => {
           if (typeof entry.id !== "undefined") {
             this.removeTranslationEntry(entry.id);
@@ -82,27 +92,27 @@
       });
     });
 
-    Mousetrap.bindGlobal("alt+end", (e) => {
+    Mousetrap.bindGlobal("alt+end", (_e) => {
       window.location = $("#button-end").attr("href");
       return false;
     });
-    Mousetrap.bindGlobal(["alt+pagedown", "mod+down", "alt+down"], (e) => {
+    Mousetrap.bindGlobal(["alt+pagedown", "mod+down", "alt+down"], (_e) => {
       window.location = $("#button-next").attr("href");
       return false;
     });
-    Mousetrap.bindGlobal(["alt+pageup", "mod+up", "alt+up"], (e) => {
+    Mousetrap.bindGlobal(["alt+pageup", "mod+up", "alt+up"], (_e) => {
       window.location = $("#button-prev").attr("href");
       return false;
     });
-    Mousetrap.bindGlobal("alt+home", (e) => {
+    Mousetrap.bindGlobal("alt+home", (_e) => {
       window.location = $("#button-first").attr("href");
       return false;
     });
-    Mousetrap.bindGlobal("mod+o", (e) => {
-      $(".source-language-group [data-clone-text]").click();
+    Mousetrap.bindGlobal("mod+o", (_e) => {
+      $(".source-language-group [data-clone-value]").click();
       return false;
     });
-    Mousetrap.bindGlobal("mod+y", (e) => {
+    Mousetrap.bindGlobal("mod+y", (_e) => {
       $('input[name="fuzzy"]').click();
       return false;
     });
@@ -117,22 +127,22 @@
       this.$translationArea.get(0).focus();
       return false;
     });
-    Mousetrap.bindGlobal("mod+s", (e) => {
+    Mousetrap.bindGlobal("mod+s", (_e) => {
       $("#search-dropdown").click();
       $('textarea[name="q"]').focus();
       return false;
     });
-    Mousetrap.bindGlobal("mod+u", (e) => {
-      $('.nav [href="#comments"]').click();
+    Mousetrap.bindGlobal("mod+u", (_e) => {
+      $('.nav [data-bs-target="#comments"]').click();
       $('textarea[name="comment"]').focus();
       return false;
     });
-    Mousetrap.bindGlobal("mod+j", (e) => {
-      $('.nav [href="#nearby"]').click();
+    Mousetrap.bindGlobal("mod+j", (_e) => {
+      $('.nav [data-bs-target="#nearby"]').click();
       return false;
     });
-    Mousetrap.bindGlobal("mod+m", (e) => {
-      $('.nav [href="#machinery"]').click();
+    Mousetrap.bindGlobal("mod+m", (_e) => {
+      $('.nav [data-bs-target="#machinery"]').click();
       return false;
     });
   }
@@ -144,7 +154,9 @@
 
     /* Report source bug */
     this.$translationForm.on("click", ".bug-comment", () => {
-      $('.translation-tabs a[href="#comments"]').tab("show");
+      bootstrap.Tab.getOrCreateInstance(
+        $('.translation-tabs a[data-bs-target="#comments"]'),
+      ).show();
       $("#id_scope").val("report");
       $([document.documentElement, document.body]).animate(
         {
@@ -167,11 +179,10 @@
 
     /* Form persistence. Restores translation form upon comment submission */
     const restoreKey = "translation_autosave";
-    const restoreValue = window.localStorage.getItem(restoreKey);
+    const restoreValue = localStorage.getItem(restoreKey);
     if (restoreValue !== null) {
       const translationRestore = JSON.parse(restoreValue);
 
-      // biome-ignore lint/complexity/noForEach: TODO
       translationRestore.forEach((restoreArea) => {
         const target = document.getElementById(restoreArea.id);
         if (target) {
@@ -192,25 +203,23 @@
         };
       });
 
-      window.localStorage.setItem(restoreKey, JSON.stringify(data.get()));
+      localStorage.setItem(restoreKey, JSON.stringify(data.get()));
     });
   };
 
   FullEditor.prototype.initTabs = function () {
-    /* Store active tab in a cookie */
-    $('.translation-tabs a[data-toggle="tab"]').on("shown.bs.tab", function () {
-      const current = Cookies.get("translate-tab");
-      const desired = $(this).attr("href");
+    /* Store active tab in a local storage */
+    $('.translation-tabs a[data-bs-toggle="tab"]').on(
+      "shown.bs.tab",
+      function () {
+        const current = localStorage.getItem("translate-tab");
+        const desired = $(this).attr("data-bs-target");
 
-      if (current !== desired) {
-        Cookies.set("translate-tab", desired, {
-          path: "/",
-          expires: 365,
-          sameSite: "Lax",
-          secure: window.location.protocol === "https:",
-        });
-      }
-    });
+        if (current !== desired) {
+          localStorage.setItem("translate-tab", desired);
+        }
+      },
+    );
 
     /* Machinery */
     this.isMachineryLoaded = false;
@@ -226,7 +235,6 @@
     this.isMachineryLoaded = true;
     this.machinery = new Machinery();
 
-    // biome-ignore lint/complexity/noForEach: TODO
     $("#js-translate")
       .data("services")
       .forEach((serviceName) => {
@@ -248,23 +256,23 @@
         success: (data) => {
           this.processMachineryResults(data);
         },
-        error: (jqXHR, textStatus, errorThrown) => {
-          this.processMachineryError(jqXHR, textStatus, errorThrown);
+        error: (jqXhr, textStatus, errorThrown) => {
+          this.processMachineryError(jqXhr, textStatus, errorThrown);
         },
       });
       return false;
     });
   };
 
-  FullEditor.prototype.removeTranslationEntry = function (delete_url) {
+  FullEditor.prototype.removeTranslationEntry = function (deleteUrl) {
     $.ajax({
       type: "DELETE",
-      url: delete_url,
+      url: deleteUrl,
       headers: { "X-CSRFToken": this.csrfToken },
       success: () => {
         addAlert(gettext("Translation memory entry removed."));
       },
-      error: (jqXHR, textStatus, errorThrown) => {
+      error: (_jqXhr, _textStatus, errorThrown) => {
         addAlert(errorThrown);
       },
     });
@@ -277,8 +285,8 @@
       success: (data) => {
         this.processMachineryResults(data);
       },
-      error: (jqXHR, textStatus, errorThrown) => {
-        this.processMachineryError(jqXHR, textStatus, errorThrown);
+      error: (jqXhr, textStatus, errorThrown) => {
+        this.processMachineryError(jqXhr, textStatus, errorThrown);
       },
       dataType: "json",
       data: {
@@ -288,12 +296,12 @@
   };
 
   FullEditor.prototype.processMachineryError = (
-    jqXHR,
+    jqXhr,
     textStatus,
     errorThrown,
   ) => {
     decreaseLoading("machinery");
-    if (jqXHR.state() !== "rejected") {
+    if (jqXhr.state() !== "rejected") {
       addAlert(
         `${gettext(
           "The request for machine translation has failed:",
@@ -361,7 +369,7 @@
   FullEditor.prototype.initChecks = function () {
     /* Clicking links (e.g. comments, suggestions)
      * This is inside things to checks, but not a check-item */
-    this.$editor.on("click", '.check [data-toggle="tab"]', function (e) {
+    this.$editor.on("click", '.check [data-bs-toggle="tab"]', function (e) {
       const href = $(this).attr("href");
 
       e.preventDefault();
@@ -370,7 +378,7 @@
     });
 
     const $checks = $(".check-item");
-    if (!$checks.length) {
+    if ($checks.length === 0) {
       return;
     }
 
@@ -379,8 +387,8 @@
       const $el = $(e.currentTarget);
       let url = $el.attr("href");
       const $check = $el.closest(".check");
-      const dismiss_all = $check.find("input").prop("checked");
-      if (dismiss_all) {
+      const dismissAll = $check.find("input").prop("checked");
+      if (dismissAll) {
         url = $el.data("dismiss-all");
       }
 
@@ -390,18 +398,18 @@
         data: {
           csrfmiddlewaretoken: this.csrfToken,
         },
-        error: (jqXHR, textStatus, errorThrown) => {
+        error: (_jqXhr, _textStatus, errorThrown) => {
           addAlert(errorThrown);
         },
         success: (data) => {
-          if (dismiss_all) {
+          if (dismissAll) {
             const { extra_flags, all_flags } = data;
             $("#id_extra_flags").val(extra_flags);
             $("#unit_all_flags").html(all_flags).addClass("flags-updated");
           }
         },
       });
-      if (dismiss_all) {
+      if (dismissAll) {
         $check.remove();
       } else {
         $check.toggleClass("check-dismissed");
@@ -409,15 +417,49 @@
       return false;
     });
 
+    /* Automatically translated dismissal */
+    this.$editor.on("click", ".dismiss-automatically-translated", (e) => {
+      const $el = $(e.currentTarget);
+      const url = $el.attr("href");
+      const $check = $el.closest(".check");
+
+      $.ajax({
+        type: "POST",
+        url: url,
+        data: {
+          csrfmiddlewaretoken: this.csrfToken,
+        },
+        error: (_jqXhr, _textStatus, errorThrown) => {
+          addAlert(errorThrown);
+        },
+        success: () => {
+          const $listGroup = $check.closest(".list-group");
+          $check.remove();
+
+          // Hide the entire "Things to check" panel if no checks remain
+          if ($listGroup.children(".list-group-item").length === 0) {
+            $listGroup.closest(".panel").remove();
+          }
+        },
+      });
+      return false;
+    });
+
     /* Check fix */
     this.$editor.on("click", "[data-check-fixup]", (e) => {
       const $el = $(e.currentTarget);
       const fixups = $el.data("check-fixup");
-      this.$translationArea.each(function () {
+      this.$translationArea.each(function (plural) {
         const $this = $(this);
-        $.each(fixups, (key, value) => {
-          const re = new RegExp(value[0], value[2]);
-          $this.replaceValue($this.val().replace(re, value[1]));
+        $.each(fixups, (_idx, value) => {
+          if (value[0] === "regex") {
+            const re = new RegExp(value[1], value[3]);
+            $this.replaceValue($this.val().replace(re, value[2]));
+          } else if (value[0] === "plurals") {
+            $this.replaceValue(value[1][plural]);
+          } else {
+            addAlert(`Unknown fixup: ${value}`);
+          }
         });
       });
       return false;
@@ -456,7 +498,7 @@
         }
         $number.html($("<kbd/>").attr("title", title).text(key));
 
-        Mousetrap.bindGlobal([`mod+i ${key}`, `mod+i mod+${key}`], (e) => {
+        Mousetrap.bindGlobal([`mod+i ${key}`, `mod+i mod+${key}`], (_e) => {
           $this.find(".check-dismiss-single").click();
           return false;
         });
@@ -485,34 +527,32 @@
     });
 
     /* Glossary dialog */
-    let $glossaryDialog = null;
-    this.$editor.on("show.bs.modal", "#add-glossary-form", (e) => {
-      $glossaryDialog = $(e.currentTarget);
-
+    const $glossaryDialog = $("#add-glossary-form");
+    $glossaryDialog.on("show.bs.modal", (e) => {
       /* Prefill adding to glossary with current string */
       if (e.target.hasAttribute("data-shown")) {
         return;
       }
       /* Relies on clone source implementation */
       const cloneElement = document.querySelector(
-        ".source-language-group [data-clone-text]",
+        ".source-language-group [data-clone-value]",
       );
       if (cloneElement !== null) {
-        const source = cloneElement.getAttribute("data-clone-text");
-        const term_source = document
+        const source = cloneElement.getAttribute("data-clone-value");
+        const termSource = document
           .getElementById("div_id_add_term_source")
           .querySelector("textarea");
-        const term_target = document
+        const termTarget = document
           .getElementById("div_id_add_term_target")
           .querySelector("textarea");
         if (source.length < 200) {
-          term_source.value = source;
-          term_target.value = document.querySelector(
+          termSource.value = source;
+          termTarget.value = document.querySelector(
             ".translation-editor",
           ).value;
         }
-        term_source.dispatchEvent(new Event("input"));
-        term_target.dispatchEvent(new Event("input"));
+        termSource.dispatchEvent(new Event("input"));
+        termTarget.dispatchEvent(new Event("input"));
       }
       e.target.setAttribute("data-shown", true);
     });
@@ -521,7 +561,7 @@
     });
 
     /* Inline glossary adding */
-    this.$editor.on("submit", ".add-dict-inline", (e) => {
+    $(".add-dict-inline").on("submit", (e) => {
       const $form = $(e.currentTarget);
 
       increaseLoading("glossary-add");
@@ -541,7 +581,7 @@
             addAlert(data.responseDetails);
           }
         },
-        error: (xhr, textStatus, errorThrown) => {
+        error: (_xhr, _textStatus, errorThrown) => {
           addAlert(errorThrown);
           decreaseLoading("glossary-add");
         },
@@ -555,7 +595,7 @@
   };
 
   class Machinery {
-    constructor(initialState = {}) {
+    constructor(_initialState = {}) {
       this.state = {
         translations: [],
         weblateTranslationMemory: new Set(),
@@ -578,33 +618,45 @@
           .attr("dir", this.state.dir)
           .html(el.html),
       );
-      row.append($("<td>").html(el.diff));
+      row.append($("<td>").attr("class", "machinery-text").html(el.diff));
       row.append(
         $("<td/>").attr("class", "machinery-text").html(el.source_diff),
       );
       row.append(service);
 
       /* Quality score as bar with the text */
-      const quality_cell = $("<td class='number'></td>");
+      const qualityCell = $("<td class='number'></td>");
       if (el.show_quality) {
-        quality_cell.html(`<strong>${el.quality}</strong> %`);
+        qualityCell.html(`<strong>${el.quality}</strong> %`);
       }
-      row.append(quality_cell);
+      row.append(qualityCell);
       /* Translators: Verb for copy operation */
       row.append(
         $(
           `<td><a class="js-copy-machinery btn btn-warning">${gettext(
             "Clone to translation",
-          )}<span class="mt-number text-info"></span></a></td><td><a class="js-copy-save-machinery btn btn-primary">${gettext(
+          )}<span class="mt-number text-info"></span></a></td><td><a class="js-copy-save-machinery btn btn-info">${gettext(
             "Accept",
           )}</a></td>`,
         ),
       );
 
+      if (WLT.Config.HAS_REVIEW_WORKFLOW) {
+        row.append(
+          $(
+            `<td><a class="js-copy-approve-save-machinery btn btn-warning">${gettext(
+              "Accept and approve",
+            )}</a></td>`,
+          ),
+        );
+      } else {
+        row.append($("<td></td>"));
+      }
+
       if (this.state.weblateTranslationMemory.has(el.text)) {
         row.append(
           $(
-            `<td><a class="js-delete-machinery btn btn-danger" data-toggle="modal" data-target="#delete-url-modal">${gettext(
+            `<td><a class="js-delete-machinery btn btn-danger" data-bs-toggle="modal" data-bs-target="#delete-url-modal">${gettext(
               "Delete entry",
             )}</a></td>`,
           ),
@@ -621,7 +673,7 @@
       if (typeof el.origin !== "undefined") {
         service.append(" (");
         let origin;
-        const deleteUrl = false;
+        const _deleteUrl = false;
         if (typeof el.origin_detail !== "undefined") {
           origin = $("<abbr/>").text(el.origin).attr("title", el.origin_detail);
         } else if (typeof el.origin_url !== "undefined") {
@@ -642,7 +694,6 @@
       const translations = this.state.translations;
       const modalBody = $("<label>").text("");
 
-      // biome-ignore lint/complexity/noForEach: TODO
       translations.forEach((translation) => {
         if (
           text === translation.text &&
@@ -669,14 +720,13 @@
 
     render(translations) {
       const $translations = $("#machinery-translations");
-      // biome-ignore lint/complexity/noForEach: TODO
       translations.forEach((translation) => {
         const service = this.renderService(translation);
         let insertBefore = null;
         let done = false;
 
         /* This is the merging and insert sort logic */
-        $translations.children("tr").each(function (idx) {
+        $translations.children("tr").each(function (_idx) {
           const $this = $(this);
           const base = $this.data("raw");
           if (

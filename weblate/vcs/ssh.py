@@ -1,7 +1,6 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 from __future__ import annotations
 
 import hashlib
@@ -9,20 +8,30 @@ import os
 import stat
 import subprocess
 from base64 import b64decode, b64encode
-from typing import TYPE_CHECKING, Literal, TypedDict
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
+from urllib.parse import urlparse
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.management.utils import find_command
 from django.utils.functional import cached_property
 from django.utils.translation import gettext, pgettext_lazy
 
 from weblate.trans.util import get_clean_env
 from weblate.utils import messages
-from weblate.utils.data import data_dir
+from weblate.utils.data import data_path
+from weblate.utils.files import cleanup_error_message
 from weblate.utils.hash import calculate_checksum
+from weblate.utils.validators import DomainOrIPValidator
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
     from django_stubs_ext import StrOrPromise
+
+    from weblate.auth.models import AuthenticatedHttpRequest
 
 # SSH key files
 KNOWN_HOSTS = "known_hosts"
@@ -37,6 +46,16 @@ class KeyInfo(TypedDict):
 
 
 KeyType = Literal["rsa", "ed25519"]
+
+
+class KeyDetails(TypedDict):
+    key: str | None
+    fingerprint: NotRequired[str]
+    id: NotRequired[str]
+    filename: NotRequired[str]
+    type: KeyType
+    name: StrOrPromise
+
 
 KEYS: dict[KeyType, KeyInfo] = {
     "rsa": {
@@ -54,12 +73,12 @@ KEYS: dict[KeyType, KeyInfo] = {
 }
 
 
-def ssh_file(filename):
+def ssh_file(filename: str) -> Path:
     """Generate full path to SSH configuration file."""
-    return os.path.join(data_dir("ssh"), filename)
+    return data_path("ssh") / filename
 
 
-def is_key_line(key):
+def is_key_line(key: str) -> bool:
     """Check whether this line looks like a valid known_hosts line."""
     if not key:
         return False
@@ -74,7 +93,7 @@ def is_key_line(key):
     )
 
 
-def parse_hosts_line(line):
+def parse_hosts_line(line: str) -> tuple[str, str, str]:
     """Parse single hosts line into tuple host, key fingerprint."""
     host, keytype, key = line.strip().split(None, 3)[:3]
     digest = hashlib.sha256(b64decode(key)).digest()
@@ -85,11 +104,12 @@ def parse_hosts_line(line):
     return host, keytype, fingerprint
 
 
-def get_host_keys():
+def get_host_keys() -> list[tuple[str, str, str]]:
     """Return list of host keys."""
     try:
         result = []
-        with open(ssh_file(KNOWN_HOSTS)) as handle:
+        hosts_file = ssh_file(KNOWN_HOSTS)
+        with hosts_file.open() as handle:
             for line in handle:
                 line = line.strip()
                 if is_key_line(line):
@@ -107,13 +127,12 @@ def get_key_data_raw(
     # Read key data if it exists
     filename = KEYS[key_type][kind]
     key_file = ssh_file(filename)
-    if os.path.exists(key_file):
-        with open(key_file) as handle:
-            return filename, handle.read()
+    if key_file.exists():
+        return filename, key_file.read_text()
     return filename, None
 
 
-def get_key_data(key_type: KeyType = "rsa") -> dict[str, StrOrPromise | None]:
+def get_key_data(key_type: KeyType = "rsa") -> KeyDetails:
     """Parse host key and returns it."""
     filename, key_data = get_key_data_raw(key_type)
     if key_data is not None:
@@ -133,12 +152,12 @@ def get_key_data(key_type: KeyType = "rsa") -> dict[str, StrOrPromise | None]:
     }
 
 
-def get_all_key_data() -> dict[str, dict[str, StrOrPromise | None]]:
+def get_all_key_data() -> dict[KeyType, KeyDetails]:
     """Return all supported SSH keys."""
     return {key_type: get_key_data(key_type) for key_type in KEYS}
 
 
-def ensure_ssh_key():
+def ensure_ssh_key() -> KeyDetails | None:
     """Ensure SSH key is existing."""
     result = None
     for key_type in KEYS:
@@ -151,7 +170,9 @@ def ensure_ssh_key():
     return result
 
 
-def generate_ssh_key(request, key_type: KeyType = "rsa") -> None:
+def generate_ssh_key(
+    request: AuthenticatedHttpRequest | None, key_type: KeyType = "rsa"
+) -> None:
     """Generate SSH key."""
     key_info = KEYS[key_type]
     keyfile = ssh_file(key_info["private"])
@@ -179,7 +200,10 @@ def generate_ssh_key(request, key_type: KeyType = "rsa") -> None:
         error = getattr(exc, "output", "").strip()
         if not error:
             error = str(exc)
-        messages.error(request, gettext("Could not generate key: %s") % error)
+        messages.error(
+            request,
+            gettext("Could not generate key: %s") % cleanup_error_message(error),
+        )
         return
 
     # Fix key permissions
@@ -189,7 +213,43 @@ def generate_ssh_key(request, key_type: KeyType = "rsa") -> None:
     messages.success(request, gettext("Created new SSH key."))
 
 
-def add_host_key(request, host, port="") -> None:
+def extract_url_host_port(repo: str) -> tuple[str | None, int | None]:
+    """Extract hostname and port from repository URL."""
+    parsed = urlparse(repo)
+    if not parsed.hostname:
+        parsed = urlparse(f"ssh://{repo}")
+    if not parsed.hostname:
+        # Could not parse URL
+        return None, None
+    validator = DomainOrIPValidator()
+    try:
+        validator(parsed.hostname)
+    except ValidationError:
+        # Not a valid hostname
+        return None, None
+    port: int | None
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    return parsed.hostname, port
+
+
+def add_host_key_error(
+    request: AuthenticatedHttpRequest | None, error_text: str
+) -> None:
+    error_text = cleanup_error_message(error_text.strip())
+    if error_text:
+        messages.error(
+            request, gettext("Could not fetch public key for a host: %s") % error_text
+        )
+    else:
+        messages.error(request, gettext("Could not fetch public key for a host."))
+
+
+def add_host_key(
+    request: AuthenticatedHttpRequest | None, host: str, port: int | None = None
+) -> None:
     """Add host key for a host."""
     if not host:
         messages.error(request, gettext("Invalid host name given!"))
@@ -225,29 +285,21 @@ def add_host_key(request, host, port="") -> None:
             if keys:
                 known_hosts_file = ssh_file(KNOWN_HOSTS)
                 # Remove existing key entries
-                if os.path.exists(known_hosts_file):
-                    with open(known_hosts_file) as handle:
+                if known_hosts_file.exists():
+                    with known_hosts_file.open() as handle:
                         keys.difference_update(line.strip() for line in handle)
                 # Write any new keys
                 if keys:
-                    with open(known_hosts_file, "a") as handle:
+                    with known_hosts_file.open(mode="a") as handle:
                         for key in keys:
                             handle.write(key)
                             handle.write("\n")
             else:
-                messages.error(
-                    request,
-                    gettext("Could not fetch public key for a host: %s") % result.stderr
-                    or result.stdout,
-                )
+                add_host_key_error(request, result.stderr or result.stdout)
         except subprocess.CalledProcessError as exc:
-            messages.error(
-                request,
-                gettext("Could not fetch public key for a host: %s") % exc.stderr
-                or exc.stdout,
-            )
+            add_host_key_error(request, exc.stderr or exc.stdout)
         except OSError as exc:
-            messages.error(request, gettext("Could not get host key: %s") % str(exc))
+            add_host_key_error(request, str(exc))
 
 
 GITHUB_RSA_KEY = (
@@ -259,13 +311,16 @@ GITHUB_RSA_KEY = (
 )
 
 
-def cleanup_host_keys(*args, **kwargs) -> None:
+def cleanup_host_keys(
+    *args: Any,  # noqa: ANN401
+    logger: Callable[[str], Any] = print,
+    **kwargs: Any,  # noqa: ANN401
+) -> None:
     known_hosts_file = ssh_file(KNOWN_HOSTS)
-    if not os.path.exists(known_hosts_file):
+    if not known_hosts_file.exists():
         return
-    logger = kwargs.get("logger", print)
     keys = []
-    with open(known_hosts_file) as handle:
+    with known_hosts_file.open() as handle:
         for line in handle:
             # Ignore IP address based RSA keys for GitHub, these
             # are duplicate to hostname based and cause problems on
@@ -282,11 +337,11 @@ def cleanup_host_keys(*args, **kwargs) -> None:
 
             keys.append(line)
 
-    with open(known_hosts_file, "w") as handle:
+    with known_hosts_file.open(mode="w") as handle:
         handle.writelines(keys)
 
 
-def can_generate_key():
+def can_generate_key() -> bool:
     """Check whether we can generate key."""
     return find_command("ssh-keygen") is not None
 
@@ -299,6 +354,8 @@ exec {command} \
     -o StrictHostKeyChecking=yes \
     -o HashKnownHosts=no \
     -o UpdateHostKeys=yes \
+    -o ConnectTimeout=20 \
+    -o BatchMode=yes \
     -F {config_file} \
     {extra_args} \
     "$@"
@@ -313,11 +370,11 @@ class SSHWrapper:
     # - force not using system configuration (to avoid evil things as SendEnv)
 
     @cached_property
-    def digest(self):
+    def digest(self) -> str:
         return calculate_checksum(self.get_content())
 
     @property
-    def path(self):
+    def path(self) -> Path:
         """
         Calculates unique wrapper path.
 
@@ -325,44 +382,43 @@ class SSHWrapper:
         """
         return ssh_file(f"bin-{self.digest}")
 
-    def get_content(self, command="ssh"):
+    def get_content(self, command: str = "ssh") -> str:
         return SSH_WRAPPER_TEMPLATE.format(
             command=command,
-            known_hosts=ssh_file(KNOWN_HOSTS),
-            config_file=ssh_file(CONFIG),
-            identity_rsa=ssh_file(KEYS["rsa"]["private"]),
-            identity_ed25519=ssh_file(KEYS["ed25519"]["private"]),
+            known_hosts=ssh_file(KNOWN_HOSTS).as_posix(),
+            config_file=ssh_file(CONFIG).as_posix(),
+            identity_rsa=ssh_file(KEYS["rsa"]["private"]).as_posix(),
+            identity_ed25519=ssh_file(KEYS["ed25519"]["private"]).as_posix(),
             extra_args=settings.SSH_EXTRA_ARGS,
         )
 
     @property
-    def filename(self):
+    def filename(self) -> Path:
         """Calculate unique wrapper filename."""
-        return os.path.join(self.path, "ssh")
+        return self.path / "ssh"
 
     def create(self) -> None:
         """Create wrapper for SSH to pass custom known hosts and key."""
-        if not os.path.exists(self.path):
-            os.makedirs(self.path)
+        self.path.mkdir(parents=True, exist_ok=True)
 
-        if not os.path.exists(ssh_file(CONFIG)):
-            try:
-                with open(ssh_file(CONFIG), "x") as handle:
-                    handle.write(
-                        "# SSH configuration for customising SSH client in Weblate\n"
-                    )
-            except OSError:
-                pass
+        ssh_config = ssh_file(CONFIG)
+        if not ssh_config.exists():
+            with suppress(OSError), ssh_config.open(mode="x") as handle:
+                handle.write(
+                    "# SSH configuration for customising SSH client in Weblate\n"
+                )
 
         for command in ("ssh", "scp"):
-            filename = os.path.join(self.path, command)
+            path = find_command(command)
+            if path is None:
+                continue
+            filename = self.path / command
 
-            if not os.path.exists(filename):
-                with open(filename, "w") as handle:
-                    handle.write(self.get_content(find_command(command)))
+            if not filename.exists():
+                filename.write_text(self.get_content(path))
 
             if not os.access(filename, os.X_OK):
-                os.chmod(filename, 0o755)  # noqa: S103, nosec
+                filename.chmod(0o755)
 
 
 SSH_WRAPPER = SSHWrapper()

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .base import BatchMachineTranslation, DownloadMultipleTranslations
+from .base import BatchMachineTranslation
 from .forms import LibreTranslateMachineryForm
 
 if TYPE_CHECKING:
     from weblate.trans.models import Unit
+
+    from .base import DownloadMultipleTranslations
 
 
 class LibreTranslateTranslation(BatchMachineTranslation):
@@ -20,9 +22,6 @@ class LibreTranslateTranslation(BatchMachineTranslation):
 
     name = "LibreTranslate"
     max_score = 89
-    language_map = {
-        "zh_hans": "zh",
-    }
     settings_form = LibreTranslateMachineryForm
     request_timeout = 20
 
@@ -33,10 +32,14 @@ class LibreTranslateTranslation(BatchMachineTranslation):
         )
         return [x["code"] for x in response.json()]
 
+    def map_language_code(self, code):
+        """Convert language to service specific code."""
+        return super().map_language_code(code).replace("_", "-")
+
     def download_multiple_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         sources: list[tuple[str, Unit | None]],
         user=None,
         threshold: int = 75,
@@ -49,8 +52,8 @@ class LibreTranslateTranslation(BatchMachineTranslation):
             json={
                 "api_key": self.settings["key"],
                 "q": texts,
-                "source": source,
-                "target": language,
+                "source": source_language,
+                "target": target_language,
             },
         )
         payload = response.json()

@@ -2,18 +2,20 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
 import json
 import math
 import os
+import re
+from typing import TYPE_CHECKING, BinaryIO
 
 from django.conf import settings
 from django.db import models
 from django.db.models import Q, Value
 from django.db.models.functions import MD5
 from django.utils.encoding import force_str
-from django.utils.translation import gettext, pgettext
-from jsonschema import validate
-from jsonschema.exceptions import ValidationError
+from django.utils.translation import gettext, gettext_lazy, pgettext
 from translate.misc.xml_helpers import getXMLlang, getXMLspace
 from translate.storage.tmx import tmxfile
 from weblate_schemas import load_schema
@@ -28,6 +30,20 @@ from weblate.memory.utils import (
 )
 from weblate.utils.db import adjust_similarity_threshold, using_postgresql
 from weblate.utils.errors import report_error
+
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest, User
+    from weblate.trans.models import Project
+
+NON_WORD_RE = re.compile(r"\W")
+
+SUPPORTED_FORMATS = (
+    "json",
+    "tmx",
+    "xliff",
+    "po",
+    "csv",
+)
 
 
 class MemoryImportError(Exception):
@@ -49,7 +65,14 @@ def get_node_data(unit, node):
 
 
 class MemoryQuerySet(models.QuerySet):
-    def filter_type(self, user=None, project=None, use_shared=False, from_file=False):
+    def filter_type(
+        self,
+        *,
+        user: User | None = None,
+        project: Project | None = None,
+        use_shared: bool = False,
+        from_file: bool = False,
+    ):
         base = self
         if "memory_db" in settings.DATABASES:
             base = base.using("memory_db")
@@ -91,14 +114,38 @@ class MemoryQuerySet(models.QuerySet):
 
         PostgreSQL similarity threshold needs to be higher to avoid too slow
         queries.
+
+        We exclude non-word characters while calculating this as those are
+        excluded in the trigram matching.
         """
-        length = len(text)
+        # Highest similarity we want to get
+        high = 0.985
+        # Limit the number of decimals to avoid too frequent flipping of the setting
+        # inside PostgreSQL
+        decimals = 3
 
-        base = 0.172489 * math.log(threshold) + 0.207051
-        bonus = 7.03436 * math.exp(-6.07957 * base)
-        length_bonus = (0.0733418 * math.log(length) + 0.324497) * bonus
+        # Maps threshold to a minimal score, approximately:
+        #  10 => 0.7
+        #  75 => 0.95
+        #  80 => 0.96
+        # 100 => 1.0
+        base = 0.127264 * math.log(24.282 * threshold)
+        if base >= high:
+            return min(round(base, decimals), 1.0)
 
-        return max(0.6, min(1.0, round(base + length_bonus, 3)))
+        # Allow up to +20% boost based on length
+        maximum = min(base * 1.2, high)
+
+        # Measure the length of alphanumeric characters in the text
+        max_length = 2000
+        length = min(max(1, len(NON_WORD_RE.sub("", text))), max_length)
+
+        # Apply boost based on square root of length so that it grows faster
+        # for shorter strings
+        boost = (maximum - base) * math.sqrt(length) / math.sqrt(max_length)
+
+        # Cap result into reasonable limits
+        return max(0.6, min(1.0, round(base + boost, decimals)))
 
     def lookup(
         self,
@@ -141,9 +188,29 @@ class MemoryQuerySet(models.QuerySet):
 
 
 class MemoryManager(models.Manager):
-    def import_file(self, request, fileobj, langmap=None, **kwargs):
+    def import_file(
+        self,
+        request: AuthenticatedHttpRequest | None,
+        fileobj: BinaryIO,
+        langmap: dict[str, str] | None = None,
+        source_language: Language | str | None = None,
+        target_language: Language | str | None = None,
+        **kwargs,
+    ):
+        kwargs.update(
+            {
+                "from_file": True,
+                "status": Memory.STATUS_ACTIVE,
+            }
+        )
         origin = os.path.basename(fileobj.name).lower()
         name, extension = os.path.splitext(origin)
+
+        if extension.lower().strip(".") not in SUPPORTED_FORMATS:
+            raise MemoryImportError(
+                gettext("Unsupported file extension: %s") % extension
+            )
+
         if len(name) > 25:
             origin = f"{name[:25]}...{extension}"
 
@@ -152,29 +219,49 @@ class MemoryManager(models.Manager):
         elif extension == ".json":
             result = self.import_json(request, fileobj, origin, **kwargs)
         else:
-            raise MemoryImportError(gettext("Unsupported file!"))
+            result = self.import_other_format(
+                request,
+                fileobj,
+                origin,
+                source_language,
+                target_language,
+                **kwargs,
+            )
+
         if not result:
             raise MemoryImportError(
                 gettext("No valid entries found in the uploaded file!")
             )
         return result
 
-    def import_json(self, request, fileobj, origin=None, **kwargs):
+    def import_json(
+        self,
+        request: AuthenticatedHttpRequest | None,
+        fileobj: BinaryIO,
+        origin: str | None = None,
+        **kwargs,
+    ) -> int:
+        # Lazily import as this is expensive
+        from jsonschema import validate
+        from jsonschema.exceptions import ValidationError
+
         content = fileobj.read()
         try:
             data = json.loads(force_str(content))
-        except ValueError as error:
-            report_error(cause="Could not parse memory")
-            raise MemoryImportError(gettext("Could not parse JSON file: %s") % error)
+        except json.JSONDecodeError as error:
+            report_error("Could not parse memory")
+            raise MemoryImportError(
+                gettext("Could not parse JSON file: %s") % error
+            ) from error
         try:
             validate(data, load_schema("weblate-memory.schema.json"))
         except ValidationError as error:
-            report_error(cause="Could not validate memory")
+            report_error("Could not validate memory")
             raise MemoryImportError(
                 gettext("Could not parse JSON file: %s") % error
             ) from error
         found = 0
-        lang_cache = {}
+        lang_cache: dict[str, Language] = {}
         for entry in data:
             try:
                 self.update_entry(
@@ -187,6 +274,7 @@ class MemoryManager(models.Manager):
                     source=entry["source"],
                     target=entry["target"],
                     origin=origin,
+                    context=entry.get("context", ""),
                     **kwargs,
                 )
                 found += 1
@@ -194,20 +282,25 @@ class MemoryManager(models.Manager):
                 continue
         return found
 
-    def import_tmx(self, request, fileobj, origin=None, langmap=None, **kwargs):
-        if not kwargs:
-            kwargs = {"from_file": True}
+    def import_tmx(
+        self,
+        request: AuthenticatedHttpRequest | None,
+        fileobj: BinaryIO,
+        origin: str | None = None,
+        langmap: dict[str, str] | None = None,
+        **kwargs,
+    ) -> int:
         try:
             storage = tmxfile.parsefile(fileobj)
         except (SyntaxError, AssertionError) as error:
-            report_error(cause="Could not parse")
+            report_error("Could not parse")
             raise MemoryImportError(
                 gettext("Could not parse TMX file: %s") % error
             ) from error
         header = next(
             storage.document.getroot().iterchildren(storage.namespaced("header"))
         )
-        lang_cache = {}
+        lang_cache: dict[str, Language] = {}
         srclang = header.get("srclang")
         if not srclang:
             raise MemoryImportError(
@@ -215,8 +308,10 @@ class MemoryManager(models.Manager):
             )
         try:
             source_language = Language.objects.get_by_code(srclang, lang_cache, langmap)
-        except Language.DoesNotExist:
-            raise MemoryImportError(gettext("Could not find language %s!") % srclang)
+        except Language.DoesNotExist as error:
+            raise MemoryImportError(
+                gettext("Could not find language %s!") % srclang
+            ) from error
 
         found = 0
         for unit in storage.units:
@@ -231,10 +326,10 @@ class MemoryManager(models.Manager):
                     language = Language.objects.get_by_code(
                         lang_code, lang_cache, langmap
                     )
-                except Language.DoesNotExist:
+                except Language.DoesNotExist as error:
                     raise MemoryImportError(
                         gettext("Could not find language %s!") % header.get("srclang")
-                    )
+                    ) from error
                 translations[language.code] = text
 
             try:
@@ -252,10 +347,75 @@ class MemoryManager(models.Manager):
                     source=source,
                     target=text,
                     origin=origin,
+                    context=unit.getcontext(),
                     **kwargs,
                 )
                 found += 1
         return found
+
+    def import_other_format(
+        self,
+        request: AuthenticatedHttpRequest | None,
+        fileobj: BinaryIO,
+        origin: str,
+        source_language: Language | str | None = None,
+        target_language: Language | str | None = None,
+        **kwargs,
+    ) -> int:
+        """
+        Import memory from other formats.
+
+        This is a generic function to import memories from other formats.
+        It currently supports all formats supported by `try_load` from
+        `weblate.formats.auto`.
+
+        """
+        from weblate.formats.auto import try_load
+
+        lang_cache: dict[str, Language] = {}
+        try:
+            storage = try_load(origin, fileobj.read(), None, None)
+        except Exception as error:
+            report_error("Could not parse memory")
+            raise MemoryImportError(gettext("Unsupported file!")) from error
+
+        if storage.monolingual is True:
+            raise MemoryImportError(
+                gettext("Monolingual format not supported for memory upload")
+            )
+
+        def get_language(language: Language | str | None) -> Language:
+            """Get a language object based on the given code."""
+            if isinstance(language, Language):
+                return language
+
+            if not language:
+                raise MemoryImportError(
+                    gettext("Missing source or target language in file!")
+                )
+            try:
+                return Language.objects.get_by_code(language, lang_cache)
+            except Language.DoesNotExist as error:
+                raise MemoryImportError(
+                    gettext("Could not find language %s!") % language
+                ) from error
+
+        source_language = get_language(storage.source_language or source_language)
+        target_language = get_language(storage.language_code or target_language)
+
+        count = 0
+        for _unused, unit in storage.iterate_merge("", only_translated=True):
+            self.update_entry(
+                source_language=source_language,
+                target_language=target_language,
+                source=unit.source,
+                target=unit.target,
+                origin=origin,
+                context=unit.context,
+                **kwargs,
+            )
+            count += 1
+        return count
 
     def update_entry(self, **kwargs) -> None:
         if not is_valid_memory_entry(**kwargs):  # pylint: disable=missing-kwoa
@@ -265,6 +425,14 @@ class MemoryManager(models.Manager):
 
 
 class Memory(models.Model):
+    # Status choices for the memory entry
+    STATUS_PENDING = 0
+    STATUS_ACTIVE = 1
+    STATUS_CHOICES = (
+        (STATUS_PENDING, gettext_lazy("Pending")),
+        (STATUS_ACTIVE, gettext_lazy("Active")),
+    )
+
     source_language = models.ForeignKey(
         "lang.Language",
         on_delete=models.deletion.CASCADE,
@@ -278,6 +446,7 @@ class Memory(models.Model):
     source = models.TextField()
     target = models.TextField()
     origin = models.TextField()
+    context = models.TextField(default="", blank=True)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.deletion.CASCADE,
@@ -294,13 +463,17 @@ class Memory(models.Model):
     )
     from_file = models.BooleanField(default=False)
     shared = models.BooleanField(default=False)
+    status = models.IntegerField(
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+    )
 
     objects = MemoryManager.from_queryset(MemoryQuerySet)()
 
     class Meta:
         verbose_name = "Translation memory entry"
         verbose_name_plural = "Translation memory entries"
-        indexes = [
+        indexes = [  # noqa: RUF012
             # Additional indexes are created manually in the migration for full text search
             # Use MD5 to index text fields, applied in MemoryQuerySet.filter
             models.Index(
@@ -351,9 +524,11 @@ class Memory(models.Model):
         """Convert to dict suitable for JSON export."""
         return {
             "source": self.source,
+            "context": self.context,
             "target": self.target,
             "source_language": self.source_language.code,
             "target_language": self.target_language.code,
             "origin": self.origin,
             "category": self.get_category(),
+            "status": self.status,
         }

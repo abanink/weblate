@@ -17,12 +17,12 @@ The authentication attempts are subject to :ref:`rate-limit`.
 Authentication backends
 -----------------------
 
-The built-in solution of Django is used for authentication,
-including various social options to do so.
-Using it means you can import the user database of other Django-based projects
-(see :ref:`pootle-migration`).
+Weblate relies on Django for the authentication. This includes built-in
+password-based authentication, social authentication, and third-party
+authentication backends for Django.
 
-Django can additionally be set up to authenticate against other means too.
+Using Django's built-in authentication means you can import the user database
+of other Django-based projects (see :ref:`pootle-migration`).
 
 .. seealso::
 
@@ -49,7 +49,9 @@ in :doc:`psa:configuration/django`.
 
         SOCIAL_AUTH_OPENSUSE_FORCE_EMAIL_VALIDATION = True
 
-    .. seealso:: :doc:`psa:pipeline`
+    .. seealso::
+
+       :doc:`psa:pipeline`
 
 Enabling individual backends is quite easy, it's just a matter of adding an entry to
 the :setting:`django:AUTHENTICATION_BACKENDS` setting and possibly adding keys needed for a given
@@ -115,7 +117,7 @@ The GitHub should be configured to have callback URL as
 There are similar authentication backends for GitHub for Organizations and
 GitHub for Teams. Their settings are named ``SOCIAL_AUTH_GITHUB_ORG_*`` and
 ``SOCIAL_AUTH_GITHUB_TEAM_*``, and they require additional setting of the scope
-- ``SOCIAL_AUTH_GITHUB_ORG_NAME`` or ``SOCIAL_AUTH_GITHUB_TEAM_ID``.  Their
+- ``SOCIAL_AUTH_GITHUB_ORG_NAME`` or ``SOCIAL_AUTH_GITHUB_TEAM_ID``. Their
 callback URLs are ``https://WEBLATE SERVER/accounts/complete/github-org/`` and
 ``https://WEBLATE SERVER/accounts/complete/github-teams/``.
 
@@ -194,10 +196,10 @@ You need to register an application on Bitbucket and then tell Weblate all its s
 Google OAuth 2
 ~~~~~~~~~~~~~~
 
-To use Google OAuth 2, you need to register an application on
-<https://console.developers.google.com/> and enable the Google+ API.
+To use Google OAuth 2, you need to register an OAuth application at
+<https://console.developers.google.com/>.
 
-The redirect URL is ``https://WEBLATE SERVER/accounts/complete/google-oauth2/``
+The redirect URL is ``https://WEBLATE SERVER/accounts/complete/google-oauth2/``.
 
 .. code-block:: python
 
@@ -226,7 +228,7 @@ Facebook OAuth 2
 As per usual with OAuth 2 services, you need to register your application with
 Facebook. Once this is done, you can set up Weblate to use it:
 
-The redirect URL is ``https://WEBLATE SERVER/accounts/complete/facebook/``
+The redirect URL is ``https://WEBLATE SERVER/accounts/complete/facebook/``.
 
 .. code-block:: python
 
@@ -254,7 +256,7 @@ The redirect URL is ``https://WEBLATE SERVER/accounts/complete/facebook/``
 GitLab OAuth 2
 ~~~~~~~~~~~~~~
 
-For using GitLab OAuth 2, you need to register an application on
+For using GitLab OAuth 2, you need to register an application at
 <https://gitlab.com/profile/applications>.
 
 The redirect URL is ``https://WEBLATE SERVER/accounts/complete/gitlab/`` and
@@ -282,6 +284,44 @@ ensure you mark the `read_user` scope.
 .. seealso::
 
    :doc:`psa:backends/gitlab`
+
+.. _gitea_auth:
+
+Gitea OAuth 2
+~~~~~~~~~~~~~~
+
+For using Gitea OAuth 2, you need to register an application at
+``https://GITEA SERVER/user/settings/applications``.
+
+The redirect URL is ``https://WEBLATE SERVER/accounts/complete/gitea/``.
+
+.. code-block:: python
+
+    # Authentication configuration
+    AUTHENTICATION_BACKENDS = (
+        "social_core.backends.gitea.GiteaOAuth2",
+        "social_core.backends.email.EmailAuth",
+        "weblate.accounts.auth.WeblateUserBackend",
+    )
+
+    # Social auth backends setup
+    SOCIAL_AUTH_GITEA_KEY = ""
+    SOCIAL_AUTH_GITEA_SECRET = ""
+
+    # If you are using your own Gitea
+    SOCIAL_AUTH_GITEA_API_URL = "https://gitea.example.com/"
+
+.. include:: /snippets/oauth-site.rst
+
+.. note::
+
+   The configuration above also works with Forgejo;
+   for an example of production deployment with Forgejo,
+   see `Codeberg Translate <https://translate.codeberg.org>`_.
+
+.. seealso::
+
+   :doc:`psa:backends/gitea`
 
 .. _azure-auth:
 
@@ -344,7 +384,7 @@ You will need following:
 Slack
 ~~~~~
 
-For using Slack OAuth 2, you need to register an application on
+For using Slack OAuth 2, you need to register an application at
 <https://api.slack.com/apps>.
 
 The redirect URL is ``https://WEBLATE SERVER/accounts/complete/slack/``.
@@ -417,25 +457,20 @@ Password authentication
 -----------------------
 
 The default :file:`settings.py` comes with a reasonable set of
-:setting:`django:AUTH_PASSWORD_VALIDATORS`:
-
-* Passwords can't be too similar to your other personal info.
-* Passwords must contain at least 10 characters.
-* Passwords can't be a commonly used password.
-* Passwords can't be entirely numeric.
-* Passwords can't consist of a single character or only whitespace.
-* Passwords can't match a password you have used in the past.
-
-You can customize this setting to match your password policy.
+:setting:`django:AUTH_PASSWORD_VALIDATORS` that ensures that weak passwords are
+not allowed. You can customize this setting to match your password policy.
 
 Additionally you can also install
-`django-zxcvbn-password <https://pypi.org/project/django-zxcvbn-password/>`_
+`django-zxcvbn-password-validator <https://github.com/Pierre-Sassoulas/django-zxcvbn-password-validator>`_
 which gives quite realistic estimates of password difficulty and allows rejecting
 passwords below a certain threshold.
 
 .. seealso::
 
-   :envvar:`WEBLATE_MIN_PASSWORD_SCORE`
+   * :setting:`PASSWORD_MINIMAL_STRENGTH`
+   * :envvar:`WEBLATE_MIN_PASSWORD_SCORE`
+   * :doc:`/security/passwords`
+
 
 .. _saml-auth:
 
@@ -444,11 +479,18 @@ SAML authentication
 
 .. versionadded:: 4.1.1
 
+.. versionchanged:: 5.12
+
+   The dependencies for SAML authentication are no longer included in the
+   default ``all`` extras. You need to include ``saml`` while installing the
+   Weblate package using pip (``uv pip install Weblate[all,saml]``).
+
 Please follow the Python Social Auth instructions for configuration. Notable differences:
 
 * Weblate supports single IDP which has to be called ``weblate`` in
   ``SOCIAL_AUTH_SAML_ENABLED_IDPS``.
-* The SAML XML metadata URL is ``/accounts/metadata/saml/``.
+* The SAML XML metadata URL is ``/accounts/metadata/saml/``, which is also an entity ID.
+* The sign-in URL is ``/accounts/complete/saml/`` (also known as ACS URL).
 * Following settings are automatically filled in:
   ``SOCIAL_AUTH_SAML_SP_ENTITY_ID``, ``SOCIAL_AUTH_SAML_TECHNICAL_CONTACT``,
   ``SOCIAL_AUTH_SAML_SUPPORT_CONTACT``
@@ -473,9 +515,6 @@ Example configuration:
             "entity_id": "https://idp.testshib.org/idp/shibboleth",
             "url": "https://idp.testshib.org/idp/profile/SAML2/Redirect/SSO",
             "x509cert": "MIIEDjCCAvagAwIBAgIBADA ... 8Bbnl+ev0peYzxFyF5sQA==",
-            "attr_name": "full_name",
-            "attr_username": "username",
-            "attr_email": "email",
         }
     }
     SOCIAL_AUTH_SAML_ORG_INFO = {
@@ -495,7 +534,7 @@ Example configuration:
     }
 
 The default configuration extracts user details from following attributes,
-configure your IDP to provide them:
+configure your IdP to provide them:
 
 +--------------+-----------------------------------------+
 | Attribute    | SAML URI reference                      |
@@ -511,15 +550,28 @@ configure your IDP to provide them:
 | Username     | ``urn:oid:0.9.2342.19200300.100.1.1``   |
 +--------------+-----------------------------------------+
 
+When configuring Weblate SP in your IdP, it is recommended to choose persistent
+:guilabel:`Name ID format`.
+
 .. hint::
 
-   The example above and the Docker image define an IDP called ``weblate``.
-   You might need to configure this string as :guilabel:`Relay` in your IDP.
+   The example above and the Docker image define an IdP called ``weblate``.
+   You might need to configure this string as :guilabel:`Relay` in your IdP.
+
+.. note::
+
+   Weblate authentication relies on the ``RelayState`` parameter to be passed
+   through the authentication process. This needs to be configured with some
+   identity providers:
+
+   * `How to Send a Custom RelayState with Okta`_
+
+.. _How to Send a Custom RelayState with Okta: https://support.okta.com/help/s/article/How-to-send-a-custom-relaystate-to-application-through-idp-initiated-authentication-urls
 
 .. seealso::
 
-   :ref:`Configuring SAML in Docker <docker-saml>`,
-   :doc:`psa:backends/saml`
+   * :ref:`Configuring SAML in Docker <docker-saml>`
+   * :doc:`psa:backends/saml`
 
 .. _ldap-auth:
 
@@ -532,7 +584,7 @@ can install it via usual means:
 .. code-block:: sh
 
     # Using PyPI
-    pip install 'django-auth-ldap>=1.3.0'
+    uv pip install 'django-auth-ldap>=1.3.0'
 
     # Using apt-get
     apt-get install python-django-auth-ldap
@@ -645,7 +697,8 @@ Active Directory integration
 
 .. seealso::
 
-    :doc:`ldap:index`, :doc:`ldap:authentication`
+   * :doc:`ldap:index`
+   * :doc:`ldap:authentication`
 
 
 .. _cas-auth:
@@ -654,7 +707,7 @@ Active Directory integration
 CAS authentication
 ------------------
 
-CAS authentication can be achieved using a package such as `django-cas-ng`.
+CAS authentication can be achieved using a package such as `Django CAS NG`_.
 
 Step one is disclosing the e-mail field of the user via CAS. This has to be
 configured on the CAS server itself, and requires you run at least CAS v2 since
@@ -662,11 +715,11 @@ CAS v1 doesn't support attributes at all.
 
 Step two is updating Weblate to use your CAS server and attributes.
 
-To install `django-cas-ng`:
+To install `Django CAS NG`_:
 
 .. code-block:: sh
 
-    pip install django-cas-ng
+    uv pip install django-cas-ng
 
 Once you have the package installed you can hook it up to the Django
 authentication system by modifying the :file:`settings.py` file:
@@ -707,9 +760,7 @@ cause problems, therefore it's suggested to put it:
         user.email = attributes["email"]
         user.save()
 
-.. seealso::
-
-    `Django CAS NG <https://github.com/django-cas-ng/django-cas-ng>`_
+.. _Django CAS NG: https://github.com/django-cas-ng/django-cas-ng
 
 Configuring third party Django authentication
 ---------------------------------------------
@@ -720,8 +771,8 @@ installed.
 
 .. seealso::
 
-    :ref:`ldap-auth`,
-    :ref:`cas-auth`
+   * :ref:`ldap-auth`
+   * :ref:`cas-auth`
 
 Typically the installation will consist of adding an authentication backend to
 :setting:`django:AUTHENTICATION_BACKENDS` and installing an authentication app (if
@@ -737,3 +788,42 @@ there is any) into :setting:`django:INSTALLED_APPS`:
     INSTALLED_APPS += (
         # Install authentication app here
     )
+
+
+.. _2fa:
+
+Two-factor authentication
+=========================
+
+.. versionadded:: 5.7
+
+.. hint::
+
+   Two-factor authentication adds another layer of security to your account by requiring more than just a password to sign in.
+
+Weblate supports the following second factors:
+
+Security keys (WebAuthn)
+   Both, Passkeys and security keys are supported.
+
+   Passkeys validate your identity using touch, facial recognition, a device password, or a PIN as they include user verification.
+
+   Security keys are WebAuthn credentials that can only be used as a second factor of authentication, and these only validate user presence.
+
+Authenticator apps (TOTP)
+   Authenticator apps and browser extensions like Aegis, Bitwarden, Google Authenticator,
+   1Password, Authy, Microsoft Authenticator, etc. generate time-based one-time passwords
+   that are used as a second factor to verify your identity when prompted
+   during sign-in.
+
+Recovery codes
+   Recovery codes can be used to access your account if you lose access to your device and cannot receive two-factor authentication codes.
+
+   Keep your recovery codes as safe as your password. We recommend saving them with a password manager such as Bitwarden, 1Password, Authy, or Keeper.
+
+Each user can configure this in :ref:`profile-account` and second factor will
+be required to sign in addition to the existing authentication method.
+
+This can be enforced for users at the project (see :ref:`project-enforced_2fa`) or team level.
+
+The permissions of a team with enforced two-factor authentication won't be applied to users who do not have it configured.

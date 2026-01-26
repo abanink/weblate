@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// biome-ignore lint/style/noVar: TODO: doesn't work without that
 // biome-ignore lint/correctness/noInvalidUseBeforeDeclaration: TODO: doesn't work without that
 var WLT = WLT || {};
 
 WLT.Config = (() => ({
   IS_MAC: /Mac|iPod|iPhone|iPad/.test(navigator.platform),
+  HAS_REVIEW_WORKFLOW:
+    $('.translation-form input[name="review"][value="30"]').length > 0,
 }))();
 
 WLT.Utils = (() => ({
@@ -26,6 +27,47 @@ WLT.Utils = (() => ({
     /* Review workflow */
     $el.find('input[name="review"][value="20"]').prop("checked", true);
   },
+
+  markApproved: ($el) => {
+    /* Standard workflow */
+    $el.find('input[name="fuzzy"]').prop("checked", false);
+    /* Review workflow */
+    $el.find('input[name="review"][value="30"]').prop("checked", true);
+  },
+
+  /**
+   * Indicate that the translation has changed
+   * by appending a warning before the editor.
+   * @param {Event} [e] - The event object (optional)
+   * @returns {void}
+   */
+  indicateChanges: (e) => {
+    const $warning = $(
+      "<div id='unsaved-label' class='text-warning float-end'/>",
+    );
+    const $editorArea = e
+      ? $(e.target).closest(".translation-editor")
+      : $(".translator .translation-editor");
+    const $target = $editorArea
+      .closest(".translation-item")
+      .find(".editor-footer");
+    $warning.text(gettext("Unsaved changes!"));
+    if ($target.next(".text-warning").length === 0) {
+      $warning.insertAfter($target);
+      $editorArea.addClass("has-changes");
+    }
+  },
+  /**
+   * Check if the translation has any changes
+   * @param {Event} [e] - The event object (optional)
+   * @returns {boolean}
+   */
+  editorHasChanges: (e) => {
+    const $editorArea = e
+      ? $(e.target).closest(".translation-editor")
+      : $(".translator .translation-editor");
+    return $editorArea.hasClass("has-changes");
+  },
 }))();
 
 WLT.Editor = (() => {
@@ -40,6 +82,7 @@ WLT.Editor = (() => {
 
     this.$editor.on("input", translationAreaSelector, (e) => {
       WLT.Utils.markTranslated($(e.target).closest("form"));
+      WLT.Utils.indicateChanges(e);
     });
 
     this.$editor.on("focusin", translationAreaSelector, function () {
@@ -53,7 +96,7 @@ WLT.Editor = (() => {
       const counter = editor.querySelector(".length-indicator");
       const classToggle = editor.classList;
 
-      const limit = Number.parseInt(counter.getAttribute("data-max"));
+      const limit = Number.parseInt(counter.getAttribute("data-max"), 10);
       const length = textarea.value.length;
 
       counter.textContent = length;
@@ -70,10 +113,10 @@ WLT.Editor = (() => {
     });
 
     /* Copy source text */
-    this.$editor.on("click", "[data-clone-text]", function (e) {
+    this.$editor.on("click", "[data-clone-value]", function (e) {
       const $this = $(this);
       const $document = $(document);
-      const cloneText = this.getAttribute("data-clone-text");
+      const cloneText = this.getAttribute("data-clone-value");
 
       let row = $this.closest(".zen-unit");
       if (row.length === 0) {
@@ -103,17 +146,19 @@ WLT.Editor = (() => {
         });
       }
       WLT.Utils.markFuzzy($this.closest("form"));
+      WLT.Utils.indicateChanges(e);
       return false;
     });
 
     /* Direction toggling */
-    this.$editor.on("change", ".direction-toggle", function () {
+    this.$editor.on("change", ".direction-toggle", function (e) {
       const $this = $(this);
       const direction = $this.find("input").val();
       const container = $this.closest(".translation-item");
 
       container.find(".translation-editor").attr("dir", direction);
       container.find(".highlighted-output").attr("dir", direction);
+      WLT.Utils.indicateChanges(e);
     });
 
     /* Special characters */
@@ -126,12 +171,54 @@ WLT.Editor = (() => {
         .find(".translation-editor")
         .insertAtCaret(text);
       e.preventDefault();
+      WLT.Utils.indicateChanges(e);
+    });
+
+    // Disable insertion and copy buttons for read only strings
+    $(".translator").each(function () {
+      const $this = $(this);
+
+      if ($this.find(".translation-editor").first().attr("readonly")) {
+        // Apply to zen unit or the entire document
+        // the latter also disables insertion from related strings
+        let root = $this.closest(".zen-unit");
+        if (root.length === 0) {
+          root = $(document);
+        }
+
+        root.find(".specialchar").attr("disabled", "");
+        root.find("[data-clone-value]").attr("disabled", "");
+        root.find(".hlcheck").addClass("disabled");
+      }
     });
 
     this.initHighlight();
     this.init();
 
     this.$translationArea[0].focus();
+
+    // Show confirmation dialog if changes have been made
+    // when leaving the page
+    addEventListener("beforeunload", (e) => {
+      if (WLT.Utils.editorHasChanges()) {
+        e.preventDefault();
+        return true; // Backwards compatibility
+      }
+    });
+
+    // Skip confirmation
+    this.$editor.on("click", ".skip", (e) => {
+      if (WLT.Utils.editorHasChanges(e)) {
+        return confirm(
+          gettext("You have unsaved changes. Are you sure you want to skip?"),
+        );
+      }
+    });
+
+    // Remove unsaved changes warning when submitting
+    this.$editor.on("submit", () => {
+      $(".translator .translation-editor").removeClass("has-changes");
+    });
   }
 
   EditorBase.prototype.init = () => {};
@@ -143,13 +230,17 @@ WLT.Editor = (() => {
     /* Copy from source text highlight check */
     this.$editor.on("click", hlSelector, function (e) {
       const $this = $(this);
-      insertEditor(this.getAttribute("data-value"), $this);
+      // Do not insert if highlighted element is disabled
+      if (!$this.hasClass("disabled")) {
+        insertEditor(this.getAttribute("data-value"), $this);
+      }
       e.preventDefault();
+      WLT.Utils.indicateChanges(e);
     });
 
     /* and shortcuts */
     for (let i = 1; i < 10; i++) {
-      Mousetrap.bindGlobal(`mod+${i}`, (e) => false);
+      Mousetrap.bindGlobal(`mod+${i}`, (_e) => false);
     }
 
     const $hlCheck = $(hlSelector);
@@ -169,7 +260,7 @@ WLT.Editor = (() => {
           $this.attr("title", title);
           $this.find(hlNumberSelector).html($("<kbd/>").text(key));
 
-          Mousetrap.bindGlobal(`mod+${key}`, (e) => {
+          Mousetrap.bindGlobal(`mod+${key}`, (_e) => {
             $this.click();
             return false;
           });
@@ -182,14 +273,14 @@ WLT.Editor = (() => {
 
     Mousetrap.bindGlobal(
       "mod",
-      (e) => {
+      (_e) => {
         $(hlNumberSelector).show();
       },
       "keydown",
     );
     Mousetrap.bindGlobal(
       "mod",
-      (e) => {
+      (_e) => {
         $(hlNumberSelector).hide();
       },
       "keyup",

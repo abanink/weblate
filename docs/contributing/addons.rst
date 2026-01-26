@@ -8,9 +8,13 @@ Developing add-ons
 .. autoclass:: BaseAddon
     :members:
 
+.. currentmodule:: weblate.addons.models
+
 .. class:: Addon
 
    ORM object for an add-on.
+
+.. currentmodule:: weblate.trans.models
 
 .. class:: Component
 
@@ -28,6 +32,10 @@ Developing add-ons
 
    ORM object for an unit.
 
+.. class:: Change
+
+   ORM object for an change.
+
 .. class:: User
 
    ORM object for an user.
@@ -35,6 +43,10 @@ Developing add-ons
 .. class:: TranslationFormat
 
    Translation file wrapper.
+
+.. class:: BaseAddonForm
+
+   Base form for configuring add-ons.
 
 Here is an example add-on:
 

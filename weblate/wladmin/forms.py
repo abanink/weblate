@@ -4,9 +4,11 @@
 
 from crispy_forms.helper import FormHelper
 from django import forms
+from django.forms.widgets import MultiWidget
 from django.utils.translation import gettext_lazy
 
 from weblate.accounts.forms import EmailField
+from weblate.utils.validators import DomainOrIPValidator
 from weblate.wladmin.models import BackupService
 
 
@@ -23,7 +25,10 @@ class ActivateForm(forms.Form):
 
 class SSHAddForm(forms.Form):
     host = forms.CharField(
-        label=gettext_lazy("Hostname"), required=True, max_length=400
+        label=gettext_lazy("Hostname"),
+        required=True,
+        max_length=400,
+        validators=[DomainOrIPValidator()],
     )
     port = forms.IntegerField(
         label=gettext_lazy("Port"), required=False, min_value=1, max_value=65535
@@ -33,8 +38,6 @@ class SSHAddForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper(self)
         self.helper.form_tag = False
-        self.helper.form_class = "form-inline"
-        self.helper.field_template = "bootstrap3/layout/inline_field.html"
 
 
 class TestMailForm(forms.Form):
@@ -51,6 +54,10 @@ class BackupForm(forms.ModelForm):
         fields = ("repository",)
 
 
+class BackupSelectionForm(forms.Form):
+    service = forms.ModelChoiceField(BackupService.objects.all())
+
+
 class FontField(forms.CharField):
     def __init__(self, **kwargs) -> None:
         super().__init__(
@@ -59,29 +66,55 @@ class FontField(forms.CharField):
         )
 
 
-class ColorField(forms.CharField):
+class ThemeColorWidget(MultiWidget):
+    def __init__(self, attrs=None) -> None:
+        widgets = (
+            forms.TextInput(attrs={"type": "color", "class": "col light-theme"}),
+            forms.TextInput(attrs={"type": "color", "class": "col dark-theme"}),
+        )
+        super().__init__(widgets, attrs)
+
+    def decompress(self, value):
+        if value:
+            colors = value.split(",")
+            if len(colors) == 1:
+                return [colors[0], colors[0]]
+            return colors
+        return [None, None]
+
+
+class ThemeColorField(forms.MultiValueField):
+    widget = ThemeColorWidget
+
     def __init__(self, **kwargs) -> None:
-        super().__init__(widget=forms.TextInput(attrs={"type": "color"}), **kwargs)
+        fields = (forms.CharField(required=False), forms.CharField(required=False))
+        super().__init__(fields=fields, require_all_fields=False, **kwargs)
+
+    def compress(self, data_list):
+        return ",".join(data_list) if data_list else None
 
 
 class AppearanceForm(forms.Form):
     page_font = FontField(label=gettext_lazy("Page font"), required=False)
     brand_font = FontField(label=gettext_lazy("Header font"), required=False)
-    header_color = ColorField(
-        label=("Navigation color"), required=False, initial="#2a3744"
+
+    header_color = ThemeColorField(
+        label=gettext_lazy("Navigation color (Light, Dark)"), initial="#2a3744,#1a2634"
     )
-    header_text_color = ColorField(
-        label=("Navigation text color"), required=False, initial="#bfc3c7"
+    header_text_color = ThemeColorField(
+        label=gettext_lazy("Navigation text color (Light, Dark)"),
+        initial="#bfc3c7,#e0e3e7",
     )
-    navi_color = ColorField(
-        label=("Navigation color"), required=False, initial="#1fa385"
+    navi_color = ThemeColorField(
+        label=gettext_lazy("Navigation color (Light, Dark)"), initial="#1fa385,#0f9375"
     )
-    focus_color = ColorField(
-        label=gettext_lazy("Focus color"), required=False, initial="#2eccaa"
+    focus_color = ThemeColorField(
+        label=gettext_lazy("Focus color (Light, Dark)"), initial="#2eccaa,#25303b"
     )
-    hover_color = ColorField(
-        label=gettext_lazy("Hover color"), required=False, initial="#144d3f"
+    hover_color = ThemeColorField(
+        label=gettext_lazy("Hover color (Light, Dark)"), initial="#144d3f,#0a3d2f"
     )
+
     hide_footer = forms.BooleanField(
         label=gettext_lazy("Hide page footer"), required=False
     )
@@ -98,6 +131,7 @@ class AppearanceForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper(self)
         self.helper.form_tag = False
+        self.helper.field_class = "row"
 
 
 class ChangedCharField(forms.CharField):

@@ -97,9 +97,9 @@ As a last step, you review the translation component info and fill in optional d
 
 .. seealso::
 
-      :ref:`admin-interface`,
-      :ref:`project`,
-      :ref:`component`
+   * :ref:`admin-interface`
+   * :ref:`project`
+   * :ref:`component`
 
 .. _project:
 
@@ -147,9 +147,9 @@ This is a required parameter unless turned off by :setting:`WEBSITE_REQUIRED`.
 
 .. seealso::
 
-   :setting:`PROJECT_WEB_RESTRICT_HOST`,
-   :setting:`PROJECT_WEB_RESTRICT_NUMERIC`,
-   :setting:`PROJECT_WEB_RESTRICT_RE`
+   * :setting:`PROJECT_WEB_RESTRICT_HOST`
+   * :setting:`PROJECT_WEB_RESTRICT_NUMERIC`
+   * :setting:`PROJECT_WEB_RESTRICT_RE`
 
 .. _project-instructions:
 
@@ -191,6 +191,24 @@ The default value can be changed by :setting:`DEFAULT_SHARED_TM`.
 
     This option is unavailable on Hosted Weblate, it is toggled together with :ref:`project-use_shared_tm`.
 
+.. _project-autoclean_tm:
+
+Autoclean translation memory
++++++++++++++++++++++++++++++
+
+.. versionadded:: 5.13
+
+Whether to automatically remove outdated and obsolete entries from translation memory.
+
+.. note::
+
+   This does not affect manually uploaded memory entries.
+
+.. seealso::
+
+   * :ref:`memory-status`
+   * :ref:`autoclean-tm`
+
 .. _project-access_control:
 
 Access control
@@ -199,6 +217,16 @@ Access control
 Configure per project access control, see :ref:`acl` for more details.
 
 The default value can be changed by :setting:`DEFAULT_ACCESS_CONTROL`.
+
+.. _project-enforced_2fa:
+
+Enforced two-factor authentication
+++++++++++++++++++++++++++++++++++
+
+.. versionadded:: 5.7
+
+Enforce :ref:`2fa` for all contributors. Users won’t be allowed
+to perform any operations within the project without having it configured.
 
 .. _project-translation_review:
 
@@ -220,8 +248,28 @@ Enable review workflow for source strings, see :ref:`source-reviews`.
 
 .. seealso::
 
-   :ref:`report-source`,
-   :ref:`user-comments`
+   * :ref:`report-source`
+   * :ref:`user-comments`
+
+.. _project-commit_policy:
+
+Translation quality filter
+++++++++++++++++++++++++++
+
+.. versionadded:: 5.13
+
+The commit policy determines which translations are included when committing changes
+to the version control system. This setting is available at the project level and
+supports the following options:
+
+* **Commit all translations regardless of quality**: All translations will be committed,
+  including those marked as needing editing or not reviewed.
+* **Skip translations marked as needing editing**: Only translations that don't have the
+  "needs editing", "needs rewriting" or "needs checking" state will be committed.
+* **Only include approved translations**: Only translations that have been approved by a
+  reviewer will be committed. This option requires :ref:`project-translation_review`
+  to be enabled.
+
 
 .. _project-enable_hooks:
 
@@ -232,10 +280,10 @@ Whether unauthenticated :ref:`hooks` are to be used for this repository.
 
 .. seealso::
 
-   :ref:`component-intermediate`,
-   :ref:`source-quality-gateway`,
-   :ref:`bimono`,
-   :ref:`languages`
+   * :ref:`component-intermediate`
+   * :ref:`source-quality-gateway`
+   * :ref:`bimono`
+   * :ref:`languages`
 
 .. _project-language_aliases:
 
@@ -261,9 +309,35 @@ Using non standard code: ``ia_FOO:ia``
 
 .. seealso::
 
-    :ref:`adding-translation`,
-    :ref:`language-code`,
-    :ref:`language-parsing-codes`
+   * :ref:`adding-translation`
+   * :ref:`language-code`
+   * :ref:`language-parsing-codes`
+
+.. _project-secondary_language:
+
+Secondary language
+++++++++++++++++++
+
+.. versionadded:: 5.11
+
+Additional language to show together with the source language while translating.
+
+Optionally, it can be also used as a source for the machine translation.
+
+.. seealso::
+
+   * :ref:`secondary-languages`
+   * :ref:`mt-sources`
+
+.. _project-check_flags:
+
+Translation flags
++++++++++++++++++
+
+.. versionadded:: 5.11
+
+Customization of quality checks and other Weblate behavior, see :ref:`custom-checks`.
+
 
 .. _component:
 
@@ -433,8 +507,8 @@ to be escaped as ``[[]`` or ``[]]``.
 
 .. seealso::
 
-   :ref:`bimono`,
-   :ref:`faq-duplicate-files`
+   * :ref:`bimono`
+   * :ref:`faq-duplicate-files`
 
 .. _component-screenshot_filemask:
 
@@ -477,8 +551,8 @@ Base file containing string definitions for :ref:`monolingual`.
 
 .. seealso::
 
-   :ref:`bimono`,
-   :ref:`faq-duplicate-files`
+   * :ref:`bimono`
+   * :ref:`faq-duplicate-files`
 
 .. _component-edit_template:
 
@@ -489,10 +563,10 @@ Whether to allow editing strings in the :ref:`component-template`.
 
 .. seealso::
 
-   :ref:`bimono`,
-   :ref:`monolingual`,
-   :ref:`faq-duplicate-files`,
-   :ref:`component-manage_units`
+   * :ref:`bimono`
+   * :ref:`monolingual`
+   * :ref:`faq-duplicate-files`
+   * :ref:`component-manage_units`
 
 .. _component-intermediate:
 
@@ -510,9 +584,9 @@ provides :ref:`source-quality-gateway`.
 
 .. seealso::
 
-   :ref:`source-quality-gateway`,
-   :ref:`bimono`,
-   :ref:`faq-duplicate-files`
+   * :ref:`source-quality-gateway`
+   * :ref:`bimono`
+   * :ref:`faq-duplicate-files`
 
 .. _component-new_base:
 
@@ -537,10 +611,10 @@ Base file used to generate new translations.
 
 .. seealso::
 
-   :ref:`adding-translation`,
-   :ref:`component-new_lang`,
-   :ref:`bimono`,
-   :ref:`faq-duplicate-files`
+   * :ref:`adding-translation`
+   * :ref:`component-new_lang`
+   * :ref:`bimono`
+   * :ref:`faq-duplicate-files`
 
 .. _component-file_format:
 
@@ -548,6 +622,13 @@ File format
 +++++++++++
 
 Translation file format, see also :ref:`formats`.
+
+.. _component-file_format_params:
+
+File format parameters
+++++++++++++++++++++++
+
+Parameters used to configure how translation files are processed, see also :ref:`file_format_params`.
 
 .. _component-report_source_bugs:
 
@@ -559,6 +640,24 @@ notification about any source string comments made in Weblate.
 
 With the :ref:`gettext` format, this address is also saved by Weblate in the
 :mailheader:`Report-Msgid-Bugs-To` header of the file.
+
+.. _component-hide_glossary_matches:
+
+Do not show glossary matches
+++++++++++++++++++++++++++++
+
+Hides the glossary panel and its matches in the translation editor for this component.
+When enabled, glossary suggestions for this component are not computed, and the Glossary
+panel (including its “Add term to glossary” action) is hidden in the editor.
+
+.. note::
+
+   Glossary self-references are always excluded from matches even when this option is disabled.
+
+.. seealso::
+
+   * :ref:`glossary`
+   * :ref:`component-is_glossary`
 
 .. _component-allow_translation_propagation:
 
@@ -572,7 +671,7 @@ translating, sometimes it's desirable to have make use of a translation more tha
 It's usually a good idea to turn this off for monolingual translations, unless
 you are using the same IDs across the whole project.
 
-Default value can be changed by :setting:`DEFAULT_TRANSLATION_PROPAGATION`.
+The default value can be changed by :setting:`DEFAULT_TRANSLATION_PROPAGATION`.
 
 .. seealso::
 
@@ -623,13 +722,11 @@ Customization of quality checks and other Weblate behavior, see :ref:`custom-che
 Enforced checks
 +++++++++++++++
 
-List of checks which can not be ignored, see :ref:`enforcing-checks`.
+List of checks which can not be dismissed.
 
-.. note::
+.. seealso::
 
-   Enforcing the check does not automatically enable it, you still should
-   enabled it using :ref:`custom-checks` in :ref:`component-check_flags` or
-   :ref:`additional`.
+   :ref:`enforcing-checks`
 
 .. _component-license:
 
@@ -640,11 +737,13 @@ License of the translation (does not need to be the same as the source code lice
 
 .. _component-agreement:
 
-Contributor agreement
-+++++++++++++++++++++
+Contributor license agreement
++++++++++++++++++++++++++++++
 
-User agreement which needs to be approved before a user can translate this
-component.
+Contributor license agreement which needs to be approved before a user can
+translate this component.
+
+Markdown can be used for text formatting or inserting links.
 
 .. _component-new_lang:
 
@@ -675,8 +774,8 @@ Disable adding new translations
 
 .. seealso::
 
-   :ref:`adding-translation`,
-   :ref:`component-new_base`
+   * :ref:`adding-translation`
+   * :ref:`component-new_base`
 
 .. _component-manage_units:
 
@@ -706,9 +805,9 @@ the translation files once they are translated.
 
 .. seealso::
 
-   :ref:`bimono`,
-   :ref:`adding-new-strings`,
-   :http:post:`/api/translations/(string:project)/(string:component)/(string:language)/units/`
+   * :ref:`bimono`
+   * :ref:`adding-new-strings`
+   * :http:post:`/api/translations/(string:project)/(string:component)/(string:language)/units/`
 
 .. _component-language_code_style:
 
@@ -761,10 +860,10 @@ Linux style, lower cased
 
 .. seealso::
 
-    :ref:`adding-translation`,
-    :ref:`language-code`,
-    :ref:`language-parsing-codes`,
-    :ref:`project-language_aliases`
+   * :ref:`adding-translation`
+   * :ref:`language-code`
+   * :ref:`language-parsing-codes`
+   * :ref:`project-language_aliases`
 
 .. _component-merge_style:
 
@@ -794,7 +893,7 @@ Merge without fast-forward
    commit every time (even when fast-forward would be possible). Every Weblate
    change will appear as a merge commit in Weblate repository.
 
-Default value can be changed by :setting:`DEFAULT_MERGE_STYLE`.
+The default value can be changed by :setting:`DEFAULT_MERGE_STYLE`.
 
 .. _component-commit_message:
 .. _component-add_message:
@@ -808,7 +907,7 @@ Commit, add, delete, merge, add-on, and merge request messages
 
 Message used when committing a translation, see :ref:`markup`.
 
-Default value can be changed by :setting:`DEFAULT_ADD_MESSAGE`,
+The default value can be changed by :setting:`DEFAULT_ADD_MESSAGE`,
 :setting:`DEFAULT_ADDON_MESSAGE`, :setting:`DEFAULT_COMMIT_MESSAGE`,
 :setting:`DEFAULT_DELETE_MESSAGE`, :setting:`DEFAULT_MERGE_MESSAGE`,
 :setting:`DEFAULT_PULL_MESSAGE`.
@@ -834,7 +933,7 @@ background task or the :wladmin:`commit_pending` management command. All
 changes in a component are committed once there is at least one change
 older than this period.
 
-Default value can be changed by :setting:`COMMIT_PENDING_HOURS`.
+The default value can be changed by :setting:`COMMIT_PENDING_HOURS`.
 
 .. hint::
 
@@ -900,6 +999,35 @@ Some examples of filtering:
 | Include all files (default)   | ``^[^.]+$``           |
 +-------------------------------+-----------------------+
 
+
+.. _component-key_filter:
+
+Key filter
+++++++++++
+
+.. versionadded:: 5.8
+
+A regular expression that is used to filter units by their keys. It displays only
+those units whose keys match the regular expression that was set
+as the value of this field.
+
+Some examples of filtering:
+
++-------------------------------+----------------------------+
+| Filter description            | Regular expression         |
++===============================+============================+
+| Selected keys only            | ``^(one|two|other)$``      |
++-------------------------------+----------------------------+
+| Exclude app store changelogs  | ``^(?!changelogs/.*$).+$`` |
++-------------------------------+----------------------------+
+| Filter prefixed strings       | ``^translatable``          |
++-------------------------------+----------------------------+
+
+.. note::
+
+    This filter is only available for components with monolingual file formats.
+
+
 .. _component-variant_regex:
 
 Variants regular expression
@@ -915,7 +1043,28 @@ Regular expression used to determine the variants of a string, see
 
 .. seealso::
 
-   :ref:`faq-vcs`, :ref:`alerts`
+   * :ref:`faq-vcs`
+   * :ref:`alerts`
+
+.. _component-secondary_language:
+
+Secondary language
+++++++++++++++++++
+
+.. versionadded:: 5.11
+
+Additional language to show together with the source language while translating.
+
+Optionally, it can be also used as a source for the machine translation.
+
+.. hint::
+
+   This setting is inherited from the project if left empty.
+
+.. seealso::
+
+   * :ref:`secondary-languages`
+   * :ref:`mt-sources`
 
 .. _component-priority:
 
@@ -974,8 +1123,20 @@ Use as a glossary
 
 .. versionadded:: 4.5
 
-Allows using this component as a glossary. You can configure how it will be
-listed using :ref:`component-glossary_color`.
+Allows using this component as a glossary. Use when you want to manage
+terminology separately from normal translations.
+
+Glossaries are best for:
+
+- Ensuring consistent use of terms (e.g., UI labels, product names).
+- Sharing preferred translations across multiple components or projects.
+- Supporting translators with definitions and context.
+
+.. note::
+
+   Glossaries are not for regular translations—they are for managing terms only.
+
+You can configure how it will be listed using :ref:`component-glossary_color`.
 
 The glossary will be accessible in all projects defined by :ref:`component-links`.
 
@@ -991,7 +1152,11 @@ order to allow adding new words to them.
 Glossary color
 ++++++++++++++
 
-Display color for a glossary used when showing word matches.
+Color used when displaying terms from this glossary. Useful to distinguish glossaries when using more of them.
+
+.. seealso::
+
+   :ref:`glossary`
 
 .. _category:
 
@@ -1018,7 +1183,7 @@ Currently it is used in:
     * :ref:`addon-weblate.generate.generate`
     * :ref:`addon-script`
 
-There following variables are available in the component templates:
+The following variables are available in the component templates:
 
 ``{{ language_code }}``
     Language code
@@ -1101,9 +1266,9 @@ There are also additional filter to manipulate with filenames:
     Directory of a file: {{ filename|dirname }}
     File without extension: {{ filename|stripext }}
     File in parent dir: {{ filename|parentdir }}
-    It can be used multiple times:  {{ filename|parentdir|parentdir }}
+    It can be used multiple times: {{ filename|parentdir|parentdir }}
 
-...and other Django template features.
+…and other Django template features.
 
 .. _import-speed:
 
@@ -1164,5 +1329,5 @@ components and then run :wladmin:`import_project` or
 
 .. seealso::
 
-   :ref:`manage`,
-   :ref:`addon-weblate.discovery.discovery`
+   * :ref:`manage`
+   * :ref:`addon-weblate.discovery.discovery`

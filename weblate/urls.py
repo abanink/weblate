@@ -2,17 +2,24 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
 import django.contrib.sitemaps.views
 import django.views.i18n
 import django.views.static
 from django.conf import settings
 from django.contrib import admin
+from django.contrib.auth.decorators import login_not_required
 from django.urls import include, path, re_path
 from django.views.decorators.cache import cache_control, cache_page
 from django.views.decorators.common import no_append_slash
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.vary import vary_on_cookie
 from django.views.generic import RedirectView, TemplateView
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularRedocView,
+)
 
 import weblate.accounts.urls
 import weblate.accounts.views
@@ -29,7 +36,6 @@ import weblate.screenshots.views
 import weblate.trans.views.about
 import weblate.trans.views.acl
 import weblate.trans.views.agreement
-import weblate.trans.views.api
 import weblate.trans.views.basic
 import weblate.trans.views.charts
 import weblate.trans.views.create
@@ -38,7 +44,6 @@ import weblate.trans.views.edit
 import weblate.trans.views.error
 import weblate.trans.views.files
 import weblate.trans.views.git
-import weblate.trans.views.hooks
 import weblate.trans.views.js
 import weblate.trans.views.labels
 import weblate.trans.views.lock
@@ -53,10 +58,8 @@ from weblate.configuration.views import CustomCSSView
 from weblate.sitemaps import SITEMAPS
 from weblate.trans.feeds import ChangesFeed, LanguageChangesFeed, TranslationChangesFeed
 from weblate.trans.views.changes import ChangesCSVView, ChangesView, show_change
-from weblate.utils.urls import register_weblate_converters
+from weblate.trans.views.hooks import ServiceHookView
 from weblate.utils.version import VERSION
-
-register_weblate_converters()
 
 handler400 = weblate.trans.views.error.bad_request
 handler403 = weblate.trans.views.error.denied
@@ -67,7 +70,7 @@ widget_pattern = "<word:widget>-<word:color>.<extension:extension>"
 
 URL_PREFIX = settings.URL_PREFIX
 if URL_PREFIX:
-    URL_PREFIX = URL_PREFIX.strip("/") + "/"
+    URL_PREFIX = f"{URL_PREFIX.strip('/')}/"
 
 real_patterns = [
     path("", weblate.trans.views.dashboard.home, name="home"),
@@ -110,6 +113,11 @@ real_patterns = [
         "component-list/<name:name>/",
         weblate.trans.views.basic.show_component_list,
         name="component-list",
+    ),
+    path(
+        "component-list/<name:name>/dashboard/",
+        weblate.trans.views.dashboard.component_list_user,
+        name="component-list-dashboard",
     ),
     path(
         "browse/<object_path:path>/",
@@ -390,8 +398,8 @@ real_patterns = [
     ),
     path(
         "progress/<object_path:path>/",
-        weblate.trans.views.settings.component_progress,
-        name="component_progress",
+        weblate.trans.views.settings.show_progress,
+        name="show_progress",
     ),
     # Announcements
     path(
@@ -446,6 +454,11 @@ real_patterns = [
         "screenshot/<int:pk>/",
         weblate.screenshots.views.ScreenshotDetail.as_view(),
         name="screenshot",
+    ),
+    path(
+        "screenshot/<int:pk>/view/",
+        weblate.screenshots.views.ScreenshotView.as_view(),
+        name="screenshot-view",
     ),
     path(
         "screenshot/<int:pk>/delete/",
@@ -629,25 +642,14 @@ real_patterns = [
     path("changes/render/<int:pk>/", show_change, name="show_change"),
     # Notification hooks
     path(
-        "hooks/update/<object_path:path>",
-        weblate.trans.views.hooks.update,
-        name="update-hook",
-    ),
-    path(
         "hooks/<slug:service>/",
-        weblate.trans.views.hooks.vcs_service_hook,
+        ServiceHookView.as_view(),
         name="webhook",
     ),
     # Compatibility URL with no trailing slash
     path(
         "hooks/<slug:service>",
-        weblate.trans.views.hooks.vcs_service_hook,
-    ),
-    # Stats exports
-    path(
-        "exports/stats/<object_path:path>/",
-        weblate.trans.views.api.export_stats,
-        name="export_stats",
+        ServiceHookView.as_view(),
     ),
     # RSS exports
     path("exports/rss/", ChangesFeed(), name="rss"),
@@ -722,8 +724,10 @@ real_patterns = [
     path(
         "js/i18n/",
         cache_page(3600, key_prefix=VERSION)(
-            vary_on_cookie(
-                django.views.i18n.JavaScriptCatalog.as_view(packages=["weblate"])
+            login_not_required(
+                vary_on_cookie(
+                    django.views.i18n.JavaScriptCatalog.as_view(packages=["weblate"])
+                )
             )
         ),
         name="js-catalog",
@@ -733,6 +737,11 @@ real_patterns = [
         "js/translate/<name:service>/<int:unit_id>/",
         weblate.machinery.views.translate,
         name="js-translate",
+    ),
+    path(
+        "js/dismiss-automatically-translated/<int:unit_id>/",
+        weblate.trans.views.js.dismiss_automatically_translated,
+        name="js-dismiss-automatically-translated",
     ),
     path(
         "js/memory/<int:unit_id>/",
@@ -774,6 +783,7 @@ real_patterns = [
     path("admin/", admin.site.urls),
     # Weblate management interface
     path("manage/", weblate.wladmin.views.manage, name="manage"),
+    path("manage/support/", weblate.wladmin.views.support_form, name="manage-support"),
     path(
         "manage/addons/", weblate.addons.views.AddonList.as_view(), name="manage-addons"
     ),
@@ -813,10 +823,16 @@ real_patterns = [
         weblate.wladmin.views.performance,
         name="manage-performance",
     ),
-    # Auth
+    # Accounts
     path("accounts/", include(weblate.accounts.urls)),
     # Auth
     path("api/", include((weblate.api.urls, "weblate.api"), namespace="api")),
+    # OpenAPI schema
+    path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),
+    # API documentation
+    path(
+        "api/docs/", SpectacularRedocView.as_view(url_name="api-schema"), name="redoc"
+    ),
     # Static pages
     path("contact/", weblate.accounts.views.contact, name="contact"),
     path("hosting/", weblate.accounts.views.hosting, name="hosting"),
@@ -870,21 +886,21 @@ real_patterns = [
     re_path(
         r"^(android-chrome|favicon)-(?P<size>192|512)x(?P=size)\.png$",
         RedirectView.as_view(
-            url=settings.STATIC_URL + "weblate-%(size)s.png",
+            url=f"{settings.STATIC_URL}weblate-%(size)s.png",
             permanent=True,
         ),
     ),
     path(
         "apple-touch-icon.png",
         RedirectView.as_view(
-            url=settings.STATIC_URL + "weblate-180.png",
+            url=f"{settings.STATIC_URL}weblate-180.png",
             permanent=True,
         ),
     ),
     path(
         "favicon.ico",
         RedirectView.as_view(
-            url=settings.STATIC_URL + "favicon.ico",
+            url=f"{settings.STATIC_URL}favicon.ico",
             permanent=True,
         ),
     ),
@@ -905,15 +921,19 @@ real_patterns = [
     path(
         "site.webmanifest",
         cache_control(max_age=86400)(
-            TemplateView.as_view(
-                template_name="site.webmanifest", content_type="application/json"
+            login_not_required(
+                TemplateView.as_view(
+                    template_name="site.webmanifest", content_type="application/json"
+                )
             )
         ),
     ),
     # Redirects for .well-known
     path(
         ".well-known/change-password",
-        RedirectView.as_view(pattern_name="password", permanent=True),
+        login_not_required(
+            RedirectView.as_view(pattern_name="password", permanent=True)
+        ),
     ),
 ]
 
@@ -928,6 +948,11 @@ if "weblate.billing" in settings.INSTALLED_APPS:
             name="invoice-download",
         ),
         path("billing/", weblate.billing.views.overview, name="billing"),
+        path(
+            "manage/restore-backup/",
+            weblate.billing.views.restore_backup,
+            name="restore_backup",
+        ),
         path("billing/<int:pk>/", weblate.billing.views.detail, name="billing-detail"),
         path("manage/billing/", weblate.wladmin.views.billing, name="manage-billing"),
     ]
@@ -996,50 +1021,54 @@ if "weblate.gitexport" in settings.INSTALLED_APPS:
 
 # Legal integartion
 if "weblate.legal" in settings.INSTALLED_APPS:
-    import weblate.legal.views
-
-    real_patterns += [
-        path(
-            "legal/",
-            include(("weblate.legal.urls", "weblate.legal"), namespace="legal"),
-        ),
-        path(
-            "security.txt",
-            TemplateView.as_view(
-                template_name="security.txt", content_type="text/plain"
+    real_patterns.extend(
+        (
+            path(
+                "legal/",
+                include(("weblate.legal.urls", "weblate.legal"), namespace="legal"),
             ),
-        ),
-    ]
+            path(
+                "security.txt",
+                RedirectView.as_view(url="/.well-known/security.txt", permanent=True),
+            ),
+            path(
+                ".well-known/security.txt",
+                TemplateView.as_view(
+                    template_name="security.txt", content_type="text/plain"
+                ),
+            ),
+        )
+    )
 
 # Serving media files in DEBUG mode
 if settings.DEBUG:
-    real_patterns += [
+    real_patterns.append(
         path(
             "media/<path:path>",
             django.views.static.serve,
             {"document_root": settings.MEDIA_ROOT},
         )
-    ]
+    )
 
 # Django debug toolbar integration
 if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:
-    import debug_toolbar
-
-    real_patterns += [path("__debug__/", include(debug_toolbar.urls))]
+    real_patterns.append(
+        path("__debug__/", include("debug_toolbar.urls")),
+    )
 
 # Hosted Weblate integration
 if "wlhosted.integrations" in settings.INSTALLED_APPS:
     from wlhosted.integrations.views import CreateBillingView
 
-    real_patterns += [
-        path("create/billing/", CreateBillingView.as_view(), name="create-billing")
-    ]
+    real_patterns.append(
+        path("create/billing/", CreateBillingView.as_view(), name="create-billing"),
+    )
 
 # Django SAML2 Identity Provider
 if "djangosaml2idp" in settings.INSTALLED_APPS:
-    real_patterns += [
+    real_patterns.append(
         path("idp/", include("djangosaml2idp.urls")),
-    ]
+    )
 
 # Handle URL prefix configuration
 if not URL_PREFIX:

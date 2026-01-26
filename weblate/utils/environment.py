@@ -6,40 +6,101 @@ from __future__ import annotations
 
 import ast
 import os
+from pathlib import Path
+from typing import Any, Literal, overload
+from urllib.parse import quote
+
+from django.core.exceptions import ImproperlyConfigured
 
 
+@overload
 def get_env_str(
     name: str,
-    default: str | None = None,
+    default: str,
+    *,
     required: bool = False,
     fallback_name: str | None = None,
-) -> str:
+) -> str: ...
+@overload
+def get_env_str(
+    name: str,
+    default: None = None,
+    *,
+    required: Literal[True],
+    fallback_name: str | None = None,
+) -> str: ...
+@overload
+def get_env_str(
+    name: str,
+    default: None = None,
+    *,
+    required: bool = False,
+    fallback_name: str | None = None,
+) -> str | None: ...
+def get_env_str(
+    name,
+    default=None,
+    *,
+    required=False,
+    fallback_name=None,
+):
     file_env = f"{name}_FILE"
     if filename := os.environ.get(file_env):
         try:
-            with open(filename) as handle:
-                result = handle.read()
+            result = Path(filename).read_text(encoding="utf-8")
         except OSError as error:
-            raise ValueError(
-                f"Failed to open {filename} as specified by {file_env}: {error}"
-            ) from error
+            msg = f"Failed to open {filename} as specified by {file_env}: {error}"
+            raise ImproperlyConfigured(msg) from error
     else:
-        if fallback_name and name not in os.environ:
-            name = fallback_name
         result = os.environ.get(
             name,
-            default,  # type: ignore[arg-type]
+            default if not fallback_name else None,  # type: ignore[arg-type]
+        )
+    # Also allow files for fallback names.
+    # The logic is as follows (if fallback is given):
+    # 1) Try `_FILE` variant of `name` first.
+    # 2) Try `name` directly but do not pass default to get `None` in case it does not exist.
+    # 3) Try `_FILE` variant of `fallback_name`.
+    # 4) Finally, try `fallback_name` directly, using the given default.
+    # If after all these steps no value is found, but it is required => fail.
+    if not result and fallback_name:
+        result = get_env_str(
+            fallback_name, default=default, required=False, fallback_name=None
         )
     if required and not result:
-        raise ValueError(f"{name} has to be configured!")
+        msg = f"{name} has to be configured!"
+        raise ImproperlyConfigured(msg)
     return result
+
+
+def get_env_list_or_none(name: str) -> list[str] | None:
+    """Get list from environment."""
+    string_value = get_env_str(name)
+    if string_value is not None:
+        return string_value.split(",")
+    return None
 
 
 def get_env_list(name: str, default: list[str] | None = None) -> list[str]:
     """Get list from environment."""
-    if name not in os.environ:
-        return default or []
-    return os.environ[name].split(",")
+    env_list = get_env_list_or_none(name)
+    if env_list is not None:
+        return env_list
+    return default or []
+
+
+def get_env_map_or_none(name: str) -> dict[str, str] | None:
+    """
+    Get mapping from environment.
+
+    parses 'full_name:name,email:mail' into {'email': 'mail', 'full_name': 'name'}
+    """
+    parsed_list = get_env_list_or_none(name)
+    if parsed_list is not None:
+        if parsed_list == [""]:
+            return {}
+        return dict(e.split(":") for e in parsed_list)
+    return None
 
 
 def get_env_map(name: str, default: dict[str, str] | None = None) -> dict[str, str]:
@@ -48,37 +109,51 @@ def get_env_map(name: str, default: dict[str, str] | None = None) -> dict[str, s
 
     parses 'full_name:name,email:mail' into {'email': 'mail', 'full_name': 'name'}
     """
-    if os.environ.get(name):
-        return dict(e.split(":") for e in os.environ[name].split(","))
+    env_map = get_env_map_or_none(name)
+    if env_map is not None:
+        return env_map
     return default or {}
+
+
+def get_env_int_or_none(name: str) -> int | None:
+    """Get integer value from environment."""
+    string_value = get_env_str(name)
+    if string_value is None:
+        return None
+    try:
+        return int(string_value)
+    except ValueError as error:
+        msg = f"{name} is not an integer: {error}"
+        raise ImproperlyConfigured(msg) from error
 
 
 def get_env_int(name: str, default: int = 0) -> int:
     """Get integer value from environment."""
-    if name not in os.environ:
-        return default
-    try:
-        return int(os.environ[name])
-    except ValueError as error:
-        raise ValueError(f"{name} is not an integer: {error}") from error
+    env_int = get_env_int_or_none(name)
+    if env_int is not None:
+        return env_int
+    return default
 
 
 def get_env_float(name: str, default: float = 0.0) -> float:
     """Get float value from environment."""
-    if name not in os.environ:
+    string_value = get_env_str(name)
+    if string_value is None:
         return default
     try:
-        return float(os.environ[name])
+        return float(string_value)
     except ValueError as error:
-        raise ValueError(f"{name} is not an float: {error}") from error
+        msg = f"{name} is not an float: {error}"
+        raise ImproperlyConfigured(msg) from error
 
 
 def get_env_bool(name: str, default: bool = False) -> bool:
     """Get boolean value from environment."""
-    if name not in os.environ:
+    string_value = get_env_str(name)
+    if string_value is None:
         return default
     true_values = {"true", "yes", "1"}
-    return os.environ[name].lower() in true_values
+    return string_value.lower() in true_values
 
 
 def modify_env_list(current: list[str], name: str) -> list[str]:
@@ -95,17 +170,21 @@ def get_env_credentials(
 ) -> dict[str, dict[str, str]]:
     """Get VCS integration credentials from environment."""
     if found_env_credentials := get_env_str(f"WEBLATE_{name}_CREDENTIALS"):
-        return ast.literal_eval(found_env_credentials)
-    username = os.environ.get(f"WEBLATE_{name}_USERNAME", "")
-    token = os.environ.get(f"WEBLATE_{name}_TOKEN", "")
-    host = os.environ.get(f"WEBLATE_{name}_HOST")
-    organization = os.environ.get(f"WEBLATE_{name}_ORGANIZATION")
+        try:
+            return ast.literal_eval(found_env_credentials)
+        except ValueError as error:
+            msg = f"Could not parse {name}_CREDENTIALS: {error}"
+            raise ImproperlyConfigured(msg) from error
+
+    host = get_env_str(f"WEBLATE_{name}_HOST")
+    username = get_env_str(f"WEBLATE_{name}_USERNAME", "")
+    token = get_env_str(f"WEBLATE_{name}_TOKEN", "")
+    organization = get_env_str(f"WEBLATE_{name}_ORGANIZATION")
 
     if not host:
         if username or token:
-            raise ValueError(
-                f"Incomplete {name}_CREDENTIALS configuration: missing WEBLATE_{name}_HOST"
-            )
+            msg = f"Incomplete {name}_CREDENTIALS configuration: missing WEBLATE_{name}_HOST"
+            raise ImproperlyConfigured(msg)
         return {}
 
     credentials = {host: {"username": username, "token": token}}
@@ -117,7 +196,7 @@ def get_env_credentials(
 
 
 def get_env_ratelimit(name: str, default: str) -> str:
-    value = os.environ.get(name, default)
+    value = get_env_str(name, default)
 
     # Taken from rest_framework.throttling.SimpleRateThrottle.parse_rate
     # it can not be imported here as that breaks config loading for
@@ -126,10 +205,91 @@ def get_env_ratelimit(name: str, default: str) -> str:
     try:
         num, period = value.split("/")
     except ValueError as error:
-        raise ValueError(f"Could not parse {name}: {error}") from error
+        msg = f"Could not parse {name}: {error}"
+        raise ImproperlyConfigured(msg) from error
     if not num.isdigit():
-        raise ValueError(f"Could not parse {name}: rate is not numeric: {num}")
+        msg = f"Could not parse {name}: rate is not numeric: {num}"
+        raise ImproperlyConfigured(msg)
     if period[0] not in {"s", "m", "h", "d"}:
-        raise ValueError(f"Could not parse {name}: unknown period: {period}")
+        msg = f"Could not parse {name}: unknown period: {period}"
+        raise ImproperlyConfigured(msg)
 
     return value
+
+
+def url_quote_part(value: str) -> str:
+    return quote(value, safe="")
+
+
+def get_env_redis_url() -> str:
+    # Get values from the environment
+    redis_proto = "rediss" if get_env_bool("REDIS_TLS") else "redis"
+    redis_host = url_quote_part(get_env_str("REDIS_HOST", "cache", required=True))
+    redis_port = get_env_int("REDIS_PORT", 6379)
+    redis_db = get_env_int("REDIS_DB", 1)
+    redis_password = url_quote_part(get_env_str("REDIS_PASSWORD", ""))
+    redis_user = url_quote_part(get_env_str("REDIS_USER", ""))
+
+    # Build user/password part of the URL
+    redis_user_password: str | None
+    if redis_user and redis_password:
+        redis_user_password = f"{redis_user}:{redis_password}@"
+    elif redis_password:
+        redis_user_password = f":{redis_password}@"
+    elif redis_user:
+        redis_user_password = f"{redis_user}@"
+    else:
+        redis_user_password = ""
+
+    return f"{redis_proto}://{redis_user_password}{redis_host}:{redis_port}/{redis_db}"
+
+
+def get_saml_idp() -> dict[str, Any] | None:
+    idp_entity_id = get_env_str("WEBLATE_SAML_IDP_ENTITY_ID")
+    if not idp_entity_id:
+        return None
+    # Identity Provider
+    saml_idp = {
+        "entity_id": idp_entity_id,
+        "url": get_env_str("WEBLATE_SAML_IDP_URL"),
+        "x509cert": get_env_str("WEBLATE_SAML_IDP_X509CERT"),
+    }
+
+    for field in (
+        "attr_full_name",
+        "attr_first_name",
+        "attr_last_name",
+        "attr_username",
+        "attr_email",
+        "attr_user_permanent_id",
+    ):
+        env_name = f"WEBLATE_SAML_ID_{field.upper()}"
+        value = get_env_str(env_name)
+        if value:
+            saml_idp[field] = value
+
+    return saml_idp
+
+
+def get_email_config() -> tuple[int, bool, bool]:
+    """Parse e-mmail settings (port, TLS, SSL) from environment."""
+    email_use_ssl = get_env_bool("WEBLATE_EMAIL_USE_SSL")
+    email_use_tls = get_env_bool("WEBLATE_EMAIL_USE_TLS")
+    default_email_port = 25
+    if email_use_ssl:
+        default_email_port = 465
+    elif email_use_tls:
+        default_email_port = 587
+    email_port = get_env_int("WEBLATE_EMAIL_PORT", default_email_port)
+
+    # Detect SSL/TLS setup if not explicitly stated
+    if (
+        "WEBLATE_EMAIL_USE_SSL" not in os.environ
+        and "WEBLATE_EMAIL_USE_TLS" not in os.environ
+    ):
+        if not email_use_tls and email_port in {25, 587}:
+            email_use_tls = True
+        elif not email_use_ssl and email_port == 465:
+            email_use_ssl = True
+
+    return email_port, email_use_tls, email_use_ssl

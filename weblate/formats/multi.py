@@ -6,12 +6,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from django.utils.functional import cached_property
 from django.utils.translation import gettext_lazy
 
-from weblate.checks.flags import Flags
 from weblate.trans.util import get_string
 
 from .base import TranslationFormat, TranslationUnit
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
 class MultiUnit(TranslationUnit):
     units: list[TranslationUnit]
     parent: MultiFormatMixin
+    empty_unit_ok: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -32,7 +32,7 @@ class MultiUnit(TranslationUnit):
         unit: TranslationUnit,
         template: TranslationUnit | None = None,
     ) -> None:
-        super().__init__(parent, None, None)
+        super().__init__(parent, None, template)
         self.units = [unit]
 
     def merge(self, unit) -> None:
@@ -107,10 +107,10 @@ class MultiUnit(TranslationUnit):
 
     @cached_property
     def flags(self):
-        flags = Flags()
+        flags = super().flags
         for unit in self.units:
             flags.merge(unit.flags)
-        return flags.format()
+        return flags
 
     def has_unit(self) -> bool:
         return all(unit.has_unit() for unit in self.units)
@@ -138,7 +138,7 @@ class MultiFormatMixin(TranslationFormat):
                 result[id_hash].merge(unit)
             else:
                 if not isinstance(unit, MultiUnit):
-                    unit = MultiUnit(unit.parent, unit)
+                    unit = MultiUnit(unit.parent, unit, template=unit.template)
                 result[id_hash] = unit
         return list(result.values())
 
@@ -164,6 +164,13 @@ class MultiFormatMixin(TranslationFormat):
 
     def _get_all_monolingual_units(self):
         return self.merge_multi(super()._get_all_monolingual_units())
+
+    def add_unit(self, unit: TranslationUnit) -> None:
+        if isinstance(unit, MultiUnit):
+            for child in unit.units:
+                super().add_unit(child)
+        else:
+            super().add_unit(unit)
 
 
 class MultiCSVUtf8Format(MultiFormatMixin, CSVUtf8Format):

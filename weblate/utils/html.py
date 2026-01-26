@@ -5,15 +5,23 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections import defaultdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import nh3
+from django.utils.html import format_html, format_html_join
+from django.utils.translation import pgettext
 from html2text import HTML2Text as _HTML2Text
 from lxml.etree import HTMLParser
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from django.utils.safestring import SafeString
     from lxml.etree import ParserTarget
+
+    from weblate.checks.flags import Flags
 else:
     ParserTarget = object
 
@@ -63,10 +71,12 @@ MD_SYNTAX = re.compile(
 MD_SYNTAX_GROUPS = 8
 
 IGNORE = {"body", "html"}
+CLEAN_CONTENT_TAGS = {"script", "style"}
 
 # Allow some chars:
 # - non breakable space
-SANE_CHARS = re.compile("[\xa0]")
+SANE_CHARS = re.compile(r"[\xa0]")
+NH3_LOCK = threading.Lock()
 
 
 class MarkupExtractor(ParserTarget):
@@ -84,9 +94,13 @@ class MarkupExtractor(ParserTarget):
         pass
 
 
-def extract_html_tags(text) -> tuple[set[str], dict[str, set[str]]]:
+def extract_html_tags(text: str) -> tuple[set[str], dict[str, set[str]]]:
     """Extract tags from text in a form suitable for HTML sanitization."""
     extractor = MarkupExtractor()
+    if "<body" not in text.lower():
+        # Make sure we are in body, otherwise HTML parser migght halluciate we
+        # are in <head>
+        text = f"<body>{text}</body>"
     parser = HTMLParser(collect_ids=False, target=extractor)
     parser.feed(text)
     return (extractor.found_tags, extractor.found_attributes)
@@ -97,7 +111,7 @@ class HTMLSanitizer:
         self.current = 0
         self.replacements: dict[str, str] = {}
 
-    def clean(self, text: str, source: str, flags) -> str:
+    def clean(self, text: str, source: str, flags: Flags) -> str:
         self.current = 0
         self.replacements = {}
 
@@ -105,17 +119,24 @@ class HTMLSanitizer:
 
         tags, attributes = extract_html_tags(source)
 
-        text = nh3.clean(text, link_rel=None, tags=tags, attributes=attributes)
+        with NH3_LOCK:
+            text = nh3.clean(
+                text,
+                link_rel=None,
+                tags=tags,
+                attributes=attributes,
+                clean_content_tags=CLEAN_CONTENT_TAGS - tags,
+            )
 
         return self.add_back_special(text)
 
-    def handle_replace(self, match):
+    def handle_replace(self, match: re.Match) -> str:
         self.current += 1
         replacement = f"@@@@@weblate:{self.current}@@@@@"
         self.replacements[replacement] = match.group(0)
         return replacement
 
-    def remove_special(self, text: str, flags) -> str:
+    def remove_special(self, text: str, flags: Flags) -> str:
         if "md-text" in flags:
             text = MD_LINK.sub(self.handle_replace, text)
 
@@ -151,3 +172,38 @@ class HTML2Text(_HTML2Text):
             self.o(WEBLATE_TAGS[tag][not start])
             return
         super().handle_tag(tag, attrs, start)
+
+
+def mail_quote_char(text: str) -> str | SafeString:
+    if text in {":", "."}:
+        return format_html("<span>{}</span>", text)
+    return text
+
+
+def mail_quote_value(text: str) -> str | SafeString:
+    """
+    Quote value to be used in e-mail notifications.
+
+    This tries to avoid automatic conversion to links by Gmail
+    and similar services.
+
+    Solution based on https://stackoverflow.com/a/23404042/225718
+    """
+    return format_html_join(
+        "",
+        "{}",
+        ((mail_quote_char(part),) for part in re.split(r"([.:])", text)),
+    )
+
+
+def format_html_join_comma(
+    format_string: str, args_generator: Iterable[Iterable[Any]]
+) -> SafeString:
+    return format_html_join(
+        pgettext("Joins a list of values", ", "), format_string, args_generator
+    )
+
+
+def list_to_tuples(strings: Iterable[Any]) -> Iterable[tuple[Any]]:
+    """Convert a list of strings into a list of single-element tuples."""
+    return ((s,) for s in strings)

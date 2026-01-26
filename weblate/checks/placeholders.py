@@ -2,8 +2,11 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-import re
+from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Literal
+
+import regex
 from django.utils.functional import SimpleLazyObject
 from django.utils.html import escape, format_html, format_html_join
 from django.utils.safestring import mark_safe
@@ -12,10 +15,13 @@ from django.utils.translation import gettext_lazy
 from weblate.checks.base import TargetCheckParametrized
 from weblate.checks.parser import multi_value_flag, single_value_flag
 
+if TYPE_CHECKING:
+    from weblate.trans.models import Unit
+
 
 def parse_regex(val):
     if isinstance(val, str):
-        return re.compile(val)
+        return regex.compile(val)
     return val
 
 
@@ -23,24 +29,24 @@ class PlaceholderCheck(TargetCheckParametrized):
     check_id = "placeholders"
     default_disabled = True
     name = gettext_lazy("Placeholders")
-    description = gettext_lazy("Translation is missing some placeholders")
+    description = gettext_lazy("Translation is missing some placeholders.")
 
     @property
     def param_type(self):
         return multi_value_flag(lambda x: x)
 
-    def get_value(self, unit):
-        return re.compile(
+    def get_value(self, unit: Unit):
+        return regex.compile(
             "|".join(
-                re.escape(param) if isinstance(param, str) else param.pattern
+                regex.escape(param) if isinstance(param, str) else param.pattern
                 for param in super().get_value(unit)
             ),
-            re.IGNORECASE if "case-insensitive" in unit.all_flags else 0,
+            regex.IGNORECASE if "case-insensitive" in unit.all_flags else 0,
         )
 
     @staticmethod
     def get_matches(value, text: str):
-        for match in value.finditer(text):
+        for match in value.finditer(text, concurrent=True):
             yield match.group()
 
     def diff_case_sensitive(self, expected, found):
@@ -58,7 +64,15 @@ class PlaceholderCheck(TargetCheckParametrized):
             {found_fold[v] for v in found_set - expected_set},
         )
 
-    def check_target_params(self, sources, targets, unit, value):
+    def check_target_unit(  # type: ignore[override]
+        self, sources: list[str], targets: list[str], unit: Unit
+    ) -> Literal[False] | dict[str, Any]:
+        # TODO: this is type annotation hack, instead the check should have a proper return type
+        return super().check_target_unit(sources, targets, unit)  # type: ignore[return-value]
+
+    def check_target_params(  # type: ignore[override]
+        self, sources: list[str], targets: list[str], unit: Unit, value
+    ) -> Literal[False] | dict[str, Any]:
         expected = set(self.get_matches(value, sources[0]))
         if not expected and len(sources) > 1:
             expected = set(self.get_matches(value, sources[-1]))
@@ -89,7 +103,7 @@ class PlaceholderCheck(TargetCheckParametrized):
             return {"missing": missing, "extra": extra}
         return False
 
-    def check_highlight(self, source, unit):
+    def check_highlight(self, source: str, unit: Unit):
         if self.should_skip(unit):
             return
 
@@ -113,7 +127,7 @@ class PlaceholderCheck(TargetCheckParametrized):
             errors.append(self.get_extra_text(result["extra"]))
 
         return format_html_join(
-            mark_safe("<br />"),  # noqa: S308
+            mark_safe("<br />"),
             "{}",
             ((error,) for error in errors),
         )
@@ -123,35 +137,28 @@ class RegexCheck(TargetCheckParametrized):
     check_id = "regex"
     default_disabled = True
     name = gettext_lazy("Regular expression")
-    description = gettext_lazy("Translation does not match regular expression")
+    description = gettext_lazy("Translation does not match regular expression.")
 
     @property
     def param_type(self):
         return single_value_flag(parse_regex)
 
-    def check_target_params(self, sources, targets, unit, value):
+    def check_target_params(
+        self, sources: list[str], targets: list[str], unit: Unit, value
+    ):
         return any(not value.findall(target) for target in targets)
 
-    def should_skip(self, unit) -> bool:
+    def should_skip(self, unit: Unit) -> bool:
         if super().should_skip(unit):
             return True
         return not self.get_value(unit).pattern
-
-    def check_highlight(self, source, unit):
-        if self.should_skip(unit):
-            return
-
-        regex = self.get_value(unit)
-
-        for match in regex.finditer(source):
-            yield (match.start(), match.end(), match.group())
 
     def get_description(self, check_obj):
         unit = check_obj.unit
         if not self.has_value(unit):
             return super().get_description(check_obj)
-        regex = self.get_value(unit)
+        check_regex = self.get_value(unit)
         return format_html(
             escape(gettext_lazy("Does not match regular expression {}.")),
-            format_html("<code>{}</code>", regex.pattern),
+            format_html("<code>{}</code>", check_regex.pattern),
         )

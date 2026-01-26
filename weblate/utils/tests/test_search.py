@@ -1,19 +1,24 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
+from typing import TYPE_CHECKING, ClassVar, Literal
 
-from django.db.models import Q
-from django.test import SimpleTestCase, TestCase
+from django.db.models import Count, F, Q
+from django.test import TestCase
+from django.utils.timezone import get_current_timezone
 
 from weblate.auth.models import User
-from weblate.trans.models import Change, Unit
+from weblate.trans.actions import ActionEvents
+from weblate.trans.models import Change, Project, Unit
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.util import PLURAL_SEPARATOR
 from weblate.utils.db import using_postgresql
-from weblate.utils.search import Comparer, parse_query
+from weblate.utils.search import SearchQueryError, parse_query
 from weblate.utils.state import (
+    FUZZY_STATES,
     STATE_APPROVED,
     STATE_EMPTY,
     STATE_FUZZY,
@@ -21,31 +26,39 @@ from weblate.utils.state import (
     STATE_TRANSLATED,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
-class ComparerTest(SimpleTestCase):
-    def test_different(self) -> None:
-        self.assertLessEqual(Comparer().similarity("a", "b"), 50)
-
-    def test_same(self) -> None:
-        self.assertEqual(Comparer().similarity("a", "a"), 100)
-
-    def test_unicode(self) -> None:
-        # Test fallback to Python implementation in jellyfish
-        # for unicode strings
-        self.assertEqual(Comparer().similarity("NICHOLASŸ", "NICHOLAS"), 88)
+    from django.db.models import Expression
 
 
-class SearchMixin:
-    object_class = Unit
-    parser = "unit"
+class SearchTestCase(TestCase):
+    object_class: ClassVar[type[Unit | User]] = Unit
+    parser: ClassVar[Literal["unit", "user", "superuser"]] = "unit"
 
-    def assert_query(self, string, expected, exists=False, **context) -> None:
-        result = parse_query(string, parser=self.parser, **context)
-        self.assertEqual(result, expected)
-        self.assertEqual(self.object_class.objects.filter(result).exists(), exists)
+    def assert_query(
+        self,
+        string: str,
+        expected: Q | tuple[Q, Mapping[str, Expression]],
+        *,
+        expected_annotations: Mapping[str, Expression] | None = None,
+        exists: bool = False,
+        **context,
+    ) -> None:
+        filters, annotations = parse_query(string, parser=self.parser, **context)
+        if isinstance(expected, tuple):
+            expected, expected_annotations = expected
+        elif expected_annotations is None:
+            expected_annotations = {}
+        self.assertEqual(filters, expected)
+        self.assertEqual(annotations, expected_annotations)
+        self.assertEqual(
+            self.object_class.objects.annotate(**annotations).filter(filters).exists(),
+            exists,
+        )
 
 
-class UnitQueryParserTest(TestCase, SearchMixin):
+class UnitQueryParserTest(SearchTestCase):
     def test_simple(self) -> None:
         self.assert_query(
             "hello world",
@@ -114,13 +127,14 @@ class UnitQueryParserTest(TestCase, SearchMixin):
     def test_regex(self) -> None:
         self.assert_query('source:r"^hello"', Q(source__trgm_regex="^hello"))
         # Invalid regex
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query('source:r"^(hello"', Q(source__trgm_regex="^(hello"))
         # Not supported regex on PostgreSQL
-        with self.assertRaises(ValueError):
-            self.assert_query(
-                'source:r"^(?i)hello"', Q(source__trgm_regex="^(?i)hello")
-            )
+        if using_postgresql():
+            with self.assertRaises(SearchQueryError):
+                self.assert_query(
+                    'source:r"^(?i)hello"', Q(source__trgm_regex="^(?i)hello")
+                )
         self.assert_query('source:r"(?i)^hello"', Q(source__trgm_regex="(?i)^hello"))
 
     def test_logic(self) -> None:
@@ -137,7 +151,7 @@ class UnitQueryParserTest(TestCase, SearchMixin):
         self.assert_query("", Q())
 
     def test_invalid(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query(
                 "changed:inval AND target:world", Q(target__substring="world")
             )
@@ -147,8 +161,8 @@ class UnitQueryParserTest(TestCase, SearchMixin):
             "changed:2018",
             Q(
                 change__timestamp__range=(
-                    datetime(2018, 1, 1, 0, 0, tzinfo=timezone.utc),
-                    datetime(2018, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                    datetime(2018, 1, 1, 0, 0, tzinfo=UTC),
+                    datetime(2018, 12, 31, 23, 59, 59, 999999, tzinfo=UTC),
                 )
             )
             & Q(change__action__in=Change.ACTIONS_CONTENT),
@@ -157,10 +171,10 @@ class UnitQueryParserTest(TestCase, SearchMixin):
     def test_change_action(self) -> None:
         expected = Q(
             change__timestamp__range=(
-                datetime(2018, 1, 1, 0, 0, tzinfo=timezone.utc),
-                datetime(2018, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                datetime(2018, 1, 1, 0, 0, tzinfo=UTC),
+                datetime(2018, 12, 31, 23, 59, 59, 999999, tzinfo=UTC),
             )
-        ) & Q(change__action=Change.ACTION_MARKED_EDIT)
+        ) & Q(change__action=ActionEvents.MARKED_EDIT)
         self.assert_query(
             "change_time:2018 AND change_action:marked-for-edit", expected
         )
@@ -172,34 +186,41 @@ class UnitQueryParserTest(TestCase, SearchMixin):
         action_change = Q(change__action__in=Change.ACTIONS_CONTENT)
         self.assert_query(
             "changed:>20190301",
-            Q(change__timestamp__gte=datetime(2019, 3, 1, 0, 0, tzinfo=timezone.utc))
+            Q(change__timestamp__gte=datetime(2019, 3, 1, 0, 0, tzinfo=UTC))
             & action_change,
         )
         self.assert_query(
             "changed:>2019-03-01",
-            Q(change__timestamp__gte=datetime(2019, 3, 1, 0, 0, tzinfo=timezone.utc))
+            Q(change__timestamp__gte=datetime(2019, 3, 1, 0, 0, tzinfo=UTC))
             & action_change,
         )
         self.assert_query(
             "changed:2019-03-01",
             Q(
                 change__timestamp__range=(
-                    datetime(2019, 3, 1, 0, 0, tzinfo=timezone.utc),
-                    datetime(2019, 3, 1, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                    datetime(2019, 3, 1, 0, 0, tzinfo=UTC),
+                    datetime(2019, 3, 1, 23, 59, 59, 999999, tzinfo=UTC),
                 )
             )
             & action_change,
         )
-        with self.assertRaises(ValueError):
-            self.assert_query("changed:>=2010-01-", Q())
+        self.assert_query(
+            "changed:>'March 1, 2019'",
+            Q(change__timestamp__gte=datetime(2019, 3, 1, 0, 0, tzinfo=UTC))
+            & action_change,
+        )
+        with self.assertRaises(SearchQueryError):
+            self.assert_query("changed:>'Not a date'", Q())
+        with self.assertRaises(SearchQueryError):
+            self.assert_query("changed:>'Invalid 1, 2019'", Q())
 
     def test_date_range(self) -> None:
         self.assert_query(
             "changed:[2019-03-01 to 2019-04-01]",
             Q(
                 change__timestamp__range=(
-                    datetime(2019, 3, 1, 0, 0, tzinfo=timezone.utc),
-                    datetime(2019, 4, 1, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                    datetime(2019, 3, 1, 0, 0, tzinfo=UTC),
+                    datetime(2019, 4, 1, 23, 59, 59, 999999, tzinfo=UTC),
                 )
             )
             & Q(change__action__in=Change.ACTIONS_CONTENT),
@@ -208,24 +229,26 @@ class UnitQueryParserTest(TestCase, SearchMixin):
     def test_date_added(self) -> None:
         self.assert_query(
             "added:>2019-03-01",
-            Q(timestamp__gte=datetime(2019, 3, 1, 0, 0, tzinfo=timezone.utc)),
+            Q(timestamp__gte=datetime(2019, 3, 1, 0, 0, tzinfo=UTC)),
         )
 
     def test_source_changed(self) -> None:
         self.assert_query(
             "source_changed:>20190301",
-            Q(
-                source_unit__last_updated__gte=datetime(
-                    2019, 3, 1, 0, 0, tzinfo=timezone.utc
-                )
-            ),
+            Q(source_unit__last_updated__gte=datetime(2019, 3, 1, 0, 0, tzinfo=UTC)),
+        )
+
+    def test_last_updated(self) -> None:
+        self.assert_query(
+            "last_changed:>20190301",
+            Q(last_updated__gte=datetime(2019, 3, 1, 0, 0, tzinfo=UTC)),
         )
 
     def test_bool(self) -> None:
-        self.assert_query("pending:true", Q(pending=True))
+        self.assert_query("pending:true", Q(pending_changes__isnull=False))
 
     def test_nonexisting(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query("nonexisting:true", Q())
 
     def test_state(self) -> None:
@@ -235,13 +258,30 @@ class UnitQueryParserTest(TestCase, SearchMixin):
         self.assert_query("state:translated", Q(state=STATE_TRANSLATED))
         self.assert_query("state:needs-editing", Q(state=STATE_FUZZY))
 
+    def test_source_state(self) -> None:
+        self.assert_query(
+            "source_state:>=empty", Q(source_unit__state__gte=STATE_EMPTY)
+        )
+        self.assert_query(
+            "source_state:>=translated", Q(source_unit__state__gte=STATE_TRANSLATED)
+        )
+        self.assert_query(
+            "source_state:<translated", Q(source_unit__state__lt=STATE_TRANSLATED)
+        )
+        self.assert_query(
+            "source_state:translated", Q(source_unit__state=STATE_TRANSLATED)
+        )
+        self.assert_query(
+            "source_state:needs-editing", Q(source_unit__state=STATE_FUZZY)
+        )
+
     def test_position(self) -> None:
         self.assert_query("position:>=1", Q(position__gte=1))
         self.assert_query("position:<10", Q(position__lt=10))
         self.assert_query("position:[1 to 10]", Q(position__range=(1, 10)))
 
     def test_invalid_state(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query("state:invalid", Q())
 
     def test_parenthesis(self) -> None:
@@ -256,6 +296,44 @@ class UnitQueryParserTest(TestCase, SearchMixin):
             & (Q(source__substring="hello") | Q(source__substring="bar")),
         )
 
+    def test_priorities(self) -> None:
+        self.assertEqual(
+            parse_query("source:a AND target:b OR context:c"),
+            parse_query("(source:a AND target:b) OR context:c"),
+        )
+        self.assertEqual(
+            parse_query("context:c OR source:a AND target:b"),
+            parse_query("context:c OR (source:a AND target:b)"),
+        )
+
+    def test_implicit_mixed(self) -> None:
+        self.assertEqual(
+            parse_query("context:c source:a AND target:b"),
+            parse_query("context:c AND source:a AND target:b"),
+        )
+        self.assertEqual(
+            parse_query("context:c source:a OR target:b"),
+            parse_query("context:c AND source:a OR target:b"),
+        )
+        self.assertEqual(
+            parse_query("context:c source:a target:b"),
+            parse_query("context:c AND source:a AND target:b"),
+        )
+        self.assertEqual(
+            parse_query("context:c OR source:a target:b"),
+            parse_query("context:c OR source:a AND target:b"),
+        )
+        self.assertEqual(
+            parse_query("c is:translated"),
+            parse_query("(source:c OR target:c OR context:c) AND is:translated"),
+        )
+        self.assertEqual(
+            parse_query("c is:translated OR has:dismissed-check"),
+            parse_query(
+                "((source:c OR target:c OR context:c) AND is:translated) OR has:dismissed-check"
+            ),
+        )
+
     def test_language(self) -> None:
         self.assert_query("language:cs", Q(translation__language__code__iexact="cs"))
         self.assert_query(
@@ -265,9 +343,23 @@ class UnitQueryParserTest(TestCase, SearchMixin):
     def test_component(self) -> None:
         self.assert_query(
             "component:hello",
-            Q(translation__component__slug__iexact="hello")
+            Q(translation__component__slug__icontains="hello")
             | Q(translation__component__name__icontains="hello"),
         )
+
+    def test_component_exact(self) -> None:
+        self.assert_query(
+            "component:=hello",
+            Q(translation__component__slug__iexact="hello")
+            | Q(translation__component__name__iexact="hello"),
+        )
+
+    def test_path(self) -> None:
+        # Non-existing project still searches, but matches nothing
+        self.assert_query("path:hello", Q(translation=None))
+
+        project = Project.objects.create(slug="testslug", name="Test Name")
+        self.assert_query("path:testslug", Q(translation__component__project=project))
 
     def test_project(self) -> None:
         self.assert_query(
@@ -288,13 +380,19 @@ class UnitQueryParserTest(TestCase, SearchMixin):
         self.assert_query("has:check", Q(check__dismissed=False))
         self.assert_query("has:comment", Q(comment__resolved=False))
         self.assert_query("has:note", ~Q(note=""))
+        self.assert_query("has:location", ~Q(location=""))
         self.assert_query("has:resolved-comment", Q(comment__resolved=True))
         self.assert_query("has:dismissed-check", Q(check__dismissed=True))
         self.assert_query("has:translation", Q(state__gte=STATE_TRANSLATED))
-        self.assert_query("has:variant", Q(variant__isnull=False))
         self.assert_query(
-            "has:label", Q(source_unit__labels__isnull=False) | Q(labels__isnull=False)
+            "has:variant",
+            Q(defined_variants__isnull=False)
+            | (
+                ~Q(variant__variant_regex="")
+                & Q(context__regex=F("variant__variant_regex"))
+            ),
         )
+        self.assert_query("has:label", Q(source_unit__labels__isnull=False))
         self.assert_query("has:context", ~Q(context=""))
         self.assert_query(
             "has:screenshot",
@@ -305,12 +403,12 @@ class UnitQueryParserTest(TestCase, SearchMixin):
         self.assert_query("has:glossary", Q(source__isnull=True))
 
     def test_is(self) -> None:
-        self.assert_query("is:pending", Q(pending=True))
+        self.assert_query("is:pending", Q(pending_changes__isnull=False))
         self.assert_query("is:translated", Q(state__gte=STATE_TRANSLATED))
         self.assert_query("is:untranslated", Q(state__lt=STATE_TRANSLATED))
         self.assert_query("is:approved", Q(state=STATE_APPROVED))
         self.assert_query("is:read-only", Q(state=STATE_READONLY))
-        self.assert_query("is:fuzzy", Q(state=STATE_FUZZY))
+        self.assert_query("is:fuzzy", Q(state__in=FUZZY_STATES))
 
     def test_changed_by(self) -> None:
         self.assert_query(
@@ -342,9 +440,7 @@ class UnitQueryParserTest(TestCase, SearchMixin):
 
     def test_labels(self) -> None:
         self.assert_query(
-            "label:'test label'",
-            Q(source_unit__labels__name__iexact="test label")
-            | Q(labels__name__iexact="test label"),
+            "label:'test label'", Q(source_unit__labels__name__iexact="test label")
         )
 
     def test_screenshot(self) -> None:
@@ -394,7 +490,39 @@ class UnitQueryParserTest(TestCase, SearchMixin):
     def test_timestamp_format(self) -> None:
         self.assert_query(
             "changed:>=01/20/2020",
-            Q(change__timestamp__gte=datetime(2020, 1, 20, 0, 0, tzinfo=timezone.utc))
+            Q(change__timestamp__gte=datetime(2020, 1, 20, 0, 0, tzinfo=UTC))
+            & Q(change__action__in=Change.ACTIONS_CONTENT),
+        )
+
+    def test_timestamp_exact_iso(self) -> None:
+        timestamp = datetime.now(tz=timezone(timedelta(hours=3)))
+        self.assert_query(
+            f"changed:{timestamp.isoformat()}",
+            Q(change__timestamp=timestamp)
+            & Q(change__action__in=Change.ACTIONS_CONTENT),
+        )
+        self.assert_query(
+            f"changed:={timestamp.isoformat()}",
+            Q(change__timestamp__exact=timestamp)
+            & Q(change__action__in=Change.ACTIONS_CONTENT),
+        )
+
+    def test_timestamp_exact_date(self) -> None:
+        # The microsecond = 5 is relict from the parser, it should be avoided if possible
+        timestamp = datetime(
+            2013, 7, 21, 22, 15, 20, tzinfo=timezone(timedelta(hours=5))
+        )
+        self.assert_query(
+            "changed:='21 July 2013 10:15:20 pm +0500'",
+            Q(change__timestamp__exact=timestamp)
+            & Q(change__action__in=Change.ACTIONS_CONTENT),
+        )
+
+    def test_timestamp_exact_human(self) -> None:
+        timestamp = datetime(2013, 7, 21, 22, 15, 20, tzinfo=get_current_timezone())
+        self.assert_query(
+            "changed:='21 July year 2013 10:15:20 pm'",
+            Q(change__timestamp__exact=timestamp)
             & Q(change__action__in=Change.ACTIONS_CONTENT),
         )
 
@@ -403,8 +531,34 @@ class UnitQueryParserTest(TestCase, SearchMixin):
             "changed:2020-03-27",
             Q(
                 change__timestamp__range=(
-                    datetime(2020, 3, 27, 0, 0, tzinfo=timezone.utc),
-                    datetime(2020, 3, 27, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                    datetime(2020, 3, 27, 0, 0, tzinfo=UTC),
+                    datetime(2020, 3, 27, 23, 59, 59, 999999, tzinfo=UTC),
+                )
+            )
+            & Q(change__action__in=Change.ACTIONS_CONTENT),
+        )
+
+    def test_timestamp_interval_human(self) -> None:
+        today = datetime.now(tz=get_current_timezone())
+        timestamp = today - timedelta(days=20)
+        self.assert_query(
+            "changed:'20 days ago'",
+            Q(
+                change__timestamp__range=(
+                    timestamp.replace(hour=0, minute=0, second=0, microsecond=0),
+                    timestamp.replace(
+                        hour=23, minute=59, second=59, microsecond=999999
+                    ),
+                )
+            )
+            & Q(change__action__in=Change.ACTIONS_CONTENT),
+        )
+        self.assert_query(
+            "changed:[20_days_ago to today]",
+            Q(
+                change__timestamp__range=(
+                    timestamp.replace(hour=0, minute=0, second=0, microsecond=0),
+                    today.replace(hour=23, minute=59, second=59, microsecond=999999),
                 )
             )
             & Q(change__action__in=Change.ACTIONS_CONTENT),
@@ -441,10 +595,28 @@ class UnitQueryParserTest(TestCase, SearchMixin):
         self.assert_query("source:'", parse_query('''source:"'"'''))
         self.assert_query('source:"', parse_query("""source:'"'"""))
 
+    def test_labels_count(self) -> None:
+        annotation = {"labels_count": Count("source_unit__labels")}
+        self.assert_query(
+            "labels_count:2", Q(labels_count=2), expected_annotations=annotation
+        )
+        self.assert_query(
+            "labels_count:=2", Q(labels_count__exact=2), expected_annotations=annotation
+        )
+        self.assert_query(
+            "labels_count:>3", Q(labels_count__gt=3), expected_annotations=annotation
+        )
+        self.assert_query(
+            "labels_count:<=1", Q(labels_count__lte=1), expected_annotations=annotation
+        )
 
-class UserQueryParserTest(TestCase, SearchMixin):
-    object_class = User
-    parser = "user"
+        with self.assertRaises(SearchQueryError):
+            self.assert_query("labels_count:invalid", Q())
+
+
+class UserQueryParserTest(SearchTestCase):
+    object_class: ClassVar[type[Unit | User]] = User
+    parser: ClassVar[Literal["unit", "user", "superuser"]] = "user"
 
     def test_simple(self) -> None:
         self.assert_query(
@@ -463,18 +635,18 @@ class UserQueryParserTest(TestCase, SearchMixin):
         )
 
     def test_is(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query("is:bot", Q(is_bot=True))
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query("is:superuser", Q(is_superuser=True))
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query("is:active", Q(is_active=True))
 
     def test_language(self) -> None:
         self.assert_query("language:cs", (Q(profile__languages__code__iexact="cs")))
 
     def test_email(self) -> None:
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SearchQueryError):
             self.assert_query(
                 "email:hello",
                 Q(social_auth__verifiedemail__email__icontains="hello"),
@@ -485,8 +657,8 @@ class UserQueryParserTest(TestCase, SearchMixin):
             "joined:2018",
             Q(
                 date_joined__range=(
-                    datetime(2018, 1, 1, 0, 0, tzinfo=timezone.utc),
-                    datetime(2018, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                    datetime(2018, 1, 1, 0, 0, tzinfo=UTC),
+                    datetime(2018, 12, 31, 23, 59, 59, 999999, tzinfo=UTC),
                 )
             ),
         )
@@ -494,34 +666,43 @@ class UserQueryParserTest(TestCase, SearchMixin):
     def test_translates(self) -> None:
         self.assert_query(
             "translates:cs",
+            Q(change__language__code__iexact="cs"),
+        )
+        self.assert_query(
+            "translates:cs change_time:>'90 days ago'",
             Q(change__language__code__iexact="cs")
             & Q(
-                change__timestamp__date__gte=datetime.now(tz=timezone.utc).date()
-                - timedelta(days=30)
+                change__timestamp__gte=datetime.now(tz=UTC).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                - timedelta(days=90)
             ),
         )
 
     def test_contributes(self) -> None:
         self.assert_query(
             "contributes:test",
-            Q(change__project__slug__iexact="test")
-            & Q(
-                change__timestamp__date__gte=datetime.now(tz=timezone.utc).date()
-                - timedelta(days=30)
-            ),
+            Q(change__project__slug__iexact="test"),
         )
         self.assert_query(
             "contributes:test/test",
-            Q(change__component_id__in=[])
+            Q(change__component_id__in=[]),
+        )
+        self.assert_query(
+            "contributes:test change_time:>'90 days ago'",
+            Q(change__project__slug__iexact="test")
             & Q(
-                change__timestamp__date__gte=datetime.now(tz=timezone.utc).date()
-                - timedelta(days=30)
+                change__timestamp__gte=datetime.now(tz=UTC).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                - timedelta(days=90)
             ),
         )
 
 
 class SuperuserQueryParserTest(UserQueryParserTest):
-    parser = "superuser"
+    object_class: ClassVar[type[Unit | User]] = User
+    parser: ClassVar[Literal["unit", "user", "superuser"]] = "superuser"
 
     def test_simple(self) -> None:
         self.assert_query(
@@ -544,7 +725,7 @@ class SuperuserQueryParserTest(UserQueryParserTest):
         self.assert_query("is:active", Q(is_active=True))
 
 
-class SearchTest(ViewTestCase, SearchMixin):
+class SearchTest(ViewTestCase, SearchTestCase):
     """Search tests on real projects."""
 
     CREATE_GLOSSARIES: bool = True
@@ -554,7 +735,7 @@ class SearchTest(ViewTestCase, SearchMixin):
 
     def test_glossary_match(self) -> None:
         glossary = self.project.glossaries[0].translation_set.get(language_code="cs")
-        glossary.add_unit(None, "", "hello", "ahoj")
+        glossary.add_unit(None, "", "hello", "ahoj", author=self.user)
 
         if using_postgresql():
             expected = "[[:<:]](hello)[[:>:]]"
@@ -563,6 +744,6 @@ class SearchTest(ViewTestCase, SearchMixin):
         self.assert_query(
             "has:glossary",
             Q(source__iregex=expected),
-            True,
+            exists=True,
             project=self.project,
         )

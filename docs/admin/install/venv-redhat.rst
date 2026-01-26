@@ -10,14 +10,14 @@ Installing on RedHat, Fedora and CentOS
    dnf install \
       libxslt-devel libxml2-devel freetype-devel libjpeg-devel zlib-devel \
       libyaml-devel libffi-devel cairo-devel cairo-gobject-devel pango-devel \
-      gobject-introspection-devel libacl-devel python3-pip python3-virtualenv \
+      gobject-introspection-devel libacl-devel lz4-devel libzstd-devel xxhash-devel \
       libtool-ltdl-devel python3-devel git
 
 .. include:: steps/install-system-optional.rst
 
 .. code-block:: sh
 
-    dnf install openldap-devel libsasl2-devel
+    dnf install openldap-devel cyrus-sasl-devel
     dnf install xmlsec1-devel
 
 
@@ -29,10 +29,10 @@ Installing on RedHat, Fedora and CentOS
     dnf install nginx uwsgi uwsgi-plugin-python3
 
     # Web server option 2: Apache with ``mod_wsgi``
-    dnf install apache2 apache2-mod_wsgi
+    dnf install httpd python3-mod_wsgi
 
-    # Caching backend: Redis
-    dnf install redis
+    # Caching backend: Valkey
+    dnf install valkey
 
     # Database server: PostgreSQL
     dnf install postgresql postgresql-contrib
@@ -42,6 +42,8 @@ Installing on RedHat, Fedora and CentOS
 
     # Gettext for the msgmerge add-on
     dnf install gettext
+
+.. include:: steps/install-uv.rst
 
 .. include:: steps/install-python.rst
 

@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -11,11 +13,22 @@ from django.utils.functional import cached_property
 from django.utils.translation import gettext, gettext_lazy
 
 from weblate.lang.models import Language
+from weblate.trans.actions import ActionEvents
 from weblate.trans.defines import CATEGORY_DEPTH, COMPONENT_NAME_LENGTH
-from weblate.trans.mixins import CacheKeyMixin, ComponentCategoryMixin, PathMixin
-from weblate.trans.models.change import Change
+from weblate.trans.mixins import (
+    CacheKeyMixin,
+    ComponentCategoryMixin,
+    LockMixin,
+    PathMixin,
+)
 from weblate.utils.stats import CategoryStats
 from weblate.utils.validators import validate_slug
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from weblate.auth.models import User
+    from weblate.trans.models import Component
 
 
 class CategoryQuerySet(models.QuerySet):
@@ -35,7 +48,9 @@ class CategoryQuerySet(models.QuerySet):
         return self.order_by("name")
 
 
-class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
+class Category(
+    models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin, LockMixin
+):
     name = models.CharField(
         verbose_name=gettext_lazy("Category name"),
         max_length=COMPONENT_NAME_LENGTH,
@@ -61,7 +76,6 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
         related_name="category_set",
     )
 
-    is_lockable = False
     remove_permission = "project.edit"
     settings_permission = "project.edit"
 
@@ -71,7 +85,7 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
         app_label = "trans"
         verbose_name = "Category"
         verbose_name_plural = "Categories"
-        constraints = [
+        constraints = [  # noqa: RUF012
             models.UniqueConstraint(
                 name="category_slug_unique",
                 fields=["project", "category", "slug"],
@@ -86,6 +100,11 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
 
     def __str__(self) -> str:
         return f"{self.category or self.project}/{self.name}"
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.stats = CategoryStats(self)
+        self.acting_user: User | None = None
 
     def save(self, *args, **kwargs) -> None:
         old = None
@@ -103,14 +122,10 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
                 or old.category != self.category
             ):
                 for component in self.all_components.exclude(component=None):
-                    component.linked_childs.update(repo=component.get_repo_link_url())
+                    component.linked_children.update(repo=component.get_repo_link_url())
             # Move to a different project
             if old.project != self.project:
                 self.move_to_project(self.project)
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.stats = CategoryStats(self)
 
     def move_to_project(self, project) -> None:
         """Trigger save with changed project on categories and components."""
@@ -125,9 +140,12 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
         parent = self.category or self.project
         return (*parent.get_url_path(), self.slug)
 
-    def _get_childs_depth(self):
+    def _get_children_depth(self):
         return 1 + max(
-            (child._get_childs_depth() for child in self.category_set.all()),
+            (
+                child._get_children_depth()  # noqa: SLF001
+                for child in self.category_set.all()
+            ),
             default=0,
         )
 
@@ -140,7 +158,9 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
         return depth
 
     def _get_category_depth(self):
-        return (self._get_childs_depth() if self.pk else 1) + self._get_parents_depth()
+        return (
+            self._get_children_depth() if self.pk else 1
+        ) + self._get_parents_depth()
 
     @property
     def can_add_category(self):
@@ -172,7 +192,7 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
             old = Category.objects.get(pk=self.id)
             self.check_rename(old, validate=True)
 
-    def get_child_components_access(self, user):
+    def get_child_components_access(self, user: User):
         """List child components."""
         return self.component_set.filter_access(user).prefetch().order()
 
@@ -188,7 +208,7 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
         )
 
     @cached_property
-    def all_components(self):
+    def all_components(self) -> Iterable[Component]:
         from weblate.trans.models import Component
 
         return Component.objects.filter(
@@ -196,6 +216,22 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
             | Q(category__category=self)
             | Q(category__category__category=self)
         )
+
+    @property
+    def all_repo_components(self) -> Iterable[Component]:
+        included = set()
+        # Yield all components with repo
+        for component in self.all_components:
+            if not component.linked_component_id:
+                included.add(component.pk)
+                yield component
+        # Include possibly linked components outside the category
+        for component in self.all_components:
+            if (
+                component.linked_component_id
+                and component.linked_component_id not in included
+            ):
+                yield component.linked_component
 
     @cached_property
     def all_component_ids(self):
@@ -210,9 +246,9 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
             return getattr(result, "slug", result)
 
         tracked = (
-            ("slug", Change.ACTION_RENAME_CATEGORY),
-            ("category", Change.ACTION_MOVE_CATEGORY),
-            ("project", Change.ACTION_MOVE_CATEGORY),
+            ("slug", ActionEvents.RENAME_CATEGORY),
+            ("category", ActionEvents.MOVE_CATEGORY),
+            ("project", ActionEvents.MOVE_CATEGORY),
         )
         for attribute, action in tracked:
             old_value = getvalue(old, attribute)
@@ -231,3 +267,7 @@ class Category(models.Model, PathMixin, CacheKeyMixin, ComponentCategoryMixin):
         return set(
             self.all_components.values_list("source_language_id", flat=True).distinct()
         )
+
+    def get_widgets_url(self) -> str:
+        """Return absolute URL for widgets."""
+        return self.project.get_widgets_url()

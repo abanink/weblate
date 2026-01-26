@@ -5,8 +5,29 @@
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
 
-from weblate.checks.flags import TYPED_FLAGS, TYPED_FLAGS_ARGS, Flags
+from weblate.checks.flags import TYPED_FLAGS, TYPED_FLAGS_ARGS, Flags, FlagsValidator
+from weblate.formats.helpers import NamedBytesIO
+from weblate.formats.ttkit import PoFormat
 from weblate.trans.defines import VARIANT_KEY_LENGTH
+
+PO_HEADER = r"""
+msgid ""
+msgstr ""
+"Project-Id-Version: Weblate Hello World 2012\n"
+"Report-Msgid-Bugs-To: <noreply@example.net>\n"
+"POT-Creation-Date: 2012-03-14 15:54+0100\n"
+"PO-Revision-Date: 2013-08-25 15:23+0200\n"
+"Last-Translator: testuser <>\n"
+"Language-Team: Czech <http://example.com/projects/test/test/cs/>\n"
+"Language: cs\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2;\n"
+"X-Generator: Weblate 1.7-dev\n"
+
+
+"""
 
 
 class FlagTest(SimpleTestCase):
@@ -23,6 +44,13 @@ class FlagTest(SimpleTestCase):
 
     def test_iter(self) -> None:
         self.assertEqual(sorted(Flags("foo, bar")), ["bar", "foo"])
+
+    def test_has_any(self) -> None:
+        flags = Flags("foo, bar")
+        self.assertFalse(flags.has_any(set()))
+        self.assertFalse(flags.has_any({"baz"}))
+        self.assertTrue(flags.has_any({"bar", "foo"}))
+        self.assertTrue(flags.has_any({"bar", "baz"}))
 
     def test_parse_empty(self) -> None:
         self.assertEqual(Flags("").items(), set())
@@ -181,3 +209,55 @@ class FlagTest(SimpleTestCase):
         self.assertEqual(
             flags.format(), r'"Scripts\Tscripts\pages\dist\grplus.js":1046'
         )
+
+    def test_discard(self) -> None:
+        flags = Flags("foo", "discard:foo")
+        self.assertEqual(flags.format(), "")
+        flags = Flags("foo", "discard:bar")
+        self.assertEqual(flags.format(), "foo")
+
+    def test_discard_validator(self) -> None:
+        flags = FlagsValidator("foo", "discard:foo")
+        self.assertEqual(flags.format(), "discard:foo, foo")
+        flags = FlagsValidator("foo", "discard:bar")
+        self.assertEqual(flags.format(), "discard:bar, foo")
+        flags = FlagsValidator("discard:bar")
+        with self.assertRaises(ValidationError):
+            flags.validate()
+        flags = FlagsValidator("discard")
+        with self.assertRaises(ValidationError):
+            flags.validate()
+        flags = FlagsValidator("discard:ignore-same")
+        flags.validate()
+
+    def test_equals(self) -> None:
+        from lxml import etree
+
+        flags = Flags("foo:foo, bar:bar")
+        self.assertEqual(flags, Flags("bar:bar, foo:foo"))
+        self.assertEqual(flags, Flags(Flags("bar:bar, foo:foo")))
+        self.assertEqual(flags, Flags("bar:bar, foo:foo"))
+
+        flags_xml = etree.fromstring(
+            """<flags weblate-flags="bar:bar, foo:foo"></flags>"""
+        )
+        self.assertEqual(flags, Flags(flags_xml))
+
+        flags = Flags(None)
+        self.assertEqual(flags, Flags())
+        self.assertEqual(flags, Flags(""))
+        self.assertEqual(flags, Flags(None))
+
+    def test_automatic_location_flags(self) -> None:
+        def check_location_flags(content: str, expected_flags: set[str]) -> None:
+            fileformat = PoFormat(NamedBytesIO("", content.encode()))
+            flags = list(fileformat.all_units)[0].flags  # noqa: RUF015
+            self.assertEqual(set(flags), expected_flags)
+
+        # test rst-text flag
+        content = f'{PO_HEADER}#: ../../path/file.rst:24 ../../path/file.rst:52#: ../../path/file.rst:63msgid "Hello, world!"msgstr "Nazdar svete!"'
+        check_location_flags(content, {"rst-text"})
+
+        # test md-text flag
+        content = f'{PO_HEADER}#: ../../path/file.md:24 ../../path/file.md:52msgid "Hello, world!"msgstr "Nazdar svete!"'
+        check_location_flags(content, {"md-text"})

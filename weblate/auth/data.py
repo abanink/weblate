@@ -34,6 +34,8 @@ PERMISSIONS = (
     # Translators: Permission name
     ("glossary.add", gettext_noop("Add glossary entry")),
     # Translators: Permission name
+    ("glossary.terminology", gettext_noop("Add glossary terminology")),
+    # Translators: Permission name
     ("glossary.edit", gettext_noop("Edit glossary entry")),
     # Translators: Permission name
     ("glossary.delete", gettext_noop("Delete glossary entry")),
@@ -69,6 +71,8 @@ PERMISSIONS = (
     ("unit.edit", gettext_noop("Edit strings")),
     # Translators: Permission name
     ("unit.review", gettext_noop("Review strings")),
+    # Translators: Permission name
+    ("unit.bulk_edit", gettext_noop("Bulk edit strings")),
     # Translators: Permission name
     ("unit.override", gettext_noop("Edit string when suggestions are enforced")),
     # Translators: Permission name
@@ -109,6 +113,10 @@ PERMISSIONS = (
     ("vcs.view", gettext_noop("View upstream repository location")),
     # Translators: Permission name
     ("vcs.update", gettext_noop("Update the internal repository")),
+    # Translators: Permission name
+    ("announcement.add", gettext_noop("Post announcements")),
+    # Translators: Permission name
+    ("announcement.delete", gettext_noop("Delete announcements")),
 )
 
 PERMISSION_NAMES = {perm[0] for perm in PERMISSIONS}
@@ -126,9 +134,15 @@ GLOBAL_PERMISSIONS = (
     # Translators: Permission name
     ("group.edit", gettext_noop("Manage teams")),
     # Translators: Permission name
+    ("group.view", gettext_noop("View team info")),
+    # Translators: Permission name
     ("user.edit", gettext_noop("Manage users")),
     # Translators: Permission name
+    ("user.view", gettext_noop("View user info")),
+    # Translators: Permission name
     ("role.edit", gettext_noop("Manage roles")),
+    # Translators: Permission name
+    ("role.view", gettext_noop("View role info")),
     # Translators: Permission name
     ("announcement.edit", gettext_noop("Manage announcements")),
     # Translators: Permission name
@@ -197,7 +211,25 @@ ROLES = (
             "vcs.access",
             "vcs.view",
         }
-        | filter_perms("glossary."),
+        | filter_perms("glossary.", {"glossary.terminology"}),
+    ),
+    (
+        pgettext_noop("Access-control role", "Translation coordinator"),
+        TRANSLATE_PERMS
+        | {
+            "announcement.add",
+            "announcement.delete",
+            "translation.add",
+            "unit.template",
+            "suggestion.delete",
+            "vcs.access",
+            "vcs.view",
+            "unit.review",
+            "unit.override",
+            "comment.resolve",
+        }
+        | filter_perms("glossary.")
+        | filter_perms("screenshot."),
     ),
     (
         pgettext_noop("Access-control role", "Review strings"),
@@ -207,6 +239,10 @@ ROLES = (
     (
         pgettext_noop("Access-control role", "Manage languages"),
         filter_perms("translation.", {"translation.auto"}),
+    ),
+    (
+        pgettext_noop("Access-control role", "Bulk editing"),
+        {"unit.bulk_edit"},
     ),
     (
         pgettext_noop("Access-control role", "Automatic translation"),
@@ -278,6 +314,9 @@ ACL_GROUPS = {
     pgettext_noop(
         "Per-project access-control team name", "Screenshots"
     ): "Manage screenshots",
+    pgettext_noop(
+        "Per-project access-control team name", "Bulk editing"
+    ): "Bulk editing",
     pgettext_noop(
         "Per-project access-control team name", "Automatic translation"
     ): "Automatic translation",

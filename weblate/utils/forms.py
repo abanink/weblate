@@ -1,6 +1,9 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from typing import Literal
 
 from crispy_forms.layout import Div, Field
 from crispy_forms.utils import TEMPLATE_PACK
@@ -9,18 +12,21 @@ from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.forms.models import ModelChoiceIterator
 from django.template.loader import render_to_string
+from django.utils.text import normalize_newlines
 from django.utils.translation import gettext, gettext_lazy
 
+from weblate.formats.helpers import CONTROLCHARS
 from weblate.trans.defines import EMAIL_LENGTH, USERNAME_LENGTH
 from weblate.trans.filter import FILTERS
 from weblate.trans.util import sort_unicode
-from weblate.utils.errors import report_error
-from weblate.utils.search import parse_query
-from weblate.utils.validators import validate_email, validate_username
+
+from .validators import WeblateServiceURLValidator, validate_email, validate_username
 
 
 class QueryField(forms.CharField):
-    def __init__(self, parser: str = "unit", **kwargs) -> None:
+    def __init__(
+        self, parser: Literal["unit", "user", "superuser"] = "unit", **kwargs
+    ) -> None:
         if "label" not in kwargs:
             kwargs["label"] = gettext_lazy("Query")
         if "required" not in kwargs:
@@ -31,18 +37,15 @@ class QueryField(forms.CharField):
         super().__init__(**kwargs)
 
     def clean(self, value):
+        from weblate.utils.search import SearchQueryError, parse_query
+
         if not value:
             if self.required:
                 raise ValidationError(gettext("Missing query string."))
             return ""
         try:
             parse_query(value, parser=self.parser)
-        except ValueError as error:
-            raise ValidationError(
-                gettext("Could not parse query string: {}").format(error)
-            ) from error
-        except Exception as error:
-            report_error(cause="Error parsing search query")
+        except SearchQueryError as error:
             raise ValidationError(
                 gettext("Could not parse query string: {}").format(error)
             ) from error
@@ -50,9 +53,17 @@ class QueryField(forms.CharField):
 
 
 class UsernameField(forms.CharField):
-    default_validators = [validate_username]
+    default_validators = [validate_username]  # noqa: RUF012
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        max_length: int | None = None,
+        min_length: int | None = None,
+        strip: bool = True,
+        empty_value: str = "",
+        **kwargs,
+    ) -> None:
         params = {
             "max_length": USERNAME_LENGTH,
             "help_text": gettext_lazy(
@@ -65,7 +76,13 @@ class UsernameField(forms.CharField):
         params.update(kwargs)
         self.valid = None
 
-        super().__init__(*args, **params)
+        super().__init__(
+            max_length=max_length,
+            min_length=min_length,
+            strip=strip,
+            empty_value=empty_value,
+            **kwargs,
+        )
 
 
 class UserField(forms.CharField):
@@ -98,34 +115,42 @@ class UserField(forms.CharField):
             if self.required:
                 raise ValidationError(gettext("Missing username or e-mail."))
             return None
+        if any(char in value for char in CONTROLCHARS):
+            raise ValidationError(
+                gettext("String contains control character: %s") % repr(value)
+            )
         try:
             return User.objects.get(Q(username=value) | Q(email=value))
-        except User.DoesNotExist:
-            raise ValidationError(gettext("Could not find any such user."))
-        except User.MultipleObjectsReturned:
-            raise ValidationError(gettext("More possible users were found."))
+        except User.DoesNotExist as error:
+            raise ValidationError(gettext("Could not find any such user.")) from error
+        except User.MultipleObjectsReturned as error:
+            raise ValidationError(gettext("More possible users were found.")) from error
 
 
 class EmailField(forms.EmailField):
     """
     Slightly restricted EmailField.
 
-    We blacklist some additional local parts and customize error messages.
+    We block some additional local parts and customize error messages.
     """
 
-    default_validators = [validate_email]
+    default_validators = [validate_email]  # noqa: RUF012
 
     def __init__(self, *args, **kwargs) -> None:
         kwargs.setdefault("max_length", EMAIL_LENGTH)
         super().__init__(*args, **kwargs)
 
 
-class SortedSelectMixin:
-    """Mixin for Select widgets to sort choices alphabetically."""
+class SortedChoiceWidget(forms.widgets.ChoiceWidget):
+    """Wrapper class to sort choices alphabetically."""
 
     def optgroups(self, name, value, attrs=None):
         groups = super().optgroups(name, value, attrs)
         return sort_unicode(groups, lambda val: str(val[1][0]["label"]))
+
+
+class SortedSelect(SortedChoiceWidget, forms.Select):
+    """Wrapper class to sort choices alphabetically."""
 
 
 class ColorWidget(forms.RadioSelect):
@@ -134,11 +159,7 @@ class ColorWidget(forms.RadioSelect):
         super().__init__(attrs, choices)
 
 
-class SortedSelectMultiple(SortedSelectMixin, forms.SelectMultiple):
-    """Wrapper class to sort choices alphabetically."""
-
-
-class SortedSelect(SortedSelectMixin, forms.Select):
+class SortedSelectMultiple(SortedSelect, forms.SelectMultiple):
     """Wrapper class to sort choices alphabetically."""
 
 
@@ -157,6 +178,7 @@ class SearchField(Field):
         kwargs["template"] = "snippets/query-field.html"
         super().__init__(*args, **kwargs)
 
+    # pylint: disable-next=arguments-differ
     def render(self, form, context, template_pack=TEMPLATE_PACK, **kwargs):
         extra_context = {"custom_filter_list": self.get_search_query_choices()}
         return super().render(form, context, template_pack, extra_context, **kwargs)
@@ -205,7 +227,7 @@ class CachedQueryIterator(ModelChoiceIterator):
         return self.field.empty_label is not None or bool(self.queryset)
 
 
-class NonCopyingSetQuerysetMixin:
+class CachedModelChoiceField(forms.ModelChoiceField):
     iterator = CachedQueryIterator
 
     def _get_queryset(self):
@@ -218,11 +240,20 @@ class NonCopyingSetQuerysetMixin:
     queryset = property(_get_queryset, _set_queryset)
 
 
-class CachedModelChoiceField(NonCopyingSetQuerysetMixin, forms.ModelChoiceField):
-    pass
-
-
 class CachedModelMultipleChoiceField(
-    NonCopyingSetQuerysetMixin, forms.ModelMultipleChoiceField
+    CachedModelChoiceField, forms.ModelMultipleChoiceField
 ):
     pass
+
+
+class WeblateServiceURLField(forms.URLField):
+    default_validators = [WeblateServiceURLValidator()]  # noqa: RUF012
+
+
+class NormalizedNewlineCharField(forms.CharField):
+    def to_python(self, value):
+        return normalize_newlines(str(super().to_python(value)))
+
+
+class WeblateDateInput(forms.DateInput):
+    input_type = "date"

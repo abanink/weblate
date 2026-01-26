@@ -1,6 +1,9 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from django.contrib.auth.decorators import permission_required
 from django.http import Http404
@@ -22,9 +25,13 @@ from weblate.utils.stats import (
     ProjectLanguageStats,
     prefetch_stats,
 )
+from weblate.utils.views import get_paginator
+
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
 
 
-def show_languages(request):
+def show_languages(request: AuthenticatedHttpRequest):
     custom_workflows = set()
     if request.user.has_perm("language.edit"):
         languages = Language.objects.all()
@@ -49,14 +56,15 @@ def show_languages(request):
     )
 
 
-def show_language(request, lang):
+def show_language(request: AuthenticatedHttpRequest, lang):
     try:
         obj = Language.objects.get(code=lang)
-    except Language.DoesNotExist:
+    except Language.DoesNotExist as error:
         obj = Language.objects.fuzzy_get(lang)
         if isinstance(obj, Language):
             return redirect(obj)
-        raise Http404("No Language matches the given query.")
+        msg = "No Language matches the given query."
+        raise Http404(msg) from error
 
     user = request.user
 
@@ -71,13 +79,18 @@ def show_language(request, lang):
             return redirect("languages")
 
     last_changes = Change.objects.last_changes(user, language=obj).recent()
-    projects = user.allowed_projects
     projects = prefetch_project_flags(
-        prefetch_stats(projects.filter(component__translation__language=obj).distinct())
+        get_paginator(
+            request,
+            user.allowed_projects.filter(
+                component__translation__language=obj
+            ).distinct(),
+            stats=True,
+        )
     )
-    projects = [ProjectLanguage(project, obj) for project in projects]
+    project_languages = [ProjectLanguage(project, obj) for project in projects]
 
-    ProjectLanguageStats.prefetch_many([project.stats for project in projects])
+    ProjectLanguageStats.prefetch_many([project.stats for project in project_languages])
 
     return render(
         request,
@@ -86,8 +99,9 @@ def show_language(request, lang):
             "allow_index": True,
             "object": obj,
             "last_changes": last_changes,
-            "search_form": SearchForm(user, language=obj),
+            "search_form": SearchForm(request=request, language=obj, obj=obj),
             "projects": projects,
+            "project_languages": project_languages,
         },
     )
 
@@ -100,7 +114,7 @@ class CreateLanguageView(CreateView):
         kwargs = self.get_form_kwargs()
         return (LanguageForm(**kwargs), PluralForm(**kwargs))
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request: AuthenticatedHttpRequest, *args, **kwargs):
         self.object = None
         forms = self.get_form()
         if all(form.is_valid() for form in forms):
@@ -135,7 +149,7 @@ class EditLanguageView(UpdateView):
             kwargs["instance"] = self.workflow_object
         return WorkflowSettingForm(**kwargs)
 
-    def get(self, request, *args, **kwargs):
+    def get(self, request: AuthenticatedHttpRequest, *args, **kwargs):
         self.object = self.get_object()
         try:
             self.workflow_object = self.object.workflowsetting_set.get(project=None)
@@ -143,7 +157,7 @@ class EditLanguageView(UpdateView):
             self.workflow_object = None
         return super().get(request, *args, **kwargs)
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request: AuthenticatedHttpRequest, *args, **kwargs):
         self.object = self.get_object()
         try:
             self.workflow_object = self.object.workflowsetting_set.get(project=None)
@@ -157,6 +171,7 @@ class EditLanguageView(UpdateView):
             self.get_context_data(form=form, workflow_form=workflow_form)
         )
 
+    # pylint: disable-next=arguments-differ
     def form_valid(self, form, workflow_form):
         """If the form is valid, save the associated model."""
         workflow_form.instance.language = self.object

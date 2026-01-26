@@ -6,6 +6,7 @@
 
 from django.test import TestCase
 
+from weblate.checks.flags import Flags
 from weblate.checks.tests.test_checks import MockUnit
 from weblate.trans.autofixes import fix_target
 from weblate.trans.autofixes.chars import (
@@ -74,6 +75,16 @@ class AutoFixTest(TestCase):
             (["%(percent)s %%"], False),
         )
 
+    def test_html_ignored(self) -> None:
+        fix = BleachHTML()
+        unit = MockUnit(
+            source='<a href="script:foo()">link</a>', flags="safe-html,ignore-safe-html"
+        )
+        self.assertEqual(
+            fix.fix_target(["Allow <b>"], unit),
+            (["Allow <b>"], False),
+        )
+
     def test_html_markdown(self) -> None:
         fix = BleachHTML()
         unit = MockUnit(
@@ -129,10 +140,10 @@ class AutoFixTest(TestCase):
         # No flags
         self.assertEqual(fix.fix_target(["Bar"], unit), (["Bar"], False))
         # No format string, but forced
-        unit.flags = "java-format"
+        unit.flags = Flags("java-format")
         self.assertEqual(fix.fix_target(["Bar"], unit), (["Bar"], False))
         # No format string
-        unit.flags = "auto-java-messageformat"
+        unit.flags = Flags("auto-java-messageformat")
         self.assertEqual(fix.fix_target(["Bar"], unit), (["Bar"], False))
         unit.source = "test {0}"
         unit.sources = [unit.source]
@@ -176,9 +187,20 @@ class AutoFixTest(TestCase):
         cs_unit = MockUnit(source="Foo:", code="cs")
         self.assertEqual(fix.fix_target(["Bar:"], non_unit), (["Bar:"], False))
         self.assertEqual(
-            fix.fix_target(["Bar\u202f:"], fr_unit), (["Bar\u202f:"], False)
+            fix.fix_target(["Bar\u00a0:"], fr_unit), (["Bar\u00a0:"], False)
         )
-        self.assertEqual(fix.fix_target(["Bar :"], fr_unit), (["Bar\u202f:"], True))
+        self.assertEqual(fix.fix_target(["Bar :"], fr_unit), (["Bar\u00a0:"], True))
         self.assertEqual(fix.fix_target(["Bar:"], fr_unit), (["Bar:"], False))
         self.assertEqual(fix.fix_target(["Bar:"], fr_ca_unit), (["Bar:"], False))
         self.assertEqual(fix.fix_target(["Bar:"], cs_unit), (["Bar:"], False))
+
+    def test_punctuation_spacing_rst(self) -> None:
+        fix = PunctuationSpacing()
+        fr_rst_unit = MockUnit(source="This :ref:`doc`", code="fr", flags="rst-text")
+        self.assertEqual(
+            fix.fix_target(["This :ref:`doc`"], fr_rst_unit),
+            (["This :ref:`doc`"], False),
+        )
+        self.assertEqual(
+            fix.fix_target(["This :"], fr_rst_unit), (["This\u00a0:"], True)
+        )

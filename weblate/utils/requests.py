@@ -4,20 +4,25 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import requests
 from django.core.cache import cache
-from requests import Response
 
 from weblate.logger import LOGGER
-from weblate.utils.errors import report_error
 from weblate.utils.version import USER_AGENT
 
+if TYPE_CHECKING:
+    from requests import Response
 
-def request(
+
+def http_request(
     method: str,
     url: str,
+    *,
     headers: dict[str, str] | None = None,
     timeout: float = 5,
+    raise_for_status: bool = True,
     **kwargs,
 ) -> Response:
     agent = {"User-Agent": USER_AGENT}
@@ -26,11 +31,12 @@ def request(
     else:
         headers.update(agent)
     response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
-    response.raise_for_status()
+    if raise_for_status:
+        response.raise_for_status()
     return response
 
 
-def get_uri_error(uri: str) -> None | str:
+def get_uri_error(uri: str) -> str | None:
     """Return error for fetching the URL or None if it works."""
     if uri.startswith("https://nonexisting.weblate.org/"):
         return "Non existing test URL"
@@ -44,12 +50,11 @@ def get_uri_error(uri: str) -> None | str:
         LOGGER.debug("URL check for %s, cached failure", uri)
         return cached
     try:
-        with request("get", uri, stream=True):
+        with http_request("get", uri, stream=True):
             cache.set(cache_key, True, 12 * 3600)
             LOGGER.debug("URL check for %s, tested success", uri)
             return None
     except requests.exceptions.RequestException as error:
-        report_error(cause="URL check failed")
         if getattr(error.response, "status_code", 0) == 429:
             # Silently ignore rate limiting issues
             return None

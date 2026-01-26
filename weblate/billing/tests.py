@@ -9,7 +9,6 @@ from io import StringIO
 from django.core import mail
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.test import TestCase
 from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -24,13 +23,13 @@ from weblate.billing.tasks import (
     schedule_removal,
 )
 from weblate.trans.models import Project
-from weblate.trans.tests.test_models import RepoTestCase
+from weblate.trans.tests.test_models import BaseTestCase, RepoTestCase
 from weblate.trans.tests.utils import create_test_billing
 
 TEST_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test-data")
 
 
-class BillingTest(TestCase):
+class BillingTest(BaseTestCase):
     def setUp(self) -> None:
         self.user = User.objects.create_user(
             username="bill", password="kill", email="noreply@example.net"
@@ -168,7 +167,7 @@ class BillingTest(TestCase):
         # Validation of existing
         self.invoice.clean()
 
-    @override_settings(INVOICE_PATH=TEST_DATA)
+    @override_settings(INVOICE_PATH_LEGACY=TEST_DATA)
     def test_download(self) -> None:
         self.add_project()
         # Unauthenticated
@@ -369,6 +368,22 @@ class BillingTest(TestCase):
         self.plan.save()
         self.test_trial()
 
+    def test_remove_project(self) -> None:
+        second_user = User.objects.create_user(
+            username="bill2", password="kill2", email="noreply2@example.net"
+        )
+        third_user = User.objects.create_user(
+            username="bill3", password="kill3", email="noreply3@example.net"
+        )
+        project = self.add_project()
+        project.add_user(second_user, "Administration")
+        project.add_user(third_user, "Translate")
+        project.delete()
+        self.assertEqual(
+            set(self.billing.owners.values_list("username", flat=True)),
+            {self.user.username, second_user.username},
+        )
+
 
 class HostingTest(RepoTestCase):
     def get_user(self):
@@ -427,9 +442,7 @@ class HostingTest(RepoTestCase):
 
         # Verify message
         self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(
-            mail.outbox[0].subject, "[Weblate] Hosting request for Test (Libre, trial)"
-        )
+        self.assertEqual(mail.outbox[0].subject, "[Weblate] Hosting request for Test")
         self.assertIn("testuser", mail.outbox[0].body)
         self.assertEqual(mail.outbox[0].to, ["noreply@example.com"])
 

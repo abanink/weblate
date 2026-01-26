@@ -14,10 +14,18 @@ from weblate.trans.models import Component
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.utils.db import TransactionsTestMixin
 from weblate.utils.ratelimit import reset_rate_limit
-from weblate.utils.state import STATE_FUZZY, STATE_READONLY, STATE_TRANSLATED
+from weblate.utils.state import (
+    STATE_APPROVED,
+    STATE_FUZZY,
+    STATE_READONLY,
+    STATE_TRANSLATED,
+)
+from weblate.utils.views import get_form_data
 
 
 class SearchViewTest(TransactionsTestMixin, ViewTestCase):
+    CREATE_GLOSSARIES = True
+
     def setUp(self) -> None:
         super().setUp()
         self.translation = self.component.translation_set.get(language_code="cs")
@@ -114,7 +122,7 @@ class SearchViewTest(TransactionsTestMixin, ViewTestCase):
         self.do_search({"q": "changed:>2010-01-10 AND changed_by:testuser"}, None)
         self.do_search({"q": "changed_by:testuser"}, None)
         # Review, partial date
-        self.do_search({"q": "changed:>=2010-01-"}, "Unknown string format: 2010-01-")
+        self.do_search({"q": "changed:>=2010-01-"}, None)
 
     def extract_params(self, response):
         search_url = re.findall(r'data-params="([^"]*)"', response.content.decode())[0]
@@ -164,12 +172,103 @@ class SearchViewTest(TransactionsTestMixin, ViewTestCase):
         self.do_search({"q": "check:plurals"}, None)
         self.do_search({"q": ""}, "1 / 4")
 
+    def test_search_automatically_translated(self) -> None:
+        self.do_search({"q": "is:automatically-translated"}, None)
+
+        unit = self.translation.unit_set.first()
+        unit.automatically_translated = True
+        unit.save()
+
+        response = self.do_search({"q": "is:automatically-translated"}, "1 / 1")
+        self.assertContains(response, unit.source)
+
+        self.do_search({"q": "NOT is:automatically-translated"}, "1 / 3")
+
     def test_search_plural(self) -> None:
         response = self.do_search({"q": "banana"}, "banana")
         self.assertContains(response, "One")
         self.assertContains(response, "Few")
         self.assertContains(response, "Other")
         self.assertNotContains(response, "Plural form ")
+
+    def assert_search_variant(
+        self,
+        expected_source: str,
+        match_components: list[Component],
+        no_match_component: Component,
+    ) -> None:
+        for component in match_components:
+            response = self.client.get(
+                reverse("search", kwargs={"path": component.get_url_path()}),
+                {"q": "has:variant"},
+            )
+            self.assertContains(response, expected_source)
+
+        response = self.client.get(
+            reverse("search", kwargs={"path": no_match_component.get_url_path()}),
+            {"q": "has:variant"},
+        )
+        self.assertContains(response, "No matching strings found.")
+
+    def test_search_variant_with_flag_create(self) -> None:
+        """
+        Test glossary variant search.
+
+        Specifically checks that search result of 'has:variant' only contains
+        units that have variants in the search language
+        """
+        self.glossary = self.project.glossaries[0]
+        en_glossary = self.glossary.translation_set.get(language__code="en")  # source
+        de_glossary = self.glossary.translation_set.get(language__code="de")
+        cs_glossary = self.glossary.translation_set.get(language__code="cs")
+
+        en_glossary.add_unit(None, "", source="glossary-term", author=self.user)
+
+        # create a unit with a variant for both 'en' and 'de'
+        de_glossary.add_unit(
+            None,
+            "",
+            source="variant-glossary-term",
+            extra_flags="variant:glossary-term",
+            author=self.user,
+        )
+
+        self.assert_search_variant(
+            "variant-glossary-term", [en_glossary, de_glossary], cs_glossary
+        )
+
+    def test_search_variant_with_regex_key(self) -> None:
+        mono_component = self.create_po_mono(project=self.project, name="Monolingual")
+
+        # set variant_regex match
+        url = reverse("settings", kwargs={"path": mono_component.get_url_path()})
+        self.project.add_user(self.user, "Administration")
+        response = self.client.get(url)
+        data = get_form_data(response.context["form"].initial)
+        data["variant_regex"] = r"(_variant)$"
+
+        response = self.client.post(
+            url,
+            data,
+            follow=True,
+        )
+        self.assertContains(response, "Settings saved")
+
+        mono_component.refresh_from_db()
+        self.assertNotEqual(mono_component.variant_regex, "")
+
+        en_glossary = mono_component.translation_set.get(language__code="en")  # source
+        de_glossary = mono_component.translation_set.get(language__code="de")
+        cs_glossary = mono_component.translation_set.get(language__code="cs")
+
+        en_glossary.add_unit(None, "original", "glossary-term", author=self.user)
+        de_glossary.add_unit(
+            None, "original_variant", source="variant-glossary-term", author=self.user
+        )
+
+        self.assert_search_variant(
+            "glossary-term", [en_glossary, de_glossary], cs_glossary
+        )
 
     def test_checksum(self) -> None:
         self.do_search({"checksum": "invalid"}, None, anchor="")
@@ -259,6 +358,42 @@ class ReplaceTest(ViewTestCase):
                     "path": (self.project.slug, "-", self.translation.language.code)
                 },
             )
+        )
+
+    def test_replace_plurals(self) -> None:
+        unit = self.get_unit("Orangutan")
+        url = reverse("replace", kwargs=self.kw_translation)
+        self.edit_unit(
+            "Orangutan",
+            "Opice má %d banán.\n",
+            target_1="Opice má %d banány.\n",
+            target_2="Opice má %d banánů.\n",
+        )
+        response = self.client.post(
+            url, {"q": "", "search": "Opice", "replacement": "Orangutan"}, follow=True
+        )
+        self.assertContains(
+            response, "Please review and confirm the search and replace results."
+        )
+        payload = {
+            "q": "",
+            "search": "Opice",
+            "replacement": "Orangutan",
+            "confirm": "1",
+            "units": unit.pk,
+        }
+        response = self.client.post(url, payload, follow=True)
+        unit = self.get_unit("Orangutan")
+        self.assertContains(
+            response, "Search and replace completed, 1 string was updated."
+        )
+        self.assertEqual(
+            unit.get_target_plurals(),
+            [
+                "Orangutan má %d banán.\n",
+                "Orangutan má %d banány.\n",
+                "Orangutan má %d banánů.\n",
+            ],
         )
 
 
@@ -391,11 +526,9 @@ class BulkEditTest(ViewTestCase):
         )
 
     def test_bulk_translation_label(self) -> None:
-        label = self.project.label_set.create(
-            name="Automatically translated", color="black"
-        )
+        label = self.project.label_set.create(name="Test label", color="black")
         unit = self.get_unit()
-        unit.labels.add(label)
+        unit.source_unit.labels.add(label)
         # Clear local outdated cache
         unit.translation.stats.clear()
         self.assertEqual(
@@ -409,7 +542,7 @@ class BulkEditTest(ViewTestCase):
         )
         self.assertContains(response, "Bulk edit completed, 1 string was updated.")
         unit = self.get_unit()
-        self.assertNotIn(label, unit.labels.all())
+        self.assertNotIn(label, unit.source_unit.labels.all())
         # Clear local outdated cache
         unit.translation.stats.clear()
         self.assertEqual(
@@ -455,3 +588,23 @@ class BulkEditTest(ViewTestCase):
         self.assertContains(response, "Bulk edit completed, 4 strings were updated.")
         self.assertEqual(translation.unit_set.filter(state=STATE_READONLY).count(), 0)
         self.assertEqual(translation.unit_set.filter(state=STATE_TRANSLATED).count(), 1)
+
+    def test_bulk_approve_clears_automatically_translated(self) -> None:
+        self.project.translation_review = True
+        self.project.save()
+
+        unit = self.get_unit()
+        unit.automatically_translated = True
+        unit.save()
+        self.assertTrue(self.get_unit().automatically_translated)
+
+        response = self.client.post(
+            reverse("bulk-edit", kwargs={"path": self.project.get_url_path()}),
+            {"q": "state:<translated", "state": STATE_APPROVED},
+            follow=True,
+        )
+        self.assertContains(response, "Bulk edit completed, 1 string was updated.")
+
+        unit = self.get_unit()
+        self.assertEqual(unit.state, STATE_APPROVED)
+        self.assertFalse(unit.automatically_translated)

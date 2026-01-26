@@ -1,18 +1,16 @@
 {% load i18n %}
 
 <div class="form-group">
-  <label>{% trans "Generated strings" %}</label>
+  <label>{% translate "Generated strings" %}</label>
+
+  <p>{% translate "The strings will be generated using following pattern:" %}</p>
 
   <p>
-    {% trans "The strings will be generated using following pattern:" %}
-  </p>
-
-  <p>
-    <span class="badge">{% trans "Fixed string prefix" %}</span>
-    <span class="badge">{% trans "Variable string prefix" %}</span>
-    <span class="badge">{% trans "Source string" %}</span>
-    <span class="badge">{% trans "Variable string suffix" %}</span>
-    <span class="badge">{% trans "Fixed string suffix" %}</span>
+    <span class="badge  text-bg-secondary">{% translate "Prepended static text" %}</span>
+    <span class="badge  text-bg-secondary">{% translate "Prepended variable text" %}</span>
+    <span class="badge  text-bg-secondary">{% translate "Source string" %}</span>
+    <span class="badge  text-bg-secondary">{% translate "Appended variable text" %}</span>
+    <span class="badge  text-bg-secondary">{% translate "Appended static text" %}</span>
   </p>
 
 </div>

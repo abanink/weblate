@@ -4,19 +4,29 @@
 
 """Test for translation views."""
 
+from __future__ import annotations
+
 import time
-from typing import NoReturn
-from unittest import SkipTest
+from typing import TYPE_CHECKING, cast
 
 from django.urls import reverse
 
 from weblate.addons.resx import ResxUpdateAddon
 from weblate.checks.models import Check
-from weblate.trans.models import Change, Component, Unit
+from weblate.trans.actions import ActionEvents
+from weblate.trans.models import Change, Component, Translation, Unit
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.util import join_plural
 from weblate.utils.hash import hash_to_checksum
-from weblate.utils.state import STATE_FUZZY, STATE_TRANSLATED
+from weblate.utils.state import (
+    STATE_FUZZY,
+    STATE_NEEDS_CHECKING,
+    STATE_NEEDS_REWRITING,
+    STATE_TRANSLATED,
+)
+
+if TYPE_CHECKING:
+    from weblate.checks.base import BaseCheck
 
 
 class EditTest(ViewTestCase):
@@ -113,6 +123,29 @@ class EditTest(ViewTestCase):
         unit = self.get_unit(source=self.source)
         self.assertFalse(unit.has_failing_check)
 
+        self.change_unit(self.target, source=self.source, state=STATE_NEEDS_CHECKING)
+        self.edit_unit(self.source, self.target, fuzzy="yes")
+        unit = self.get_unit(source=self.source)
+        self.assertEqual(unit.state, STATE_NEEDS_CHECKING)
+
+        self.change_unit(self.target, source=self.source, state=STATE_NEEDS_REWRITING)
+        self.edit_unit(self.source, self.target, fuzzy="yes")
+        unit = self.get_unit(source=self.source)
+        self.assertEqual(unit.state, STATE_NEEDS_REWRITING)
+
+    def test_fuzzy_with_review(self) -> None:
+        self.project.translation_review = True
+        self.project.save()
+        self.make_manager()
+
+        unit = self.get_unit(source=self.source)
+        self.assertNotEqual(unit.state, STATE_FUZZY)
+        self.change_unit(self.target, source=self.source, state=STATE_NEEDS_CHECKING)
+
+        self.edit_unit(self.source, self.target, review=str(STATE_NEEDS_CHECKING))
+        unit = self.get_unit(source=self.source)
+        self.assertEqual(unit.state, STATE_NEEDS_CHECKING)
+
     def add_unit(self, key, force_source: bool = False):
         if force_source or self.component.has_template():
             args = {"context": key, "source_0": self.new_source_string}
@@ -179,6 +212,158 @@ class EditTest(ViewTestCase):
         # Make sure writing out pending units works
         self.component.commit_pending("test", None)
 
+    def test_edit_new_unit(self) -> None:
+        if (
+            not self.component.has_template()
+            or not self.component.file_format_cls.can_add_unit
+        ):
+            self.skipTest("Not supported")
+
+        test_target = "TEST TRANSLATION"
+
+        def check_translated() -> None:
+            self.assertTrue(
+                Unit.objects.filter(
+                    translation__language__code="cs",
+                    source=self.new_source_string,
+                    target=test_target,
+                    state=STATE_TRANSLATED,
+                ).exists()
+            )
+
+        self.make_manager()
+
+        # Add string
+        self.component.manage_units = True
+        self.component.save()
+        response = self.add_unit("key")
+        self.assertContains(response, "New string has been added")
+
+        # Edit translation
+        self.edit_unit(self.new_source_string, test_target)
+        check_translated()
+
+        # Make sure writing out pending units works
+        self.component.commit_pending("test", None)
+        check_translated()
+
+    def add_plural_unit(self, args=None, language="en"):
+        if args is None:
+            args = {
+                "context": "test-plural",
+                "source_0": "%(count)s test",
+                "source_1": "%(count)s tests",
+            }
+
+        return self.client.post(
+            reverse(
+                "new-unit",
+                kwargs={
+                    "path": [self.component.project.slug, self.component.slug, language]
+                },
+            ),
+            args,
+            follow=True,
+        )
+
+    def test_new_plural_unit(self, args=None, language="en") -> None:
+        """Test the implementation of adding a new plural unit."""
+        response = self.add_plural_unit(args, language)
+        self.assertEqual(response.status_code, 403)
+
+        self.make_manager()
+
+        self.component.manage_units = False
+        self.component.save()
+        response = self.add_plural_unit(args, language)
+        self.assertEqual(response.status_code, 403)
+
+        self.component.manage_units = True
+        self.component.save()
+        response = self.add_plural_unit(args, language)
+        if not self.component.file_format_cls.can_add_unit:
+            self.assertEqual(response.status_code, 403)
+            return
+        if not self.component.file_format_cls.supports_plural:
+            self.assertContains(
+                response, "Plurals are not supported by the file format"
+            )
+            return
+        self.assertContains(response, "New string has been added")
+
+        # Duplicate string
+        response = self.add_plural_unit(args)
+        self.assertContains(response, "This string seems to already exist.")
+
+        self.component.commit_pending("test", None)
+
+    def test_bilingual_new_plural_unit(self) -> None:
+        """Test the implementation of adding a bilingual new plural unit."""
+        if (
+            not self.component.has_template()
+            and self.component.file_format_cls.can_add_unit
+        ):
+            args = {
+                "context": "new-bilingual-plural-unit",
+                "source_0": "%(count)s word",
+                "source_1": "%(count)s words",
+                "target_0": "%(count)s slovo",
+                "target_1": "%(count)s slova",
+                "target_2": "%(count)s slov",
+            }
+
+            self.test_new_plural_unit(args, language="cs")
+        else:
+            self.skipTest("Not supported")
+
+    def test_dismiss_automatically_translated(self) -> None:
+        """Test dismissing automatically translated flag."""
+        unit = self.get_unit(self.source)
+        unit.automatically_translated = True
+        unit.save(update_fields=["automatically_translated"])
+
+        response = self.client.post(
+            reverse("js-dismiss-automatically-translated", kwargs={"unit_id": unit.id})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Type"], "application/json")
+
+        unit = self.get_unit(self.source)
+        self.assertFalse(unit.automatically_translated)
+
+    def test_dismiss_automatically_translated_no_permission(self) -> None:
+        """Test dismissing automatically translated without permission."""
+        unit = self.get_unit(self.source)
+        unit.automatically_translated = True
+        unit.save(update_fields=["automatically_translated"])
+
+        # Remove edit permission
+        self.user.groups.clear()
+
+        response = self.client.post(
+            reverse("js-dismiss-automatically-translated", kwargs={"unit_id": unit.id})
+        )
+        self.assertEqual(response.status_code, 403)
+
+        unit = self.get_unit(self.source)
+        self.assertTrue(unit.automatically_translated)
+
+    def test_dismiss_automatically_translated_not_authenticated(self) -> None:
+        """Test dismissing automatically translated without authentication."""
+        unit = self.get_unit(self.source)
+        unit.automatically_translated = True
+        unit.save(update_fields=["automatically_translated"])
+
+        self.client.logout()
+
+        response = self.client.post(
+            reverse("js-dismiss-automatically-translated", kwargs={"unit_id": unit.id})
+        )
+        self.assertEqual(response.status_code, 302)
+
+        unit = self.get_unit(self.source)
+        self.assertTrue(unit.automatically_translated)
+
 
 class EditValidationTest(ViewTestCase):
     def edit(self, **kwargs):
@@ -204,11 +389,11 @@ class EditValidationTest(ViewTestCase):
         """Merging with invalid parameter."""
         unit = self.get_unit()
         response = self.client.post(
-            unit.translation.get_translate_url() + "?checksum=" + unit.checksum,
+            f"{unit.translation.get_translate_url()}?checksum={unit.checksum}",
             {"merge": "invalid"},
             follow=True,
         )
-        self.assertContains(response, "Invalid merge request!")
+        self.assertContains(response, "Enter a whole number.")
 
     def test_merge_lang(self) -> None:
         """Merging across languages."""
@@ -216,11 +401,11 @@ class EditValidationTest(ViewTestCase):
         trans = self.component.translation_set.exclude(language_code="cs")[0]
         other = trans.unit_set.get(source=unit.source, context=unit.context)
         response = self.client.post(
-            unit.translation.get_translate_url() + "?checksum=" + unit.checksum,
+            f"{unit.translation.get_translate_url()}?checksum={unit.checksum}",
             {"merge": other.pk},
             follow=True,
         )
-        self.assertContains(response, "Invalid merge request!")
+        self.assertContains(response, "Could not find the merged string.")
 
     def test_revert(self) -> None:
         unit = self.get_unit()
@@ -230,14 +415,14 @@ class EditValidationTest(ViewTestCase):
             {"checksum": unit.checksum, "revert": "invalid"},
             follow=True,
         )
-        self.assertContains(response, "Invalid revert request!")
+        self.assertContains(response, "Enter a whole number.")
         # Try the merge
         response = self.client.get(
             unit.translation.get_translate_url(),
             {"checksum": unit.checksum, "revert": -1},
             follow=True,
         )
-        self.assertContains(response, "Invalid revert request!")
+        self.assertContains(response, "Could not find the reverted change.")
 
 
 class EditResourceTest(EditTest):
@@ -255,12 +440,12 @@ class EditResourceTest(EditTest):
         # Add new string
         response = self.add_unit("key")
         self.assertContains(response, "New string has been added")
-        self.assertEqual(Unit.objects.filter(pending=True).count(), 1)
+        self.assertEqual(Unit.objects.filter(pending_changes__isnull=False).count(), 1)
         self.assertEqual(Unit.objects.filter(context="key").count(), 2)
 
         # Edit unit
         self.edit_unit(source=self.new_source_string, target="Překlad")
-        self.assertEqual(Unit.objects.filter(pending=True).count(), 2)
+        self.assertEqual(Unit.objects.filter(pending_changes__isnull=False).count(), 2)
 
         # Commit to the file
         if commit_translation:
@@ -268,12 +453,12 @@ class EditResourceTest(EditTest):
             translation.commit_pending("test", None)
         else:
             self.component.commit_pending("test", None)
-        self.assertEqual(Unit.objects.filter(pending=True).count(), 0)
+        self.assertEqual(Unit.objects.filter(pending_changes__isnull=False).count(), 0)
         self.assertEqual(Unit.objects.filter(context="key").count(), 2)
         self.assertEqual(
             Unit.objects.filter(context="key", state=STATE_TRANSLATED).count(), 2
         )
-        self.component.create_translations(force=True)
+        self.component.create_translations_immediate(force=True)
         self.assertEqual(
             Unit.objects.filter(context="key", state=STATE_TRANSLATED).count(), 2
         )
@@ -303,6 +488,7 @@ class EditLanguageTest(EditTest):
             kwargs={"path": [self.project.slug, "-", "cs"]},
         )
 
+    # pylint: disable=arguments-differ
     def edit_unit(self, source, target, language="cs", **kwargs):
         """Do edit single unit using web interface."""
         unit = self.get_unit(source, language)
@@ -349,7 +535,7 @@ class EditResourceSourceTest(ViewTestCase):
         self.edit_unit("Hello, world!\n", "Hello, universe!\n", "en")
 
         unit = translation.unit_set.get(context="hello")
-        self.assertEqual(unit.state, STATE_FUZZY)
+        self.assertEqual(unit.state, STATE_NEEDS_REWRITING)
 
         # Revert source
         self.edit_unit("Hello, universe!\n", "Hello, world!\n", "en")
@@ -371,12 +557,12 @@ class EditResourceSourceTest(ViewTestCase):
         # Change state and source
         self.edit_unit("Hello, world!\n", "Hello, universe!\n", "en", fuzzy="yes")
         unit = translation.unit_set.get(context="hello")
-        self.assertEqual(unit.state, STATE_FUZZY)
+        self.assertEqual(unit.state, STATE_NEEDS_REWRITING)
 
         # Change state and source
         self.edit_unit("Hello, universe!\n", "Hello, universe!\n", "en")
         unit = translation.unit_set.get(context="hello")
-        self.assertEqual(unit.state, STATE_FUZZY)
+        self.assertEqual(unit.state, STATE_NEEDS_REWRITING)
 
         # Revert source
         self.edit_unit("Hello, universe!\n", "Hello, world!\n", "en")
@@ -421,9 +607,11 @@ class EditPoMonoTest(EditTest):
         self.assertEqual(response.status_code, 403)
         # Actual removal
         response = self.client.post(
-            reverse("delete-unit", kwargs={"unit_id": unit.source_unit.pk})
+            reverse("delete-unit", kwargs={"unit_id": unit.source_unit.pk}),
+            data={"next": f"{self.translate_url}?offset=3"},
         )
         self.assertEqual(response.status_code, 302)
+        self.assert_redirects_offset(response, self.translate_url, 3)
         component = Component.objects.get(pk=self.component.pk)
         self.assertEqual(component.stats.all, 12)
         self.assertEqual(unit_count - 4, Unit.objects.count())
@@ -434,11 +622,6 @@ class EditIphoneTest(EditTest):
 
     def create_component(self):
         return self.create_iphone()
-
-    def test_new_unit(self) -> NoReturn:
-        # Most likely the test is wrong here it is using monolingual format as bilingual
-        # and duplicates source into context
-        raise SkipTest("Not supported")
 
 
 class EditJSONTest(EditTest):
@@ -456,8 +639,6 @@ class EditJoomlaTest(EditTest):
 
 
 class EditRubyYAMLTest(EditTest):
-    has_plurals = False
-
     def create_component(self):
         return self.create_ruby_yaml()
 
@@ -467,10 +648,6 @@ class EditDTDTest(EditTest):
 
     def create_component(self):
         return self.create_dtd()
-
-    def test_new_unit(self) -> NoReturn:
-        # Most likely there is a bug in the format and adding is broken
-        raise SkipTest("Not supported")
 
 
 class EditJSONMonoTest(EditTest):
@@ -533,11 +710,6 @@ class EditXliffComplexTest(EditTest):
         self.edit_unit("Hello, world!\n", "Nazdar & svete!\n")
         self.assert_backend(1)
 
-    def test_new_unit(self) -> NoReturn:
-        # The group handling is broken, see
-        # https://github.com/translate/translate/issues/4186
-        raise SkipTest("Not supported")
-
 
 class EditXliffResnameTest(EditTest):
     has_plurals = False
@@ -561,15 +733,102 @@ class EditXliffMonoTest(EditTest):
     def create_component(self):
         return self.create_xliff_mono()
 
-    def test_new_unit(self) -> NoReturn:
-        # The group handling is broken, see
-        # https://github.com/translate/translate/issues/4186
-        raise SkipTest("Not supported")
-
 
 class EditLinkTest(EditTest):
     def create_component(self):
         return self.create_link()
+
+
+class EditPropagateTest(EditTest):
+    def create_component(self):
+        result = super().create_component()
+        self._create_component(
+            "po", "second-po/*.po", name="Second", project=result.project
+        )
+        return result
+
+    def test_edit(self) -> None:
+        def get_targets() -> list[str]:
+            return list(
+                Unit.objects.filter(
+                    source=self.source, translation__language_code="cs"
+                ).values_list("target", flat=True)
+            )
+
+        # String should not be translated now
+        self.assertEqual(get_targets(), ["", ""])
+
+        super().test_edit()
+
+        # Verify that propagation worked well
+        self.assertEqual(get_targets(), [self.second_target, self.second_target])
+
+        second_translation = Translation.objects.get(
+            component__slug="second", language_code="cs"
+        )
+
+        # Verify second component backend
+        self.assert_backend(1, translation=second_translation)
+
+        # Force rescan
+        components = Component.objects.all()
+        for component in components:
+            component.do_file_scan()
+
+        # Verify that propagated units survived scan
+        self.assertEqual(get_targets(), [self.second_target, self.second_target])
+
+        # Verify that changes were properly generated
+        for unit in Unit.objects.filter(
+            source=self.source, translation__language_code="cs"
+        ):
+            self.assertEqual(
+                unit.change_set.filter(action=ActionEvents.NEW_UNIT_REPO).count(),
+                1,
+            )
+            self.assertEqual(
+                unit.change_set.filter(action=ActionEvents.STRING_REPO_UPDATE).count(),
+                0,
+            )
+            if unit.translation.component.slug == "second":
+                self.assertEqual(
+                    unit.change_set.filter(action=ActionEvents.PROPAGATED_EDIT).count(),
+                    2,
+                )
+            else:
+                self.assertEqual(
+                    unit.change_set.filter(action=ActionEvents.NEW).count(), 1
+                )
+                self.assertEqual(
+                    unit.change_set.filter(action=ActionEvents.CHANGE).count(),
+                    1,
+                )
+
+        # Bring strins out of sync
+        unit = self.get_unit()
+        test_edit = "Test edit\n"
+        unit.translate(
+            None,
+            test_edit,
+            STATE_TRANSLATED,
+            change_action=ActionEvents.AUTO,
+            propagate=False,
+        )
+        self.assertEqual(set(get_targets()), {self.second_target, test_edit})
+        self.assertEqual(
+            {"inconsistent"}, set(unit.check_set.values_list("name", flat=True))
+        )
+
+        # Resync them
+        unit.translate(
+            None,
+            self.second_target,
+            STATE_TRANSLATED,
+            change_action=ActionEvents.AUTO,
+            propagate=False,
+        )
+        self.assertEqual(set(get_targets()), {self.second_target})
+        self.assertEqual(set(), set(unit.check_set.values_list("name", flat=True)))
 
 
 class EditTSTest(EditTest):
@@ -597,7 +856,7 @@ class ZenViewTest(ViewTestCase):
             {"q": "has:nonexisting"},
             follow=True,
         )
-        self.assertContains(response, "Unsupported has lookup")
+        self.assertContains(response, "Unsupported lookup for has: nonexisting")
 
     def test_load_zen(self) -> None:
         response = self.client.get(reverse("load_zen", kwargs=self.kw_translation))
@@ -673,13 +932,43 @@ class EditComplexTest(ViewTestCase):
         self.translation = self.get_translation()
         self.translate_url = reverse("translate", kwargs=self.kw_translation)
 
+    def test_add_duplicate_plural(self) -> None:
+        self.component.manage_units = True
+        self.component.save()
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.post(
+            reverse("new-unit", kwargs=self.kw_translation),
+            {
+                "source_0": "Hello, world!\n",
+                "source_1": "Hello, worlds!\n",
+                "target_0": "Ahoj světe!\n",
+                "target_1": "Ahoj světy!\n",
+                "target_2": "Ahoj světy!\n",
+            },
+            follow=True,
+        )
+        self.assertContains(response, "This string seems to already exist.")
+        response = self.client.post(
+            reverse("new-unit", kwargs=self.kw_translation),
+            {
+                "source_0": "Hello, %d world!\n",
+                "source_1": "Hello, %d worlds!\n",
+                "target_0": "Ahoj %d světe!\n",
+                "target_1": "Ahoj %d světy!\n",
+                "target_2": "Ahoj %d světy!\n",
+            },
+            follow=True,
+        )
+        self.assertNotContains(response, "This string seems to already exist.")
+
     def test_merge(self) -> None:
         # Translate unit to have something to start with
         response = self.edit_unit("Hello, world!\n", "Nazdar svete!\n")
         unit = self.get_unit()
         # Try the merge
         response = self.client.post(
-            self.translate_url + "?checksum=" + unit.checksum, {"merge": unit.id}
+            f"{self.translate_url}?checksum={unit.checksum}", {"merge": unit.id}
         )
         self.assert_backend(1)
         # We should stay on same message
@@ -688,9 +977,9 @@ class EditComplexTest(ViewTestCase):
         # Test error handling
         unit2 = self.translation.unit_set.get(source="Thank you for using Weblate.")
         response = self.client.post(
-            self.translate_url + "?checksum=" + unit.checksum, {"merge": unit2.id}
+            f"{self.translate_url}?checksum={unit.checksum}", {"merge": unit2.id}
         )
-        self.assertContains(response, "Invalid merge request!")
+        self.assertContains(response, "Could not find the merged string.")
 
     def test_merge_inconsistent(self) -> None:
         # Translate unit to have something to start with
@@ -708,7 +997,7 @@ class EditComplexTest(ViewTestCase):
         unit = self.get_unit()
         self.assertEqual(unit.all_checks_names, {"inconsistent"})
         self.client.post(
-            self.translate_url + "?checksum=" + unit.checksum, {"merge": unit.id}
+            f"{self.translate_url}?checksum={unit.checksum}", {"merge": unit.id}
         )
         self.assertEqual(
             set(units.values_list("target", flat=True)), {"Nazdar svete!\n"}
@@ -764,7 +1053,7 @@ class EditComplexTest(ViewTestCase):
         response = self.client.get(
             self.translate_url, {"checksum": unit.checksum, "revert": change.id}
         )
-        self.assertContains(response, "Invalid revert request!")
+        self.assertContains(response, "Could not find the reverted change.")
         self.assert_backend(2)
 
     def test_revert_plural(self) -> None:
@@ -836,7 +1125,9 @@ class EditComplexTest(ViewTestCase):
         self.assertEqual(unit.translation.stats.allchecks, 0)
 
         # Ignore check for all languages
-        ignore_flag = Check.objects.get(pk=int(check_id)).check_obj.ignore_string
+        check_obj = Check.objects.get(pk=int(check_id)).check_obj
+        self.assertIsNotNone(check_obj)
+        ignore_flag = cast("BaseCheck", check_obj).ignore_string
         ignore_url = reverse("js-ignore-check-source", kwargs={"check_id": check_id})
         response = self.client.post(ignore_url)
         self.assertEqual(response.status_code, 403)
@@ -881,11 +1172,41 @@ class EditComplexTest(ViewTestCase):
         self.assert_redirects_offset(response, self.translate_url, 1)
         unit = self.get_unit()
         self.assertEqual(unit.target, "Hello, world!\n")
-        self.assertEqual(unit.state, STATE_FUZZY)
+        self.assertEqual(unit.state, STATE_NEEDS_REWRITING)
         self.assertTrue(unit.has_failing_check)
         self.assertEqual(len(unit.all_checks), 1)
         self.assertEqual(len(unit.active_checks), 1)
         self.assertEqual(unit.translation.stats.allchecks, 1)
+        # There should be a change for enforced check
+        self.assertTrue(
+            unit.change_set.filter(action=ActionEvents.ENFORCED_CHECK).exists()
+        )
+        # The pending change should be only fuzzy
+        pending_changes = unit.pending_changes.all()
+        self.assertEqual(len(pending_changes), 1)
+        self.assertEqual(pending_changes[0].state, STATE_NEEDS_REWRITING)
+
+    def test_enforced_check_noop(self) -> None:
+        # Update unit object to match edits in test_enforced_check
+        unit = self.get_unit()
+        unit.state = STATE_TRANSLATED
+        unit.target = "Hello, world!\n"
+        unit.save_backend(None)
+        unit.pending_changes.all().delete()
+
+        # Enforce same check, the unit should become fuzzy with pending change
+        self.component.enforced_checks = ["same"]
+        self.component.save(update_fields=["enforced_checks"])
+        self.assertEqual(unit.pending_changes.count(), 1)
+        unit = self.get_unit()
+        self.assertEqual(unit.state, STATE_NEEDS_REWRITING)
+
+        # Remove pending units and make the string in the database translated
+        unit.pending_changes.all().delete()
+        Unit.objects.filter(pk=unit.pk).update(state=STATE_TRANSLATED)
+
+        # Now test the actual no-op edit
+        self.test_enforced_check()
 
     def test_commit_push(self) -> None:
         response = self.edit_unit("Hello, world!\n", "Nazdar svete!\n")
@@ -949,7 +1270,7 @@ class EditComplexTest(ViewTestCase):
         form = response.context["form"]
         params = {field: form[field].value() for field in form.fields}
         params["target_0"] = "Nazdar svete!\n"
-        response = self.client.post(url, params)
+        self.client.post(url, params)
         unit = self.get_unit()
         self.assertEqual(unit.target, "Nazdar svete!\n")
         self.assertEqual(unit.state, STATE_TRANSLATED)
@@ -980,6 +1301,47 @@ class EditComplexTest(ViewTestCase):
         self.assertFalse(Unit.objects.filter(pk=source_unit.pk).exists())
         self.assertEqual(unit_count - 4, Unit.objects.count())
 
+    def test_remove_source_unit(self) -> None:
+        self.component.manage_units = True
+        self.component.save()
+        self.user.is_superuser = True
+        self.user.save()
+
+        unit_count = Unit.objects.count()
+        unit = self.get_unit()
+        source_unit = unit.source_unit
+
+        response = self.client.post(
+            reverse("delete-unit", kwargs={"unit_id": source_unit.pk})
+        )
+        self.assertEqual(response.status_code, 302)
+
+        # The source unit should be now removed as well
+        self.assertFalse(Unit.objects.filter(pk=source_unit.pk).exists())
+        self.assertEqual(unit_count - 4, Unit.objects.count())
+
+        # Verify that reparsing will not bring the unit back
+        self.component.create_translations_immediate(force=True)
+        self.assertFalse(Unit.objects.filter(pk=source_unit.pk).exists())
+        self.assertEqual(unit_count - 4, Unit.objects.count())
+
+    def test_edit_checks(self) -> None:
+        source = "Thank you for using Weblate."
+        self.change_unit(
+            target="Díky za použití Weblate",
+            source=source,
+            user=self.anotheruser,
+        )
+        self.change_unit(
+            target="Díky za použití Weblate.",
+            source=source,
+            user=self.user,
+        )
+        unit = self.get_unit(source=source)
+        self.assertEqual(set(unit.check_set.values_list("name", flat=True)), set())
+        self.component.commit_pending("test", None)
+        self.assertEqual(set(unit.check_set.values_list("name", flat=True)), set())
+
 
 class EditSourceTest(ViewTestCase):
     def create_component(self):
@@ -1007,7 +1369,7 @@ class EditSourceTest(ViewTestCase):
         )
 
         # Check sync should be no-op now
-        self.component.create_translations()
+        self.component.create_translations_immediate()
 
         # Check that translation was preserved
         self.assertEqual(

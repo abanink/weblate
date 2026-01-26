@@ -2,13 +2,20 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from django.core.management.base import CommandError
 
 from weblate.auth.models import User
 from weblate.machinery.models import MACHINERY
-from weblate.trans.management.commands import WeblateTranslationCommand
+from weblate.trans.autotranslate import AutoTranslate
 from weblate.trans.models import Component
-from weblate.trans.tasks import auto_translate
+from weblate.utils.management.base import WeblateTranslationCommand
+
+if TYPE_CHECKING:
+    from django.core.management.base import CommandParser
 
 
 class Command(WeblateTranslationCommand):
@@ -16,7 +23,7 @@ class Command(WeblateTranslationCommand):
 
     help = "performs automatic translation based on other components"
 
-    def add_arguments(self, parser) -> None:
+    def add_arguments(self, parser: CommandParser) -> None:
         super().add_arguments(parser)
         parser.add_argument(
             "--user", default="anonymous", help=("User performing the change")
@@ -64,43 +71,47 @@ class Command(WeblateTranslationCommand):
         # Get user
         try:
             user = User.objects.get(username=options["user"])
-        except User.DoesNotExist:
-            raise CommandError("User does not exist!")
+        except User.DoesNotExist as error:
+            msg = "User does not exist!"
+            raise CommandError(msg) from error
 
         source = None
         if options["source"]:
             try:
                 component = Component.objects.get_by_path(options["source"])
-            except Component.DoesNotExist:
-                raise CommandError("No matching source component found!")
+            except Component.DoesNotExist as error:
+                msg = "No matching source component found!"
+                raise CommandError(msg) from error
             source = component.id
 
         if options["mt"]:
             for translator in options["mt"]:
                 if translator not in MACHINERY:
-                    raise CommandError(
-                        f"Machine translation {translator} is not available"
-                    )
+                    msg = f"Machine translation {translator} is not available"
+                    raise CommandError(msg)
 
         if options["mode"] not in {"translate", "fuzzy", "suggest"}:
-            raise CommandError("Invalid translation mode specified!")
+            msg = "Invalid translation mode specified!"
+            raise CommandError(msg)
 
         if options["inconsistent"]:
-            filter_type = "check:inconsistent"
+            q = "check:inconsistent"
         elif options["overwrite"]:
-            filter_type = "all"
+            q = ""
         else:
-            filter_type = "todo"
+            q = "state:<translated"
 
-        result = auto_translate(
-            user.id,
-            translation.id,
-            options["mode"],
-            filter_type,
-            "mt" if options["mt"] else "others",
-            source,
-            options["mt"],
-            options["threshold"],
+        auto = AutoTranslate(
+            user=user,
             translation=translation,
+            mode=options["mode"],
+            q=q,
         )
-        self.stdout.write(result["message"])
+
+        message = auto.perform(
+            auto_source="mt" if options["mt"] else "others",
+            source=source,
+            engines=options["mt"],
+            threshold=options["threshold"],
+        )
+        self.stdout.write(message)

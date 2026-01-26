@@ -10,11 +10,11 @@ Weblate comes with a built-in translation memory consisting of:
 * Automatically stored translations performed in Weblate (depending on :ref:`memory-scopes`).
 * Automatically imported past translations.
 
-Content in the translation memory can be applied one of two ways:
+Content in the translation memory can be applied to strings in several ways:
 
-* Manually: in the :ref:`machine-translation` view while translating.
-* Automatically: by translating strings using :ref:`auto-translation`, or
-  the :ref:`addon-weblate.autotranslate.autotranslate` add-on.
+* User can accept suggestions from the :ref:`machine-translation` tab while editing the string.
+* The selected strings can be processed using :ref:`auto-translation` from the :guilabel:`Operations` menu.
+* :ref:`addon-weblate.autotranslate.autotranslate` add-on can automatically apply changes to new and existing strings.
 
 For installation tips, see :ref:`mt-weblate-translation-memory`, which is
 turned on by default.
@@ -62,7 +62,34 @@ installations, as it can have severe implications:
 
 .. seealso::
 
-   :ref:`project-contribute_shared_tm`, :ref:`project-use_shared_tm`
+   * :ref:`project-contribute_shared_tm`
+   * :ref:`project-use_shared_tm`
+
+.. _memory-status:
+
+Translation memory status
+-------------------------
+
+.. versionadded:: 5.13
+
+Translation memory entries can have two different statuses: **active** and **pending**.
+Pending entries are included in suggestions, but with a quality penalty applied.
+If :ref:`autoclean-tm` is enabled, stale and obsolete entries with pending status are automatically removed when a translation is approved.
+
+.. _autoclean-tm:
+
+Autoclean translation memory
+-----------------------------
+
+.. versionadded:: 5.13
+
+The translation memory is automatically cleaned up by removing obsolete and outdated entries.
+
+In the Docker container this can be configured using :envvar:`WEBLATE_DEFAULT_AUTOCLEAN_TM`.
+
+.. seealso::
+
+   :ref:`project-autoclean_tm`
 
 Managing the Translation Memory
 -------------------------------
@@ -85,9 +112,8 @@ memories. It can be used to download, wipe or import translation memory.
 There are multiple options to download the translation memory of the whole instance.
 
 .. hint::
-
-    Translation memories in JSON can be imported into Weblate, the TMX format
-    is provided for interoperability with other tools.
+    Translation memories in various formats can be imported into Weblate, the TMX format
+    is provided for interoperability with other tools. All supported formats are TMX, JSON, XLIFF, PO, CSV.
 
 .. seealso::
 
@@ -121,6 +147,8 @@ These operate on the translation memory as a whole, unfiltered by scopes
     Exports the memory into JSON
 :wladmin:`import_memory`
     Imports TMX or JSON files into the translation memory
+:wladmin:`cleanup_memory`
+    Removes all entries with pending status from the translation memory
 
 .. versionadded:: 4.14
 

@@ -45,28 +45,36 @@ class Font(models.Model, UserDisplayMixin):
     )
 
     class Meta:
-        unique_together = [("family", "style", "project")]
+        unique_together = [  # noqa: RUF012
+            ("family", "style", "project")
+        ]
         verbose_name = "Font"
         verbose_name_plural = "Fonts"
 
     def __str__(self) -> str:
         return f"{self.family} {self.style}"
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.field_errors: dict[str, list[ValidationError]] = {}
+
+    # pylint: disable-next=arguments-differ
     def save(
         self, force_insert=False, force_update=False, using=None, update_fields=None
     ) -> None:
         from weblate.fonts.tasks import update_fonts_cache
 
         self.clean()
-        super().save(force_insert, force_update, using, update_fields)
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=update_fields,
+        )
         update_fonts_cache.delay()
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("font", kwargs={"pk": self.pk, "project": self.project.slug})
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.field_errors = {}
 
     def clean_fields(self, exclude=None) -> None:
         self.field_errors = {}
@@ -78,7 +86,7 @@ class Font(models.Model, UserDisplayMixin):
 
     def clean(self) -> None:
         # Try to parse file only if it passed validation
-        if "font" not in self.field_errors and not self.family:
+        if self.font and "font" not in self.field_errors and not self.family:
             self.family, self.style = get_font_name(self.font)
 
     def get_usage(self):
@@ -117,14 +125,16 @@ class FontGroup(models.Model):
     objects = FontGroupQuerySet.as_manager()
 
     class Meta:
-        unique_together = [("project", "name")]
+        unique_together = [  # noqa: RUF012
+            ("project", "name")
+        ]
         verbose_name = "Font group"
         verbose_name_plural = "Font groups"
 
     def __str__(self) -> str:
         return self.name
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse(
             "font_group", kwargs={"pk": self.pk, "project": self.project.slug}
         )
@@ -144,7 +154,9 @@ class FontOverride(models.Model):
     )
 
     class Meta:
-        unique_together = [("group", "language")]
+        unique_together = [  # noqa: RUF012
+            ("group", "language")
+        ]
         verbose_name = "Font override"
         verbose_name_plural = "Font overrides"
 

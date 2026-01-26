@@ -6,14 +6,26 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from re import Pattern
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from django.utils.functional import SimpleLazyObject
-from django.utils.html import format_html_join
+from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext, gettext_lazy
 
 from weblate.checks.base import SourceCheck, TargetCheck
+from weblate.utils.html import format_html_join_comma, list_to_tuples
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
+    from django_stubs_ext import StrOrPromise
+
+    from weblate.checks.base import MissingExtraDict
+    from weblate.trans.models import Unit
+
+    from .models import Check
+
 
 PYTHON_PRINTF_MATCH = re.compile(
     r"""
@@ -98,6 +110,8 @@ PASCAL_FORMAT_MATCH = re.compile(
 
 PYTHON_BRACE_MATCH = re.compile(
     r"""
+    }(})|                                 # escaped {
+    {({)|                                 # escaped }
     {(                                  # initial {
         |                               # blank for position based
         (?P<field>
@@ -161,7 +175,7 @@ JAVA_MATCH = re.compile(
         (?:\d+)?                       # width
         (?:\.\d+)?                     # precision
         (?P<type>
-            ((?<![tT])[tT][A-Za-z]|[A-Za-z])) # type (%s, %d, %td, etc.)
+            ((?<![tT])[tT][A-Za-z]|[A-Za-z])|%) # type (%s, %d, %td, etc.)
        )
     )
     """,
@@ -223,56 +237,136 @@ VUE_MATCH = re.compile(
 
 WHITESPACE = re.compile(r"\s+")
 
+# See https://github.com/Automattic/wp-calypso/blob/899d4cba090893f5a62012a08a6d0a4e8d028d98/packages/interpolate-components/src/tokenize.js#L30
+AUTOMATTIC_COMPONENTS_MATCH = re.compile(r"(\{\{/?\s*\w+\s*/?}})")
+LARAVEL_MATCH = re.compile(r"(:[A-Za-z][A-Za-z0-9_]*)")
 
-def c_format_is_position_based(string):
+
+def c_format_is_position_based(string: str):
     return "$" not in string and string != "%"
 
 
-def pascal_format_is_position_based(string):
+def pascal_format_is_position_based(string: str):
     return ":" not in string and string != "%"
 
 
-def scheme_format_is_position_based(string):
+def scheme_format_is_position_based(string: str):
     return "@*" not in string and string != "~"
 
 
-def python_format_is_position_based(string):
-    return "(" not in string and string != "%"
+def python_format_is_position_based(string: str):
+    return "(" not in string and string not in {"{", "}"}
 
 
-def name_format_is_position_based(string) -> bool:  # noqa: FURB118
+def name_format_is_position_based(string: str) -> bool:  # noqa: FURB118
     return not string
 
 
-FLAG_RULES = {
-    "python-format": (PYTHON_PRINTF_MATCH, python_format_is_position_based),
-    "php-format": (PHP_PRINTF_MATCH, c_format_is_position_based),
-    "c-format": (C_PRINTF_MATCH, c_format_is_position_based),
-    "object-pascal-format": (PASCAL_FORMAT_MATCH, pascal_format_is_position_based),
-    "perl-format": (C_PRINTF_MATCH, c_format_is_position_based),
-    "perl-brace-format": (PERL_BRACE_MATCH, name_format_is_position_based),
-    "javascript-format": (C_PRINTF_MATCH, c_format_is_position_based),
-    "lua-format": (C_PRINTF_MATCH, c_format_is_position_based),
-    "python-brace-format": (PYTHON_BRACE_MATCH, name_format_is_position_based),
-    "scheme-format": (SCHEME_PRINTF_MATCH, scheme_format_is_position_based),
-    "c-sharp-format": (C_SHARP_MATCH, name_format_is_position_based),
-    "java-printf-format": (JAVA_MATCH, c_format_is_position_based),
+def format_not_position_based(string: str) -> bool:
+    return False
+
+
+def extract_string_simple(match: re.Match) -> str:
+    return match.group(1)
+
+
+def extract_string_python_brace(match: re.Match) -> str:
+    # 1 and 2 are escaped braces and 3 is the actual match of format string
+    return match.group(1) or match.group(2) or match.group(3)
+
+
+FLAG_RULES: dict[
+    str,
+    tuple[
+        re.Pattern,
+        Callable[[str], bool],
+        Callable[[re.Match], str],
+    ],
+] = {
+    "python-format": (
+        PYTHON_PRINTF_MATCH,
+        python_format_is_position_based,
+        extract_string_simple,
+    ),
+    "php-format": (
+        PHP_PRINTF_MATCH,
+        c_format_is_position_based,
+        extract_string_simple,
+    ),
+    "c-format": (
+        C_PRINTF_MATCH,
+        c_format_is_position_based,
+        extract_string_simple,
+    ),
+    "object-pascal-format": (
+        PASCAL_FORMAT_MATCH,
+        pascal_format_is_position_based,
+        extract_string_simple,
+    ),
+    "perl-format": (C_PRINTF_MATCH, c_format_is_position_based, extract_string_simple),
+    "perl-brace-format": (
+        PERL_BRACE_MATCH,
+        name_format_is_position_based,
+        extract_string_simple,
+    ),
+    "javascript-format": (
+        C_PRINTF_MATCH,
+        c_format_is_position_based,
+        extract_string_simple,
+    ),
+    "lua-format": (
+        C_PRINTF_MATCH,
+        c_format_is_position_based,
+        extract_string_simple,
+    ),
+    "python-brace-format": (
+        PYTHON_BRACE_MATCH,
+        name_format_is_position_based,
+        extract_string_python_brace,
+    ),
+    "scheme-format": (
+        SCHEME_PRINTF_MATCH,
+        scheme_format_is_position_based,
+        extract_string_simple,
+    ),
+    "c-sharp-format": (
+        C_SHARP_MATCH,
+        name_format_is_position_based,
+        extract_string_simple,
+    ),
+    "java-printf-format": (
+        JAVA_MATCH,
+        c_format_is_position_based,
+        extract_string_simple,
+    ),
+    "automattic-components-format": (
+        AUTOMATTIC_COMPONENTS_MATCH,
+        format_not_position_based,
+        extract_string_simple,
+    ),
+    "laravel-format": (
+        LARAVEL_MATCH,
+        name_format_is_position_based,
+        extract_string_simple,
+    ),
 }
 
 
 class BaseFormatCheck(TargetCheck):
     """Base class for format string checks."""
 
-    regexp: Pattern[str]
-    plural_parameter_regexp: Pattern[str] | None = None
+    regexp: re.Pattern[str] | None = None
+    plural_parameter_regexp: re.Pattern[str] | None = None
     default_disabled = True
-    normalize_remove: str | None = None
+    normalize_remove: ClassVar[set[str]] = set()
 
-    def check_target_unit(self, sources, targets, unit):
+    def check_target_unit(self, sources: list[str], targets: list[str], unit: Unit):
         """Check single unit, handling plurals."""
         return any(self.check_generator(sources, targets, unit))
 
-    def check_generator(self, sources, targets, unit):
+    def check_generator(
+        self, sources: list[str], targets: list[str], unit: Unit
+    ) -> Iterable[Literal[False] | MissingExtraDict]:
         # Special case languages with single plural form
         if len(sources) > 1 and len(targets) == 1:
             yield self.check_format(sources[1], targets[0], False, unit)
@@ -281,7 +375,6 @@ class BaseFormatCheck(TargetCheck):
         # Use plural as source in case singular misses format string and plural has it
         if (
             len(sources) > 1
-            and self.regexp
             and not self.extract_matches(sources[0])
             and self.extract_matches(sources[1])
         ):
@@ -322,21 +415,28 @@ class BaseFormatCheck(TargetCheck):
                 sources[1], target, len(plural_examples[i + 1]) == 1, unit
             )
 
-    def format_string(self, string):
-        return string
-
     def cleanup_string(self, text):
         return text
 
     def normalize(self, matches: list[str]) -> list[str]:
-        if self.normalize_remove is None:
+        if not self.normalize_remove:
             return matches
-        return [m for m in matches if m != self.normalize_remove]
+        return [m for m in matches if m not in self.normalize_remove]
+
+    def extract_string(self, match: re.Match) -> str:
+        return extract_string_simple(match)
 
     def extract_matches(self, string: str) -> list[str]:
-        return [self.cleanup_string(x[0]) for x in self.regexp.findall(string)]
+        if self.regexp is None:
+            return []
+        return [
+            self.cleanup_string(self.extract_string(match))
+            for match in self.regexp.finditer(string)
+        ]
 
-    def check_format(self, source, target, ignore_missing, unit):
+    def check_format(
+        self, source: str, target: str, ignore_missing: bool, unit: Unit
+    ) -> Literal[False] | MissingExtraDict:
         """Check for format strings."""
         if not target or not source:
             return False
@@ -374,21 +474,23 @@ class BaseFormatCheck(TargetCheck):
             return {"missing": missing, "extra": extra}
         return False
 
-    def is_position_based(self, string) -> bool:
+    def is_position_based(self, string: str) -> bool:
         return False
 
-    def check_single(self, source, target, unit) -> bool:
+    def check_single(self, source: str, target: str, unit: Unit) -> bool:
         """Target strings are checked in check_target_unit."""
         return False
 
-    def check_highlight(self, source, unit):
+    def check_highlight(self, source: str, unit: Unit):
         if self.should_skip(unit):
+            return
+        if self.regexp is None:
             return
         match_objects = self.regexp.finditer(source)
         for match in match_objects:
-            yield (match.start(), match.end(), match.group())
+            yield match.start(), match.end(), match.group()
 
-    def format_result(self, result):
+    def format_result(self, result: MissingExtraDict) -> Iterable[StrOrPromise]:
         if (
             result["missing"]
             and all(self.is_position_based(flag) for flag in result["missing"])
@@ -396,26 +498,24 @@ class BaseFormatCheck(TargetCheck):
         ):
             yield gettext(
                 "The following format strings are in the wrong order: %s"
-            ) % ", ".join(self.format_string(x) for x in sorted(set(result["missing"])))
+            ) % format_html_join_comma(
+                "{}",
+                list_to_tuples(
+                    self.format_string(x) for x in sorted(set(result["missing"]))
+                ),
+            )
         else:
-            if result["missing"]:
-                yield self.get_missing_text(
-                    self.format_string(x) for x in set(result["missing"])
-                )
-            if result["extra"]:
-                yield self.get_extra_text(
-                    self.format_string(x) for x in set(result["extra"])
-                )
+            yield from super().format_result(result)
 
-    def get_description(self, check_obj):
+    def get_description(self, check_obj: Check) -> StrOrPromise:
         unit = check_obj.unit
         checks = self.check_generator(
             unit.get_source_plurals(), unit.get_target_plurals(), unit
         )
-        errors = []
+        errors: list[StrOrPromise] = []
 
         # Merge plurals
-        results = defaultdict(list)
+        results: MissingExtraDict = defaultdict(list)
         for result in checks:
             if result:
                 for key, value in result.items():
@@ -424,7 +524,7 @@ class BaseFormatCheck(TargetCheck):
             errors.extend(self.format_result(results))
         if errors:
             return format_html_join(
-                mark_safe("<br />"),  # noqa: S308
+                mark_safe("<br />"),
                 "{}",
                 ((error,) for error in errors),
             )
@@ -441,7 +541,8 @@ class BaseFormatCheck(TargetCheck):
         """
         if not self.plural_parameter_regexp:
             # Interpolation isn't available for this format.
-            raise ValueError("Unsupported interpolation!")
+            msg = "Unsupported interpolation!"
+            raise ValueError(msg)
         it = self.plural_parameter_regexp.finditer(text)
         match = next(it, None)
         if not match:
@@ -456,16 +557,21 @@ class BaseFormatCheck(TargetCheck):
 class BasePrintfCheck(BaseFormatCheck):
     """Base class for printf based format checks."""
 
-    normalize_remove = "%"
+    normalize_remove: ClassVar[set[str]] = {"%"}
 
     def __init__(self) -> None:
         super().__init__()
-        self.regexp, self._is_position_based = FLAG_RULES[self.enable_string]
+        self.regexp, self._is_position_based, self._extract_string = FLAG_RULES[
+            self.enable_string
+        ]
 
-    def is_position_based(self, string):
+    def is_position_based(self, string: str):
         return self._is_position_based(string)
 
-    def format_string(self, string) -> str:
+    def extract_string(self, match: re.Match) -> str:
+        return self._extract_string(match)
+
+    def format_string(self, string: str) -> str:
         return f"%{string}"
 
     def cleanup_string(self, text):
@@ -480,7 +586,7 @@ class PythonFormatCheck(BasePrintfCheck):
 
     check_id = "python_format"
     name = gettext_lazy("Python format")
-    description = gettext_lazy("Python format string does not match source")
+    description = gettext_lazy("Python format string does not match source.")
     plural_parameter_regexp = re.compile(r"%\((?:count|number|num|n)\)[a-zA-Z]")
 
 
@@ -489,7 +595,7 @@ class PHPFormatCheck(BasePrintfCheck):
 
     check_id = "php_format"
     name = gettext_lazy("PHP format")
-    description = gettext_lazy("PHP format string does not match source")
+    description = gettext_lazy("PHP format string does not match source.")
 
 
 class CFormatCheck(BasePrintfCheck):
@@ -497,7 +603,7 @@ class CFormatCheck(BasePrintfCheck):
 
     check_id = "c_format"
     name = gettext_lazy("C format")
-    description = gettext_lazy("C format string does not match source")
+    description = gettext_lazy("C format string does not match source.")
 
 
 class PerlBraceFormatCheck(BaseFormatCheck):
@@ -505,11 +611,11 @@ class PerlBraceFormatCheck(BaseFormatCheck):
 
     check_id = "perl_brace_format"
     name = gettext_lazy("Perl brace format")
-    description = gettext_lazy("Perl brace format string does not match source")
+    description = gettext_lazy("Perl brace format string does not match source.")
     regexp = PERL_BRACE_MATCH
     plural_parameter_regexp = re.compile(r"\{(?:count|number|num|n)\}")
 
-    def is_position_based(self, string):
+    def is_position_based(self, string: str):
         return name_format_is_position_based(string)
 
 
@@ -518,7 +624,7 @@ class PerlFormatCheck(CFormatCheck):
 
     check_id = "perl_format"
     name = gettext_lazy("Perl format")
-    description = gettext_lazy("Perl format string does not match source")
+    description = gettext_lazy("Perl format string does not match source.")
 
 
 class JavaScriptFormatCheck(CFormatCheck):
@@ -526,7 +632,7 @@ class JavaScriptFormatCheck(CFormatCheck):
 
     check_id = "javascript_format"
     name = gettext_lazy("JavaScript format")
-    description = gettext_lazy("JavaScript format string does not match source")
+    description = gettext_lazy("JavaScript format string does not match source.")
 
 
 class LuaFormatCheck(BasePrintfCheck):
@@ -534,7 +640,7 @@ class LuaFormatCheck(BasePrintfCheck):
 
     check_id = "lua_format"
     name = gettext_lazy("Lua format")
-    description = gettext_lazy("Lua format string does not match source")
+    description = gettext_lazy("Lua format string does not match source.")
 
 
 class ObjectPascalFormatCheck(BasePrintfCheck):
@@ -542,7 +648,7 @@ class ObjectPascalFormatCheck(BasePrintfCheck):
 
     check_id = "object_pascal_format"
     name = gettext_lazy("Object Pascal format")
-    description = gettext_lazy("Object Pascal format string does not match source")
+    description = gettext_lazy("Object Pascal format string does not match source.")
     regexp = PASCAL_FORMAT_MATCH
 
 
@@ -551,10 +657,10 @@ class SchemeFormatCheck(BasePrintfCheck):
 
     check_id = "scheme_format"
     name = gettext_lazy("Scheme format")
-    description = gettext_lazy("Scheme format string does not match source")
-    normalize_remove = "~"
+    description = gettext_lazy("Scheme format string does not match source.")
+    normalize_remove: ClassVar[set[str]] = {"~"}
 
-    def format_string(self, string) -> str:
+    def format_string(self, string: str) -> str:
         return f"~{string}"
 
 
@@ -563,15 +669,46 @@ class PythonBraceFormatCheck(BaseFormatCheck):
 
     check_id = "python_brace_format"
     name = gettext_lazy("Python brace format")
-    description = gettext_lazy("Python brace format string does not match source")
+    description = gettext_lazy("Python brace format string does not match source.")
     regexp = PYTHON_BRACE_MATCH
     plural_parameter_regexp = re.compile(r"\{(?:count|number|num|n)\}")
+    normalize_remove: ClassVar[set[str]] = {"{", "}"}
 
-    def is_position_based(self, string):
+    def extract_string(self, match: re.Match) -> str:
+        return extract_string_python_brace(match)
+
+    def is_position_based(self, string: str):
         return name_format_is_position_based(string)
 
-    def format_string(self, string) -> str:
+    def format_string(self, string: str) -> str:
         return f"{{{string}}}"
+
+    def format_result(self, result: MissingExtraDict) -> Iterable[StrOrPromise]:
+        for char in ("{", "}"):
+            if char in result["extra"]:
+                result["extra"].remove(char)
+                yield format_html(
+                    gettext("Single {} encountered in the format string."),
+                    self.format_value(char),
+                )
+        yield from super().format_result(result)
+
+    def check_format(
+        self, source: str, target: str, ignore_missing: bool, unit: Unit
+    ) -> Literal[False] | MissingExtraDict:
+        result = super().check_format(source, target, ignore_missing, unit)
+
+        noformat = PYTHON_BRACE_MATCH.sub("", target)
+
+        add_extra: list[str] = [char for char in ("{", "}") if char in noformat]
+
+        if add_extra:
+            if isinstance(result, dict):
+                result["extra"].extend(add_extra)
+            else:
+                result = {"missing": [], "extra": add_extra}
+
+        return result
 
 
 class CSharpFormatCheck(BaseFormatCheck):
@@ -579,14 +716,26 @@ class CSharpFormatCheck(BaseFormatCheck):
 
     check_id = "c_sharp_format"
     name = gettext_lazy("C# format")
-    description = gettext_lazy("C# format string does not match source")
+    description = gettext_lazy("C# format string does not match source.")
     regexp = C_SHARP_MATCH
+    extra_enable_strings = ("csharp-format",)
 
-    def is_position_based(self, string):
+    def is_position_based(self, string: str):
         return name_format_is_position_based(string)
 
-    def format_string(self, string) -> str:
+    def format_string(self, string: str) -> str:
         return f"{{{string}}}"
+
+
+class LaravelFormatCheck(BasePrintfCheck):
+    """Check for Laravel format string."""
+
+    check_id = "laravel_format"
+    name = gettext_lazy("Laravel format")
+    description = gettext_lazy("Laravel format string does not match source.")
+
+    def format_string(self, string: str) -> str:
+        return string
 
 
 class JavaFormatCheck(BasePrintfCheck):
@@ -594,7 +743,7 @@ class JavaFormatCheck(BasePrintfCheck):
 
     check_id = "java_printf_format"
     name = gettext_lazy("Java format")
-    description = gettext_lazy("Java format string does not match source")
+    description = gettext_lazy("Java format string does not match source.")
 
 
 class JavaMessageFormatCheck(BaseFormatCheck):
@@ -602,13 +751,13 @@ class JavaMessageFormatCheck(BaseFormatCheck):
 
     check_id = "java_format"
     name = gettext_lazy("Java MessageFormat")
-    description = gettext_lazy("Java MessageFormat string does not match source")
+    description = gettext_lazy("Java MessageFormat string does not match source.")
     regexp = JAVA_MESSAGE_MATCH
 
-    def format_string(self, string) -> str:
+    def format_string(self, string: str) -> str:
         return f"{{{string}}}"
 
-    def should_skip(self, unit):
+    def should_skip(self, unit: Unit):
         all_flags = unit.all_flags
         if self.is_ignored(all_flags):
             return True
@@ -618,7 +767,9 @@ class JavaMessageFormatCheck(BaseFormatCheck):
 
         return super().should_skip(unit)
 
-    def check_format(self, source, target, ignore_missing, unit):
+    def check_format(
+        self, source: str, target: str, ignore_missing: bool, unit: Unit
+    ) -> Literal[False] | MissingExtraDict:
         """Check for format strings."""
         if not target or not source:
             return False
@@ -636,7 +787,7 @@ class JavaMessageFormatCheck(BaseFormatCheck):
 
         return result
 
-    def format_result(self, result):
+    def format_result(self, result: MissingExtraDict) -> Iterable[StrOrPromise]:
         if "'" in result["missing"]:
             result["missing"].remove("'")
             yield gettext("You need to pair up an apostrophe with another one.")
@@ -646,7 +797,7 @@ class JavaMessageFormatCheck(BaseFormatCheck):
 class I18NextInterpolationCheck(BaseFormatCheck):
     check_id = "i18next_interpolation"
     name = gettext_lazy("i18next interpolation")
-    description = gettext_lazy("The i18next interpolation does not match source")
+    description = gettext_lazy("The i18next interpolation does not match source.")
     regexp = I18NEXT_MATCH
     # https://www.i18next.com/translation-function/plurals
     plural_parameter_regexp = re.compile(r"{{count}}")
@@ -660,21 +811,21 @@ class ESTemplateLiteralsCheck(BaseFormatCheck):
 
     check_id = "es_format"
     name = gettext_lazy("ECMAScript template literals")
-    description = gettext_lazy("ECMAScript template literals do not match source")
+    description = gettext_lazy("ECMAScript template literals do not match source.")
     regexp = ES_TEMPLATE_MATCH
     plural_parameter_regexp = re.compile(r"\$\{(?:count|number|num|n)\}")
 
     def cleanup_string(self, text):
         return WHITESPACE.sub("", text)
 
-    def format_string(self, string) -> str:
+    def format_string(self, string: str) -> str:
         return f"${{{string}}}"
 
 
 class PercentPlaceholdersCheck(BaseFormatCheck):
     check_id = "percent_placeholders"
     name = gettext_lazy("Percent placeholders")
-    description = gettext_lazy("The percent placeholders do not match source")
+    description = gettext_lazy("The percent placeholders do not match source.")
     regexp = PERCENT_MATCH
     plural_parameter_regexp = re.compile(r"%(?:count|number|num|n)%")
 
@@ -682,10 +833,30 @@ class PercentPlaceholdersCheck(BaseFormatCheck):
 class VueFormattingCheck(BaseFormatCheck):
     check_id = "vue_format"
     name = gettext_lazy("Vue I18n formatting")
-    description = gettext_lazy("The Vue I18n formatting does not match source")
+    description = gettext_lazy("The Vue I18n formatting does not match source.")
     regexp = VUE_MATCH
     # https://kazupon.github.io/vue-i18n/guide/pluralization.html
     plural_parameter_regexp = re.compile(r"%?\{(?:count|n)\}")
+
+
+class AutomatticComponentsCheck(BaseFormatCheck):
+    check_id = "automattic_components_format"
+    name = gettext_lazy("Automattic components formatting")
+    description = gettext_lazy(
+        "The Automattic components' placeholders do not match the source."
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.regexp, self._is_position_based, self._extract_string = FLAG_RULES[
+            self.enable_string
+        ]
+
+    def is_position_based(self, string: str) -> bool:
+        return self._is_position_based(string)
+
+    def extract_string(self, match: re.Match) -> str:
+        return self._extract_string(match)
 
 
 class MultipleUnnamedFormatsCheck(SourceCheck):
@@ -693,18 +864,18 @@ class MultipleUnnamedFormatsCheck(SourceCheck):
     name = gettext_lazy("Multiple unnamed variables")
     description = gettext_lazy(
         "There are multiple unnamed variables in the string, "
-        "making it impossible for translators to reorder them"
+        "making it impossible for translators to reorder them."
     )
 
-    def check_source_unit(self, source, unit) -> bool:
+    def check_source_unit(self, sources: list[str], unit: Unit) -> bool:
         """Check source string."""
         rules = [FLAG_RULES[flag] for flag in unit.all_flags if flag in FLAG_RULES]
         if not rules:
             return False
         found = set()
-        for regexp, is_position_based in rules:
-            for match in regexp.finditer(source[0]):
-                if is_position_based(match[1]):
+        for regexp, is_position_based, extract_string in rules:
+            for match in regexp.finditer(sources[0]):
+                if is_position_based(extract_string(match)):
                     found.add((match.start(0), match.end(0)))
                     if len(found) >= 2:
                         return True

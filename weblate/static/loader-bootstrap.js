@@ -34,7 +34,7 @@ function decreaseLoading(sel) {
 function addAlert(message, kind = "danger", delay = 3000) {
   const alerts = $("#popup-alerts");
   const e = $(
-    '<div class="alert alert-dismissible" role="alert"><button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button></div>',
+    '<div class="alert alert-dismissible fade show" role="alert"><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>',
   );
   e.addClass(`alert-${kind}`);
   e.append(new Text(message));
@@ -101,7 +101,7 @@ jQuery.fn.extend({
   },
 });
 
-function submitForm(evt, combo, selector) {
+function submitForm(evt, _combo, selector) {
   const $target = $(evt.target);
   let $form = $target.closest("form");
 
@@ -151,7 +151,7 @@ function screenshotAddString() {
         list.find("table").replaceWith(data);
       });
     },
-    error: (jqXHR, textStatus, errorThrown) => {
+    error: (_jqXhr, _textStatus, errorThrown) => {
       addAlert(errorThrown);
     },
   });
@@ -216,10 +216,10 @@ function compareCells(a, b) {
       Number.parseFloat(b.replace(",", ".")),
     );
   }
-  const parsed_a = getNumber(a);
-  const parsed_b = getNumber(b);
-  if (parsed_a !== null && parsed_b !== null) {
-    return _compareValues(parsed_a, parsed_b);
+  const parsedA = getNumber(a);
+  const parsedB = getNumber(b);
+  if (parsedA !== null && parsedB !== null) {
+    return _compareValues(parsedA, parsedB);
   }
   if (typeof a === "string" && typeof b === "string") {
     return _compareValues(a.toLowerCase(), b.toLowerCase());
@@ -256,9 +256,12 @@ function loadTableSorting() {
           th.addClass("sort-init");
           if (!th.hasClass("sort-cell")) {
             // Skip statically initialized parts (when server side ordering is supported)
-            th.attr("title", gettext("Sort this column"))
-              .addClass("sort-cell")
-              .append('<span class="sort-icon" />');
+            th.attr("title", gettext("Sort this column")).addClass("sort-cell");
+            if (th.hasClass("number")) {
+              th.innerHTML = `<span·class="sort-icon">·</span>${th.text()}`;
+            } else {
+              th.append('<span class="sort-icon" />');
+            }
           }
 
           // Click handler
@@ -268,13 +271,13 @@ function loadTableSorting() {
               .sort((a, b) => {
                 let $a = $(a);
                 let $b = $(b);
-                const a_parent = $a.data("parent");
-                const b_parent = $b.data("parent");
-                if (a_parent) {
-                  $a = tbody.find(`#${a_parent}`);
+                const parentA = $a.data("parent");
+                const parentB = $b.data("parent");
+                if (parentA) {
+                  $a = tbody.find(`#${parentA}`);
                 }
-                if (b_parent) {
-                  $b = tbody.find(`#${b_parent}`);
+                if (parentB) {
+                  $b = tbody.find(`#${parentB}`);
                 }
                 return (
                   inverse *
@@ -292,7 +295,7 @@ function loadTableSorting() {
               $(this).find(".sort-icon").addClass("sort-up");
             }
 
-            inverse = inverse * -1;
+            inverse *= -1;
           });
         }
         // Increase index
@@ -321,10 +324,10 @@ function interpolate(fmt, obj, named) {
   return fmt.replace(/%s/g, () => String(obj.shift()));
 }
 
-function load_matrix() {
+function loadMatrix() {
   const $loadingNext = $("#loading-next");
   const $loader = $("#matrix-load");
-  const offset = Number.parseInt($loader.data("offset"));
+  const offset = Number.parseInt($loader.data("offset"), 10);
 
   if ($("#last-section").length > 0 || $loadingNext.css("display") !== "none") {
     return;
@@ -368,7 +371,6 @@ function initHighlight(root) {
   if (typeof ResizeObserver === "undefined") {
     return;
   }
-  // biome-ignore lint/complexity/noForEach: TODO
   root.querySelectorAll("textarea[name='q']").forEach((input) => {
     const parent = input.parentElement;
     if (parent.classList.contains("editor-wrap")) {
@@ -411,7 +413,7 @@ function initHighlight(root) {
     input.addEventListener("input", syncContent);
 
     /* Handle scrolling */
-    input.addEventListener("scroll", (event) => {
+    input.addEventListener("scroll", (_event) => {
       highlight.scrollTop = input.scrollTop;
       highlight.scrollLeft = input.scrollLeft;
     });
@@ -429,7 +431,6 @@ function initHighlight(root) {
 
     resizeObserver.observe(input);
   });
-  // biome-ignore lint/complexity/noForEach: TODO
   root.querySelectorAll(".highlight-editor").forEach((editor) => {
     const parent = editor.parentElement;
     const hasFocus = editor === document.activeElement;
@@ -476,23 +477,31 @@ function initHighlight(root) {
     if (editor.classList.contains("translation-editor")) {
       const placeables = editor.getAttribute("data-placeables");
       /* This should match WHITESPACE_REGEX in weblate/trans/templatetags/translations.py */
-      const whitespace_regex = new RegExp(
+      const whitespaceRegex = new RegExp(
         [
           "  +|(^) +| +(?=$)| +\n|\n +|\t|",
-          "\u00A0|\u00AD|\u1680|\u2000|\u2001|",
+          "\u00AD|\u1680|\u2000|\u2001|",
           "\u2002|\u2003|\u2004|\u2005|",
           "\u2006|\u2007|\u2008|\u2009|",
           "\u200A|\u202F|\u205F|\u3000",
         ].join(""),
       );
+      const newlineRegex = /\n/;
+      const nonBreakingSpaceRegex = /\u00A0/;
       const extension = {
         hlspace: {
-          pattern: whitespace_regex,
+          pattern: whitespaceRegex,
           lookbehind: true,
+        },
+        newline: {
+          pattern: newlineRegex,
+        },
+        nbsp: {
+          pattern: nonBreakingSpaceRegex,
         },
       };
       if (placeables) {
-        extension.placeable = RegExp(placeables);
+        extension.placeable = new RegExp(placeables);
       }
       /*
        * We can not use Prism.extend here as we want whitespace highlighting
@@ -514,8 +523,7 @@ function initHighlight(root) {
     editor.addEventListener("input", syncContent);
 
     /* Handle scrolling */
-    editor.addEventListener("scroll", (event) => {
-      console.log(event);
+    editor.addEventListener("scroll", (_event) => {
       highlight.scrollTop = editor.scrollTop;
       highlight.scrollLeft = editor.scrollLeft;
     });
@@ -548,21 +556,24 @@ $(function () {
   /* AJAX loading of tabs/pills */
   $document.on(
     "show.bs.tab",
-    '[data-toggle="tab"][data-href], [data-toggle="pill"][data-href]',
+    '[data-bs-toggle="tab"][data-href], [data-bs-toggle="pill"][data-href]',
     (e) => {
       const $target = $(e.target);
-      let $content = $($target.attr("href"));
+      let $content = $($target.attr("data-bs-target"));
       if ($target.data("loaded")) {
         return;
       }
-      if ($content.find(".panel-body").length > 0) {
-        $content = $content.find(".panel-body");
+      if ($content.find(".card-body").length > 0) {
+        $content = $content.find(".card-body");
       }
-      $content.load($target.data("href"), (responseText, status, xhr) => {
+      $content.load($target.data("href"), (_responseText, status, xhr) => {
         if (status !== "success") {
           const msg = gettext("Error while loading page:");
-          $content.text(
-            `${msg} ${xhr.statusText} (${xhr.status}): ${responseText}`,
+          $content.html(
+            `<div class="alert alert-danger" role="alert">
+                ${msg} ${xhr.statusText} (${xhr.status})
+              </div>
+            `,
           );
         }
         $target.data("loaded", 1);
@@ -593,12 +604,21 @@ $(function () {
       activeTab = $(
         `.nav [data-toggle=tab][href="${location.hash.substr(0, separator)}"]`,
       );
-      if (activeTab.length) {
+      if (activeTab.length > 0) {
         activeTab.tab("show");
+      } else {
+        // For Bootstrap 5
+        activeTab = $(
+          `.nav [data-bs-toggle=tab][data-bs-target="${location.hash.substr(0, separator)}"]`,
+        );
+        if (activeTab.length > 0) {
+          bootstrap.Tab.getOrCreateInstance(activeTab).show();
+          activeTab.closest(".dropdown-menu").removeClass("show");
+        }
       }
     }
     activeTab = $(`.nav [data-toggle=tab][href="${location.hash}"]`);
-    if (activeTab.length) {
+    if (activeTab.length > 0) {
       activeTab.tab("show");
       window.scrollTo(0, 0);
     } else {
@@ -606,36 +626,47 @@ $(function () {
       if (anchor !== null) {
         anchor.scrollIntoView();
       }
+      // For Bootstrap 5
+      activeTab = $(
+        `.nav [data-bs-toggle=tab][data-bs-target="${location.hash}"]`,
+      );
+      if (activeTab.length > 0) {
+        bootstrap.Tab.getOrCreateInstance(activeTab).show();
+        activeTab.closest(".dropdown-menu").removeClass("show");
+        window.scrollTo(0, 0);
+      }
     }
   } else if (
     $(".translation-tabs").length > 0 &&
-    Cookies.get("translate-tab")
+    localStorage.getItem("translate-tab")
   ) {
-    /* From cookie */
-    activeTab = $(`[data-toggle=tab][href="${Cookies.get("translate-tab")}"]`);
-    if (activeTab.length) {
-      activeTab.tab("show");
+    /* From local storage */
+    activeTab = $(
+      `[data-bs-toggle=tab][data-bs-target="${localStorage.getItem("translate-tab")}"]`,
+    );
+    if (activeTab.length > 0) {
+      bootstrap.Tab.getOrCreateInstance(activeTab).show();
     }
   }
 
   /* Add a hash to the URL when the user clicks on a tab */
-  $('a[data-toggle="tab"]').on("shown.bs.tab", function (e) {
-    history.pushState(null, null, $(this).attr("href"));
+  $('a[data-bs-toggle="tab"]').on("shown.bs.tab", function (_e) {
+    history.pushState(null, null, $(this).attr("data-bs-target"));
     /* Remove focus on rows */
     $(".selectable-row").removeClass("active");
   });
 
   /* Navigate to a tab when the history changes */
-  window.addEventListener("popstate", (e) => {
+  window.addEventListener("popstate", (_e) => {
     if (location.hash !== "") {
-      activeTab = $(`[data-toggle=tab][href="${location.hash}"]`);
+      activeTab = $(`[data-bs-toggle=tab][data-bs-target="${location.hash}"]`);
     } else {
-      activeTab = Array();
+      activeTab = [];
     }
-    if (activeTab.length) {
-      activeTab.tab("show");
+    if (activeTab.length > 0) {
+      bootstrap.Tab.getOrCreateInstance(activeTab).show();
     } else {
-      $(".nav-tabs a:first").tab("show");
+      bootstrap.Tab.getOrCreateInstance($(".nav-tabs a:first")).show();
     }
   });
 
@@ -644,13 +675,14 @@ $(function () {
   if (formErrors.length > 0) {
     const tab = formErrors.closest("div.tab-pane");
     if (tab.length > 0) {
-      $(`[data-toggle=tab][href="#${tab.attr("id")}"]`).tab("show");
+      bootstrap.Tab.getOrCreateInstance(
+        $(`[data-bs-toggle=tab][data-bs-target="#${tab.attr("id")}"]`),
+      ).show();
     }
   }
 
   /* Announcement discard */
   $(".alert").on("close.bs.alert", function () {
-    const $this = $(this);
     const $form = $("#link-post");
 
     const action = this.getAttribute("data-action");
@@ -663,17 +695,11 @@ $(function () {
           csrfmiddlewaretoken: $form.find("input").val(),
           id: this.getAttribute("data-id"),
         },
-        error: (jqXHR, textStatus, errorThrown) => {
+        error: (_jqXhr, _textStatus, errorThrown) => {
           addAlert(errorThrown);
         },
       });
     }
-  });
-
-  /* Widgets selector */
-  $(".select-tab").on("change", function (e) {
-    $(this).parent().find(".tab-pane").removeClass("active");
-    $(`#${$(this).val()}`).addClass("active");
   });
 
   /* Code samples (on widgets page) */
@@ -686,10 +712,10 @@ $(function () {
 
   /* Matrix mode handling */
   if ($(".matrix").length > 0) {
-    load_matrix();
+    loadMatrix();
     $window.scroll(() => {
       if ($window.scrollTop() >= $document.height() - 2 * $window.height()) {
-        load_matrix();
+        loadMatrix();
       }
     });
   }
@@ -728,9 +754,15 @@ $(function () {
     $("#screenshotModal").text($this.attr("title"));
 
     const detailsLink = $("#modalDetailsLink");
-    detailsLink.attr("href", this.getAttribute("data-details-url"));
-    if (this.getAttribute("data-can-edit")) {
-      detailsLink.text(detailsLink.getAttribute("data-edit-text"));
+    const detailsUrl = this.getAttribute("data-details-url");
+    if (detailsUrl) {
+      detailsLink.attr("href", detailsUrl).show();
+      if (this.getAttribute("data-can-edit")) {
+        detailsLink.text(detailsLink.getAttribute("data-edit-text"));
+      }
+    } else {
+      // No details for generic images (static pages) — hide the button
+      detailsLink.hide();
     }
 
     $("#imagemodal").modal("show");
@@ -789,7 +821,7 @@ $(function () {
       }
     });
     /* Save on submit */
-    $forms.submit(function (e) {
+    $forms.submit(function (_e) {
       const data = {};
       const $this = $(this);
 
@@ -820,27 +852,32 @@ $(function () {
   });
 
   /* Copy to clipboard */
-  $("[data-clipboard-text]").on("click", function (e) {
-    navigator.clipboard
-      .writeText(this.getAttribute("data-clipboard-text"))
-      .then(
-        () => {
-          const text =
-            this.getAttribute("data-clipboard-message") ||
-            gettext("Text copied to clipboard.");
-          addAlert(text, "info");
-        },
-        () => {
-          addAlert(gettext("Please press Ctrl+C to copy."), "danger");
-        },
-      );
+  $(document).on("click", "[data-clipboard-value]", function (e) {
     e.preventDefault();
+    try {
+      navigator.clipboard
+        .writeText(this.getAttribute("data-clipboard-value"))
+        .then(
+          () => {
+            const text =
+              this.getAttribute("data-clipboard-message") ||
+              gettext("Text copied to clipboard.");
+            addAlert(text, "info");
+          },
+          () => {
+            addAlert(gettext("Please press Ctrl+C to copy."), "danger");
+          },
+        );
+    } catch (e) {
+      addAlert(gettext("Error copying to clipboard."), "danger");
+      console.log(e);
+    }
   });
 
   /* Auto translate source select */
-  const select_auto_source = $('input[name="auto_source"]');
-  if (select_auto_source.length > 0) {
-    select_auto_source.on("change", () => {
+  const selectAutoSource = $('input[name="auto_source"]');
+  if (selectAutoSource.length > 0) {
+    selectAutoSource.on("change", () => {
       if ($('input[name="auto_source"]:checked').val() === "others") {
         $("#auto_source_others").show();
         $("#auto_source_mt").hide();
@@ -849,7 +886,7 @@ $(function () {
         $("#auto_source_mt").show();
       }
     });
-    select_auto_source.trigger("change");
+    selectAutoSource.trigger("change");
   }
 
   /* Override all multiple selects */
@@ -884,21 +921,21 @@ $(function () {
 
     $pre.animate({ scrollTop: $pre.get(0).scrollHeight });
 
-    const progress_completed = () => {
+    const progressCompleted = () => {
       $bar.width("100%");
       if ($("#progress-redirect").prop("checked")) {
         window.location = $("#progress-return").attr("href");
       }
     };
 
-    const progress_interval = setInterval(() => {
+    const progressInterval = setInterval(() => {
       $.ajax({
         url: url,
         type: "get",
-        error: (XMLHttpRequest, textStatus, errorThrown) => {
-          if (XMLHttpRequest.status === 404) {
-            clearInterval(progress_interval);
-            progress_completed();
+        error: (xmlHttpRequest, _textStatus, _errorThrown) => {
+          if (xmlHttpRequest.status === 404) {
+            clearInterval(progressInterval);
+            progressCompleted();
           }
         },
         success: (data) => {
@@ -906,8 +943,8 @@ $(function () {
           $pre.text(data.log);
           $pre.animate({ scrollTop: $pre.get(0).scrollHeight });
           if (data.completed) {
-            clearInterval(progress_interval);
-            progress_completed();
+            clearInterval(progressInterval);
+            progressCompleted();
           }
         },
       });
@@ -920,7 +957,7 @@ $(function () {
           Accept: "application/json",
           "X-CSRFToken": $form.find("input").val(),
         },
-      }).then((data) => {
+      }).then((_data) => {
         window.location = $("#progress-return").attr("href");
       });
       e.preventDefault();
@@ -928,19 +965,43 @@ $(function () {
   });
 
   /* Generic messages progress */
+  const progressBars = document.querySelectorAll(".progress-bar");
   $("[data-task]").each(function () {
     const $message = $(this);
     const $bar = $message.find(".progress-bar");
+    $bar.attr("data-completed", "0");
 
-    const task_interval = setInterval(() => {
-      $.get($message.data("task"), (data) => {
-        $bar.width(`${data.progress}%`);
-        if (data.completed) {
-          clearInterval(task_interval);
-          $message.text(data.result.message);
-        }
-      });
-    }, 1000);
+    const progressCompleted = () => {
+      $bar.attr("data-completed", "1");
+      clearInterval(taskInterval);
+      if (
+        $("#progress-redirect").prop("checked") &&
+        Array.from(progressBars.values()).every((element) => {
+          return element.getAttribute("data-completed") === "1";
+        })
+      ) {
+        window.location = $("#progress-return").attr("href");
+      }
+    };
+
+    const taskInterval = setInterval(
+      () => {
+        $.get($message.data("task"), (data) => {
+          $bar.width(`${data.progress}%`);
+          if (data.completed) {
+            progressCompleted();
+            if (data.result.message) {
+              $message.text(data.result.message);
+            }
+          }
+        }).fail((jqXhr) => {
+          if (jqXhr.status === 404) {
+            progressCompleted();
+          }
+        });
+      },
+      1000 * Math.max(progressBars.length / 5, 1),
+    );
   });
 
   /* Disable invalid file format choices */
@@ -949,23 +1010,39 @@ $(function () {
   });
 
   // Show the correct toggle button
-  if ($(".sort-field").length) {
-    const sort_name = $("#query-sort-dropdown span.search-label").text();
-    const sort_dropdown_value = $(".sort-field li a")
+  if ($(".sort-field").length > 0) {
+    const sortName = $("#query-sort-dropdown span.search-label").text();
+    const sortDropdownValue = $(".sort-field li a")
       .filter(function () {
-        return $(this).text() === sort_name;
+        return $(this).text() === sortName;
       })
       .data("sort");
-    const sort_value = $("#id_sort_by").val();
+    const sortValue = $("#id_sort_by").val();
     const $label = $(this).find("span.search-icon");
-    if (sort_dropdown_value) {
+    if (sortDropdownValue) {
       if (
-        sort_value.replace("-", "") === sort_dropdown_value.replace("-", "") &&
-        sort_value !== sort_dropdown_value
+        sortValue.replace("-", "") === sortDropdownValue.replace("-", "") &&
+        sortValue !== sortDropdownValue
       ) {
         $label.toggle();
       }
     }
+  }
+
+  function updateSearchSortBy() {
+    const sortValue = $("#id_sort_by").val();
+    const label = $(".sort-field li a")
+      .filter(function () {
+        return $(this).data("sort") === sortValue;
+      })
+      .text();
+    if (label !== "") {
+      $("#query-sort-dropdown span.search-label").text(gettext(label));
+    }
+  }
+  const sortByLabelObserver = new MutationObserver(updateSearchSortBy);
+  if ($("#id_sort_by")[0]) {
+    sortByLabelObserver.observe($("#id_sort_by")[0], { attributes: true });
   }
 
   /* Branch loading */
@@ -975,38 +1052,51 @@ $(function () {
     const branches = $form.data("branches");
     const $select = $form.find("select[name=branch]");
     $select.empty();
-    $.each(branches[$this.val()], (key, value) => {
+    $.each(branches[$this.val()], (_key, value) => {
       $select.append($("<option></option>").attr("value", value).text(value));
     });
   });
 
   /* Click to edit position inline. Disable when clicked outside or pressed ESC */
-  $("#position-input").on("click", function () {
+  const $positionInput = $(".position-input");
+  const $positionInputEditable = $(".position-input-editable");
+  const $positionInputEditableInput = $("#position-input-editable-input");
+  $positionInput.on("click", function (event) {
     const $form = $(this).closest("form");
-    $("#position-input").hide();
+    $positionInput.hide();
     $form.find("input[name=offset]").prop("disabled", false);
-    $("#position-input-editable").show();
-    $("#position-input-editable-input").attr("type", "number").focus();
+    $positionInputEditable.show();
+    $positionInputEditableInput.attr("type", "number");
+    if ($positionInput.length > 1) {
+      $(event.target)
+        .parent()
+        .find("#position-input-editable-input")
+        .focus()
+        .select();
+    } else {
+      $positionInputEditableInput.focus().select();
+    }
     document.addEventListener("click", clickedOutsideEditableInput);
     document.addEventListener("keyup", pressedEscape);
   });
   const clickedOutsideEditableInput = (event) => {
+    // Check if clicked outside of the input and the editable input
     if (
-      !$.contains($("#position-input-editable")[0], event.target) &&
-      event.target !== $("#position-input")[0]
+      !$positionInput.is(event.target) &&
+      event.target.id !== "position-input-editable-input"
     ) {
-      $("#position-input").show();
-      $("#position-input-editable-input").attr("type", "hidden");
-      $("#position-input-editable").hide();
-      document.emoveEventListener("click", clickedOutsideEditableInput);
+      $positionInput.show();
+      $positionInputEditableInput.attr("type", "hidden");
+      $positionInputEditable.hide();
+      document.removeEventListener("click", clickedOutsideEditableInput);
       document.removeEventListener("keyup", pressedEscape);
     }
   };
   const pressedEscape = (event) => {
-    if (event.key === "Escape" && event.target !== $("#position-input")[0]) {
-      $("#position-input").show();
-      $("#position-input-editable-input").attr("type", "hidden");
-      $("#position-input-editable").hide();
+    if (event.key === "Escape" && event.target !== $positionInput[0]) {
+      $positionInput.show();
+      $positionInputEditableInput.attr("type", "hidden");
+      $positionInputEditable.hide();
       document.removeEventListener("click", clickedOutsideEditableInput);
       document.removeEventListener("keyup", pressedEscape);
     }
@@ -1020,9 +1110,16 @@ $(function () {
 
     $button.attr("data-field", $this.data("field"));
 
+    const $title = $this.find("span.title");
+    let text = $this.text();
+    if ($title.length > 0) {
+      text = $title.text();
+    }
+    $group.find("span.search-label-auto").text(text);
+
     if ($group.hasClass("sort-field")) {
       $group.find("input[name=sort_by]").val($this.data("sort"));
-      if ($this.closest(".result-page-form").length) {
+      if ($this.closest(".result-page-form").length > 0) {
         $this.closest("form").submit();
       }
     }
@@ -1050,16 +1147,31 @@ $(function () {
   $(".query-sort-toggle").click(function () {
     const $this = $(this);
     const $input = $this.closest(".search-group").find("input[name=sort_by]");
-    const sort_params = $input.val().split(",");
-    sort_params.forEach((param, index) => {
+    const sortParams = $input.val().split(",");
+    sortParams.forEach((param, index) => {
       if (param.indexOf("-") !== -1) {
-        sort_params[index] = param.replace("-", "");
+        sortParams[index] = param.replace("-", "");
       } else {
-        sort_params[index] = `-${param}`;
+        sortParams[index] = `-${param}`;
       }
     });
-    $input.val(sort_params.join(","));
-    if ($this.closest(".result-page-form").length) {
+    $input.val(sortParams.join(","));
+    // Toggle active class on icons
+    $this.find(".search-icon").toggleClass("active");
+    // Ensure only one icon is active at a time
+    $this
+      .find(".search-icon.asc")
+      .toggleClass(
+        "active",
+        !$this.find(".search-icon.desc").hasClass("active"),
+      );
+    $this
+      .find(".search-icon.desc")
+      .toggleClass(
+        "active",
+        !$this.find(".search-icon.asc").hasClass("active"),
+      );
+    if ($this.closest(".result-page-form").length > 0) {
       $this.closest("form").submit();
     }
   });
@@ -1072,7 +1184,7 @@ $(function () {
         return false;
       }
     });
-  $("#id_q").on("input", function (event) {
+  $("#id_q").on("input", function (_event) {
     const $form = $(this).closest("form");
     $form.find("input[name=offset]").prop("disabled", true);
   });
@@ -1128,6 +1240,7 @@ $(function () {
   const tribute = new Tribute({
     trigger: "@",
     requireLeadingSpace: true,
+    /* The length should match validation in API */
     menuShowMinLength: 2,
     searchOpts: {
       pre: "​",
@@ -1137,6 +1250,8 @@ $(function () {
     menuItemTemplate: (item) => {
       const link = document.createElement("a");
       link.innerText = item.string;
+      link.classList.add("dropdown-item");
+      link.href = "#";
       return link.outerHTML;
     },
     values: (text, callback) => {
@@ -1151,34 +1266,33 @@ $(function () {
           }));
           callback(userMentionList);
         },
-        error: (jqXHR, textStatus, errorThrown) => {
+        error: (_jqXhr, _textStatus, errorThrown) => {
           console.error(errorThrown);
         },
       });
     },
   });
   tribute.attach(document.querySelectorAll(".markdown-editor"));
-  // biome-ignore lint/complexity/noForEach: TODO
   document.querySelectorAll(".markdown-editor").forEach((editor) => {
-    editor.addEventListener("tribute-active-true", (e) => {
+    editor.addEventListener("tribute-active-true", (_e) => {
       $(".tribute-container").addClass("open");
-      $(".tribute-container ul").addClass("dropdown-menu");
+      $(".tribute-container ul").addClass("dropdown-menu shadow");
     });
   });
 
   /* forset fields adding */
   $(".add-multifield").on("click", function () {
     const updateElementIndex = (el, prefix, ndx) => {
-      const id_regex = new RegExp(`(${prefix}-(\\d+|__prefix__))`);
+      const idRegex = new RegExp(`(${prefix}-(\\d+|__prefix__))`);
       const replacement = `${prefix}-${ndx}`;
       if ($(el).prop("for")) {
-        $(el).prop("for", $(el).prop("for").replace(id_regex, replacement));
+        $(el).prop("for", $(el).prop("for").replace(idRegex, replacement));
       }
       if (el.id) {
-        el.id = el.id.replace(id_regex, replacement);
+        el.id = el.id.replace(idRegex, replacement);
       }
       if (el.name) {
-        el.name = el.name.replace(id_regex, replacement);
+        el.name = el.name.replace(idRegex, replacement);
       }
     };
     const $this = $(this);
@@ -1216,35 +1330,38 @@ $(function () {
   });
 
   /* Notifications removal */
-  // biome-ignore lint/complexity/noForEach: TODO
   document
-    .querySelectorAll(".nav-pills > li > a > button.close")
+    .querySelectorAll(".nav-pills > li > a > button.btn-close")
     .forEach((button) => {
-      button.addEventListener("click", (e) => {
+      button.addEventListener("click", (_e) => {
         const link = button.parentElement;
-        // biome-ignore lint/complexity/noForEach: TODO
         document
-          .querySelectorAll(`${link.getAttribute("href")} select`)
-          .forEach((select) => select.remove());
+          .querySelectorAll(`${link.getAttribute("data-bs-target")} select`)
+          .forEach((select) => {
+            select.remove();
+          });
         //      document.getElementById(link.getAttribute("href").substring(1)).remove();
-        link.parentElement.remove();
         /* Activate watched tab */
-        $("a[href='#notifications__1']").tab("show");
+        const watched = document.querySelector(
+          'a[data-bs-target="#notifications__1"',
+        );
+        bootstrap.Tab.getOrCreateInstance(watched).show();
+        link.parentElement.remove();
         addAlert(
           gettext(
             "Notification settings removed, please do not forget to save the changes.",
           ),
           "info",
+          3000,
         );
       });
     });
 
   /* User autocomplete */
-  // biome-ignore lint/complexity/noForEach: TODO
   document
     .querySelectorAll(".user-autocomplete")
     .forEach((autoCompleteInput) => {
-      const autoCompleteJS = new autoComplete({
+      const autoCompleteJs = new autoComplete({
         selector: () => {
           return autoCompleteInput;
         },
@@ -1284,7 +1401,9 @@ $(function () {
         events: {
           input: {
             focus() {
-              if (autoCompleteInput.value.length) autoCompleteJS.start();
+              if (autoCompleteInput.value.length > 0) {
+                autoCompleteJs.start();
+              }
             },
             selection(event) {
               const feedback = event.detail;
@@ -1304,7 +1423,7 @@ $(function () {
     selector: "#sitewide-search",
     debounce: 300,
     resultsList: {
-      class: "autoComplete dropdown-menu",
+      class: "autoComplete dropdown-menu shadow",
     },
     resultItem: {
       class: "autoComplete_result",
@@ -1313,8 +1432,10 @@ $(function () {
         const child = document.createElement("a");
         child.setAttribute("href", data.value.url);
         child.textContent = `${data.value.name} `;
+        child.classList.add("dropdown-item");
         const category = document.createElement("span");
         category.setAttribute("class", "badge");
+        category.classList.add("text-bg-secondary");
         category.textContent = data.value.category;
         child.appendChild(category);
         item.appendChild(child);
@@ -1336,42 +1457,44 @@ $(function () {
     events: {
       input: {
         focus() {
-          if (siteSearch.input.value.length) siteSearch.start();
+          if (siteSearch.input.value.length > 0) {
+            siteSearch.start();
+          }
         },
       },
     },
   });
 
   /* Workflow customization form */
-  // biome-ignore lint/complexity/noForEach: TODO
   document.querySelectorAll("#id_workflow-enable").forEach((enableInput) => {
     enableInput.addEventListener("click", () => {
-      if (!enableInput.checked) {
-        document.getElementById("workflow-enable-target").style.visibility =
-          "hidden";
-        document.getElementById("workflow-enable-target").style.opacity = 0;
-      } else {
+      if (enableInput.checked) {
         document.getElementById("workflow-enable-target").style.visibility =
           "visible";
         document.getElementById("workflow-enable-target").style.opacity = 1;
+      } else {
+        document.getElementById("workflow-enable-target").style.visibility =
+          "hidden";
+        document.getElementById("workflow-enable-target").style.opacity = 0;
       }
     });
     enableInput.dispatchEvent(new Event("click"));
   });
 
   /* Move current translation into the view */
-  $('a[data-toggle="tab"][href="#nearby"]').on("shown.bs.tab", (e) => {
-    document.querySelector("#nearby .current_translation").scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-      behavior: "smooth",
-    });
-  });
+  $('a[data-bs-toggle="tab"][data-bs-target="#nearby"]').on(
+    "shown.bs.tab",
+    (_e) => {
+      document.querySelector("#nearby .current_translation").scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+        behavior: "smooth",
+      });
+    },
+  );
 
-  // biome-ignore lint/complexity/noForEach: TODO
   document.querySelectorAll("[data-visibility]").forEach((toggle) => {
-    toggle.addEventListener("click", (event) => {
-      // biome-ignore lint/complexity/noForEach: TODO
+    toggle.addEventListener("click", (_event) => {
       document
         .querySelectorAll(toggle.getAttribute("data-visibility"))
         .forEach((element) => {
@@ -1379,6 +1502,161 @@ $(function () {
         });
     });
   });
+
+  $("input[name='period']").daterangepicker({
+    autoApply: false,
+    autoUpdateInput: false,
+    startDate: $("input[name='period']#id_period").attr("data-start-date"),
+    endDate: $("input[name='period']#id_period").attr("data-end-date"),
+    alwaysShowCalendars: true,
+    cancelButtonClasses: "btn-warning",
+    opens: "left",
+    locale: {
+      customRangeLabel: gettext("Custom range"),
+      cancelLabel: gettext("Clear"),
+      daysOfWeek: [
+        pgettext("Short name of day", "Su"),
+        pgettext("Short name of day", "Mo"),
+        pgettext("Short name of day", "Tu"),
+        pgettext("Short name of day", "We"),
+        pgettext("Short name of day", "Th"),
+        pgettext("Short name of day", "Fr"),
+        pgettext("Short name of day", "Sa"),
+      ],
+      monthNames: [
+        pgettext("Short name of month", "Jan"),
+        pgettext("Short name of month", "Feb"),
+        pgettext("Short name of month", "Mar"),
+        pgettext("Short name of month", "Apr"),
+        pgettext("Short name of month", "May"),
+        pgettext("Short name of month", "Jun"),
+        pgettext("Short name of month", "Jul"),
+        pgettext("Short name of month", "Aug"),
+        pgettext("Short name of month", "Sep"),
+        pgettext("Short name of month", "Oct"),
+        pgettext("Short name of month", "Nov"),
+        pgettext("Short name of month", "Dec"),
+      ],
+    },
+    ranges: {
+      [gettext("Today")]: [moment(), moment()],
+      [gettext("Yesterday")]: [
+        moment().subtract(1, "days"),
+        moment().subtract(1, "days"),
+      ],
+      [gettext("Last 7 days")]: [moment().subtract(6, "days"), moment()],
+      [gettext("Last 30 days")]: [moment().subtract(29, "days"), moment()],
+      [gettext("This month")]: [
+        moment().startOf("month"),
+        moment().endOf("month"),
+      ],
+      [gettext("Last month")]: [
+        moment().subtract(1, "month").startOf("month"),
+        moment().subtract(1, "month").endOf("month"),
+      ],
+      [gettext("This year")]: [
+        moment().startOf("year"),
+        moment().endOf("year"),
+      ],
+      [gettext("Last year")]: [
+        moment().subtract(1, "year").startOf("year"),
+        moment().subtract(1, "year").endOf("year"),
+      ],
+    },
+  });
+
+  $("input[name='period']").on("apply.daterangepicker", function (_ev, picker) {
+    $(this).val(
+      `${picker.startDate.format("MM/DD/YYYY")} - ${picker.endDate.format("MM/DD/YYYY")}`,
+    );
+  });
+
+  $("input[name='period']").on("cancel.daterangepicker", (_ev, picker) => {
+    picker.element.val("");
+  });
+
+  /* Singular or plural new unit switcher */
+  $("input[name='new-unit-form-type']").on("change", function () {
+    const refreshInput = (el, value) => {
+      el.value = value;
+      el.dispatchEvent(new CustomEvent("input"));
+    };
+    const transferTextareaInputs = (fromId, toId) => {
+      $(`${toId} textarea`).each((_toIdx, toTextArea) => {
+        $(`${fromId} textarea`).each((_fromIdx, fromTextArea) => {
+          if (fromTextArea.name === toTextArea.name) {
+            refreshInput(toTextArea, fromTextArea.value);
+          }
+        });
+      });
+    };
+    const selected = $(this).val();
+    if (selected === "singular") {
+      $("input[name='new-unit-form-type']").removeAttr("checked");
+      $("#new-singular #show-singular").prop("checked", true);
+      $("#new-singular input[name='context']").val(
+        $("#new-plural input[name='context']").val(),
+      );
+      transferTextareaInputs("#new-plural", "#new-singular");
+      $("#new-plural").addClass("hidden");
+      $("#new-singular").removeClass("hidden");
+    } else if (selected === "plural") {
+      $("input[name='new-unit-form-type']").removeAttr("checked");
+      $("#new-plural #show-plural").prop("checked", true);
+      $("#new-plural input[name='context']").val(
+        $("#new-singular input[name='context']").val(),
+      );
+      transferTextareaInputs("#new-singular", "#new-plural");
+      $("#new-singular").addClass("hidden");
+      $("#new-plural").removeClass("hidden");
+    }
+  });
+
+  /* WebAuthn registration completion in profile */
+  document.addEventListener("otp_webauthn.register_complete", (event) => {
+    const id = event.detail.id;
+    const deviceInput = document.querySelector(
+      "input[name=passkey-device-name]",
+    );
+    const _csrfToken = document.querySelector(
+      "input[name=csrfmiddlewaretoken]",
+    );
+
+    const action = deviceInput.getAttribute("data-href").replace("000000", id);
+
+    const form = document.getElementById("link-post");
+
+    form.setAttribute("action", action);
+    const elm = document.createElement("input");
+    elm.setAttribute("type", "hidden");
+    elm.setAttribute("name", "name");
+    elm.setAttribute("value", deviceInput.value);
+    form.appendChild(elm);
+    form.submit();
+  });
+
+  /* Allow styling of auth icons that we ship */
+  document.querySelectorAll(".auth-image").forEach((el) => {
+    const src = el.getAttribute("src");
+    if (src !== null) {
+      if (
+        src.endsWith("password.svg") ||
+        src.endsWith("email.svg") ||
+        src.endsWith("twitter.svg") ||
+        src.endsWith("github.svg")
+      ) {
+        el.classList.add("auth-image-filter");
+      }
+    }
+  });
+
+  const theme = document.querySelector("body").getAttribute("data-theme");
+  if (
+    (theme === "auto") &
+    (window.matchMedia("(prefers-color-scheme: dark)").matches === true)
+  ) {
+    document.documentElement.setAttribute("data-bs-theme", "dark");
+  }
 
   /* Warn users that they do not want to use developer console in most cases */
   console.log(
@@ -1398,4 +1676,105 @@ $(function () {
     "font-size: 20px; font-family: sans-serif",
     gettext("See https://en.wikipedia.org/wiki/Self-XSS for more information."),
   );
+
+  /* Display relevant file_format_params field in Component forms */
+  const form_auto_ids = ["id", "id_scratchcreate"];
+  const file_format_params_fields_ids = form_auto_ids.map((id) => {
+    return `#div_${id}_file_format_params`;
+  });
+
+  function displayRelevantFileFormatParams(form, selectedFileFormat) {
+    if (selectedFileFormat) {
+      file_format_params_fields_ids.forEach((fieldId) => {
+        form.find(fieldId).show();
+      });
+      let displayFieldLabel = false;
+      form.find(".file-format-param").each(function () {
+        const fileFormats = $(this)
+          .find(".file-format-param-field")
+          .attr("fileformats")
+          ?.split(" ");
+        if (fileFormats.includes(selectedFileFormat)) {
+          $(this).show();
+          displayFieldLabel = true;
+        } else {
+          $(this).hide();
+        }
+      });
+      // hide the field if no matching file format parameter is visible
+      file_format_params_fields_ids.forEach((fieldId) => {
+        form.find(fieldId).toggle(displayFieldLabel);
+      });
+    } else {
+      file_format_params_fields_ids.forEach((fieldId) => {
+        form.find(fieldId).hide();
+      });
+    }
+  }
+
+  form_auto_ids
+    .map((id) => {
+      return `#${id}_file_format`;
+    })
+    .forEach((fieldId) => {
+      const fileFormatForm = $(fieldId).closest("form");
+      displayRelevantFileFormatParams(fileFormatForm, $(fieldId).val());
+
+      $(fieldId).on("change", function () {
+        var newValue = $(this).val();
+        displayRelevantFileFormatParams(fileFormatForm, newValue);
+      });
+    });
+
+  document.querySelector("#string-add")?.addEventListener("click", (_e) => {
+    const tab = document.querySelector("[data-bs-target='#new'");
+    bootstrap.Tab.getOrCreateInstance(tab).show();
+    tab.closest(".dropdown-menu").classList.remove("show");
+  });
+
+  /* Datetime formatting */
+  const dateFormatter = new Intl.DateTimeFormat(document.documentElement.lang, {
+    timeStyle: "medium",
+    dateStyle: "short",
+  });
+  document.querySelectorAll(".naturaltime").forEach((timespan) => {
+    const timestamp = Date.parse(timespan.getAttribute("data-datetime"));
+    const difference = (Date.now() - timestamp) / 1000;
+    let value = "";
+    if (Math.abs(difference) < 2) {
+      value = gettext("just now");
+    } else if (difference > 0) {
+      if (difference < 60) {
+        const seconds = Math.floor(difference);
+        value = interpolate(
+          ngettext("%s second ago", "%s seconds ago", seconds),
+          [seconds],
+        );
+      } else if (difference < 60 * 60) {
+        const minutes = Math.floor(difference / 60);
+        if (minutes === 1) {
+          value = gettext("a minute ago");
+        } else {
+          value = interpolate(
+            ngettext("%s minute ago", "%s minutes ago", minutes),
+            [minutes],
+          );
+        }
+      } else if (difference < 60 * 60 * 24) {
+        const hours = Math.floor(difference / (60 * 60));
+        if (hours === 1) {
+          value = gettext("a hour ago");
+        } else {
+          value = interpolate(ngettext("%s hour ago", "%s hours ago", hours), [
+            hours,
+          ]);
+        }
+      }
+    }
+    if (value === "") {
+      value = dateFormatter.format(new Date(timestamp));
+    }
+    console.log(timestamp, value);
+    timespan.textContent = value;
+  });
 });

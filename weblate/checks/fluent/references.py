@@ -17,11 +17,13 @@ from weblate.checks.fluent.utils import (
     translation_from_check,
     variant_name,
 )
+from weblate.utils.html import format_html_join_comma, list_to_tuples
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
     from django.utils.safestring import SafeString
+    from django_stubs_ext import StrOrPromise
     from translate.storage.fluent import (
         FluentPart,
         FluentReference,
@@ -444,7 +446,9 @@ class _VariantReferencesDifference:
     ) -> str:
         if not variant_list:
             return ""
-        return ", ".join(variant.name() for variant in variant_list)
+        return format_html_join_comma(
+            "{}", list_to_tuples(variant.name() for variant in variant_list)
+        )
 
     def _unique_target_refs(self) -> Iterator[_Reference]:
         unique_refs: list[_Reference] = []
@@ -667,7 +671,7 @@ class FluentReferencesCheck(TargetCheck):
 
     check_id = "fluent-references"
     name = gettext_lazy("Fluent references")
-    description = gettext_lazy("Fluent references should match")
+    description = gettext_lazy("Fluent references should match.")
     default_disabled = True
 
     @classmethod
@@ -739,10 +743,10 @@ class FluentReferencesCheck(TargetCheck):
             )
         return FluentPatterns.highlight_source(source, highlight_patterns)
 
-    def get_description(self, check_model: CheckModel) -> str:
-        (unit, source, target) = translation_from_check(check_model)
+    def get_description(self, check_obj: CheckModel) -> StrOrPromise:
+        (unit, source, target) = translation_from_check(check_obj)
         differences = self._compare_references(unit, source, target)
         if not differences:
-            return super().get_description(check_model)
+            return super().get_description(check_obj)
 
         return format_html_error_list(diff.description() for diff in differences)

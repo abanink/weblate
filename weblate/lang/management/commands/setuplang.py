@@ -2,14 +2,21 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from weblate.lang.models import Language
 from weblate.utils.management.base import BaseCommand
+
+if TYPE_CHECKING:
+    from django.core.management.base import CommandParser
 
 
 class Command(BaseCommand):
     help = "Populates language definitions"
 
-    def add_arguments(self, parser) -> None:
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--no-update",
             action="store_false",
@@ -20,7 +27,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options) -> None:
         """Create default set of languages."""
-        kwargs = {}
-        if options["verbosity"] >= 1:
-            kwargs["logger"] = self.stdout.write
-        Language.objects.setup(options["update"], **kwargs)
+        Language.objects.setup(
+            update=options["update"],
+            logger=self.stdout.write if options["verbosity"] >= 1 else None,
+        )

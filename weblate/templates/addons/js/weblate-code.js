@@ -9,11 +9,12 @@ const ready = (callback) => {
 const getCookie = (name) => {
   const value = `; ${document.cookie}`;
   const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop().split(";").shift();
+  if (parts.length === 2) {
+    return parts.pop().split(";").shift();
+  }
 };
 
 const translateDocument = (data) => {
-  // biome-ignore lint/complexity/noForEach: TODO
   document.querySelectorAll(weblate_selector).forEach((element) => {
     if (element.children.length === 0 && element.textContent in data) {
       element.textContent = data[element.textContent];

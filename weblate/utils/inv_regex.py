@@ -5,6 +5,8 @@
 #
 # Based on https://github.com/pyparsing/pyparsing/blob/master/examples/inv_regex.py
 
+import string
+
 from pyparsing import (
     Combine,
     Empty,
@@ -33,10 +35,10 @@ class CharacterRangeEmitter:
         self.charset = "".join(dict.fromkeys(chars).keys())
 
     def __str__(self) -> str:
-        return "[" + self.charset + "]"
+        return f"[{self.charset}]"
 
     def __repr__(self) -> str:
-        return "[" + self.charset + "]"
+        return f"[{self.charset}]"
 
     def make_generator(self):
         def gen_chars():
@@ -101,10 +103,10 @@ class LiteralEmitter:
         self.lit = lit
 
     def __str__(self) -> str:
-        return "Lit:" + self.lit
+        return f"Lit:{self.lit}"
 
     def __repr__(self) -> str:
-        return "Lit:" + self.lit
+        return f"Lit:{self.lit}"
 
     def make_generator(self):
         def lit_gen():
@@ -135,7 +137,8 @@ def handle_repetition(toks):
                 opt = OptionalEmitter(GroupEmitter([toks[0], opt]))
             return GroupEmitter([toks[0]] * mincount + [opt])
         return [toks[0]] * mincount
-    raise ParseFatalException("", 0, f"Unsupported repetition {toks!r}")
+    msg = ""
+    raise ParseFatalException(msg, 0, f"Unsupported repetition {toks!r}")
 
 
 def handle_literal(toks):
@@ -154,12 +157,13 @@ def handle_literal(toks):
 def handle_macro(toks):
     macro_char = toks[0][1]
     if macro_char == "d":
-        return CharacterRangeEmitter("0123456789")
+        return CharacterRangeEmitter(string.digits)
     if macro_char == "w":
         return CharacterRangeEmitter(srange("[A-Za-z0-9_]"))
     if macro_char in {"s", "W"}:
         return LiteralEmitter(" ")
-    raise ParseFatalException("", 0, f"unsupported macro character ({macro_char})")
+    msg = ""
+    raise ParseFatalException(msg, 0, f"unsupported macro character ({macro_char})")
 
 
 def handle_boundary(toks):
@@ -207,15 +211,15 @@ def get_parser():
     re_boundary = cflex | dollar
     repetition = (
         (lbrace + Word(nums)("count") + rbrace)
-        | (lbrace + Word(nums)("minCount") + "," + Word(nums)("maxCount") + rbrace)
+        | (f"{lbrace}{Word(nums)('minCount')},{Word(nums)('maxCount')}{rbrace}")
         | one_of(list("*+?"))
     )
 
-    re_range.setParseAction(handle_range)
-    re_literal.setParseAction(handle_literal)
-    re_macro.setParseAction(handle_macro)
-    re_dot.setParseAction(handle_dot)
-    re_boundary.setParseAction(handle_boundary)
+    re_range.set_parse_action(handle_range)
+    re_literal.set_parse_action(handle_literal)
+    re_macro.set_parse_action(handle_macro)
+    re_dot.set_parse_action(handle_dot)
+    re_boundary.set_parse_action(handle_boundary)
 
     re_term = (
         re_boundary | re_literal | re_range | re_macro | re_dot | re_non_capture_group
@@ -246,6 +250,6 @@ def invert_re(regex):
     try:
         invre = GroupEmitter(RE_PARSER.parse_string(regex)).make_generator()
     except ParseException:
-        report_error(cause="Regexp parser")
+        report_error("Regexp parser")
         return []
     return invre()

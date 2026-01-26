@@ -4,7 +4,12 @@
 
 """Tests for changes browsing."""
 
+from datetime import timedelta
+from html import escape
+
 from django.urls import reverse
+from django.utils import timezone
+from django.utils.http import urlencode
 
 from weblate.trans.models import Unit
 from weblate.trans.tests.test_views import ViewTestCase
@@ -55,5 +60,58 @@ class ChangesTest(ViewTestCase):
     def test_user(self) -> None:
         self.edit_unit("Hello, world!\n", "Nazdar svete!\n")
         response = self.client.get(reverse("changes"), {"user": self.user.username})
-        self.assertContains(response, "Translation added")
-        self.assertNotContains(response, "Invalid search string!")
+        self.assertContains(response, f'title="{self.user.full_name}"')
+        # Filtering by another user should not show the change made by
+        # the current test user.
+        response = self.client.get(
+            reverse("changes"), {"user": self.anotheruser.username}
+        )
+        self.assertNotContains(response, f'title="{self.user.full_name}"')
+
+    def test_exclude_user(self) -> None:
+        self.edit_unit("Hello, world!\n", "Nazdar svete!\n")
+        response = self.client.get(reverse("changes"))
+        self.assertContains(response, f'title="{self.user.full_name}"')
+        # Filtering by current user should not show the change made by
+        # the current test user.
+        response = self.client.get(
+            reverse("changes"), {"exclude_user": self.user.username}
+        )
+        self.assertNotContains(response, f'title="{self.user.full_name}"')
+        # Filtering by another user should show the change made by
+        # the current test user.
+        response = self.client.get(
+            reverse("changes"), {"exclude_user": self.anotheruser.username}
+        )
+        self.assertContains(response, f'title="{self.user.full_name}"')
+
+    def test_daterange(self) -> None:
+        end = timezone.now()
+        start = end - timedelta(days=1)
+        period = f"{start.strftime('%m/%d/%Y')} - {end.strftime('%m/%d/%Y')}"
+        response = self.client.get(reverse("changes"), {"period": period})
+        self.assertContains(response, "Resource update")
+
+    def test_pagination(self) -> None:
+        end = timezone.now()
+        start = end - timedelta(days=1)
+        period = f"{start.strftime('%m/%d/%Y')} - {end.strftime('%m/%d/%Y')}"
+        response = self.client.get(reverse("changes"), {"period": period})
+        query_string = urlencode({"page": 2, "limit": 20, "period": period})
+        self.assertContains(response, escape(query_string))
+        response = self.client.get(
+            reverse("changes"), {"page": 2, "limit": 20, "period": period}
+        )
+        self.assertContains(response, "String added in the upload")
+
+    def test_last_changes_display(self) -> None:
+        unit_to_delete = self.get_unit("Orangutan has %d banana")
+        unit_to_delete.context = "Orangutan unit context"
+        unit_to_delete.save()
+        self.translation.delete_unit(None, unit_to_delete)
+        response = self.client.get(reverse("changes"))
+        self.assertContains(
+            response, "String removed", count=2
+        )  # one is from search options, second from history-data
+        # check the string context is also displayed
+        self.assertContains(response, "Orangutan unit context")

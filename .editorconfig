@@ -1,3 +1,9 @@
+# Copyright © Michal Čihař <michal@weblate.org>
+#
+# SPDX-License-Identifier: CC0-1.0
+
+# This file is maintained in https://github.com/WeblateOrg/meta/
+
 root = true
 
 [*]
@@ -12,11 +18,23 @@ spaces_around_operators = true
 [*.bat]
 end_of_line = crlf
 
-[*.{py,rst,sh}]
+[*.html]
+indent_size = 2
+
+[*.py]
 indent_size = 4
 
-[*.{js}]
+[*.rst]
+indent_size = 3
+
+[*.js]
 quote_type = double
 
 [*.{markdown,md}]
 trim_trailing_whitespace = false
+
+[[shell]]
+indent_style = space
+indent_size = 4
+space_redirects = true
+simplify = true

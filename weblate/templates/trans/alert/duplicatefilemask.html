@@ -1,13 +1,17 @@
 {% load i18n %}
+
 <p>
-    {% trans "Some linked components have the same file mask." %}
-    {% trans "Please fix this by removing one of them." %}
+  {% translate "Some linked components have the same file mask or share some of the files." %}
+  {% translate "Please fix this by removing one of them." %}
 </p>
 
-<p>{% trans "The following file masks were found multiple times:" %}</p>
+<p>{% translate "The following files were found multiple times:" %}</p>
 
 <ul>
-{% for mask in duplicates %}
-<li><pre>{{ mask }}</pre></li>
-{% endfor %}
+  {% for mask, translations in analysis.duplicates_resolved %}
+    <li>
+      <pre>{{ mask }}</pre>:
+      {% for translation in translations %}<a href="{{ translation.get_absolute_url }}">{{ translation }}</a>{% endfor %}
+    </li>
+  {% endfor %}
 </ul>

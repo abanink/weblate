@@ -4,8 +4,14 @@
 
 from __future__ import annotations
 
-from typing import cast
+import base64
+import json
+from binascii import unhexlify
+from datetime import datetime, timedelta
+from time import time
+from typing import TYPE_CHECKING, ClassVar, cast
 
+from altcha import ChallengeOptions, create_challenge, verify_solution
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import HTML, Div, Field, Fieldset, Layout, Submit
 from django import forms
@@ -15,20 +21,18 @@ from django.contrib.auth.forms import SetPasswordForm as DjangoSetPasswordForm
 from django.db import transaction
 from django.middleware.csrf import rotate_token
 from django.utils.functional import cached_property
-from django.utils.html import escape
+from django.utils.html import escape, format_html
 from django.utils.translation import activate, gettext, gettext_lazy, ngettext, pgettext
+from django_otp.forms import OTPTokenForm as DjangoOTPTokenForm
+from django_otp.forms import otp_verification_failed
+from django_otp.oath import totp
+from django_otp.plugins.otp_static.models import StaticDevice
+from django_otp.plugins.otp_totp.models import TOTPDevice
 
 from weblate.accounts.auth import try_get_user
 from weblate.accounts.captcha import MathCaptcha
 from weblate.accounts.models import AuditLog, Profile
-from weblate.accounts.notifications import (
-    NOTIFICATIONS,
-    SCOPE_ADMIN,
-    SCOPE_ALL,
-    SCOPE_CHOICES,
-    SCOPE_PROJECT,
-    SCOPE_WATCHED,
-)
+from weblate.accounts.notifications import NOTIFICATIONS, NotificationScope
 from weblate.accounts.utils import (
     adjust_session_expiry,
     cycle_session_keys,
@@ -42,6 +46,7 @@ from weblate.trans.defines import FULLNAME_LENGTH
 from weblate.trans.models import Component, Project
 from weblate.utils import messages
 from weblate.utils.forms import (
+    ContextDiv,
     EmailField,
     QueryField,
     SortedSelect,
@@ -50,6 +55,13 @@ from weblate.utils.forms import (
 )
 from weblate.utils.ratelimit import check_rate_limit, get_rate_setting, reset_rate_limit
 from weblate.utils.validators import validate_fullname
+
+if TYPE_CHECKING:
+    from altcha import Challenge
+    from django_otp.models import Device
+    from django_stubs_ext import StrOrPromise
+
+    from weblate.auth.models import AuthenticatedHttpRequest
 
 
 class UniqueEmailMixin(forms.Form):
@@ -92,7 +104,7 @@ class PasswordField(forms.CharField):
             },
             render_value=False,
         )
-        kwargs["max_length"] = 256
+        kwargs["max_length"] = settings.MAXIMAL_PASSWORD_LENGTH
         kwargs["strip"] = False
         super().__init__(**kwargs)
 
@@ -106,14 +118,16 @@ class UniqueUsernameField(UsernameField):
             existing = User.objects.filter(username=value)
             if existing.exists() and value != self.valid:
                 raise forms.ValidationError(
-                    gettext("This username is already taken. Please choose another.")
+                    gettext(
+                        "This username is already taken. Please pick something else."
+                    )
                 )
 
         return super().clean(value)
 
 
 class FullNameField(forms.CharField):
-    default_validators = [validate_fullname]
+    default_validators = [validate_fullname]  # noqa: RUF012
 
     def __init__(self, *args, **kwargs) -> None:
         kwargs["max_length"] = FULLNAME_LENGTH
@@ -127,7 +141,7 @@ class FullNameField(forms.CharField):
 
 class ProfileBaseForm(forms.ModelForm):
     @classmethod
-    def from_request(cls, request):
+    def from_request(cls, request: AuthenticatedHttpRequest):
         if request.method == "POST":
             return cls(request.POST, instance=request.user.profile)
         return cls(instance=request.user.profile)
@@ -150,7 +164,7 @@ class LanguagesForm(ProfileBaseForm):
     class Meta:
         model = Profile
         fields = ("language", "languages", "secondary_languages")
-        widgets = {
+        widgets = {  # noqa: RUF012
             "language": SortedSelect,
             "languages": SortedSelectMultiple,
             "secondary_languages": SortedSelectMultiple,
@@ -186,7 +200,7 @@ class CommitForm(ProfileBaseForm):
         label=gettext_lazy("Commit e-mail"),
         choices=[("", gettext_lazy("Use account e-mail address"))],
         help_text=gettext_lazy(
-            "Used in version control commits. The address will stay in the repository forever once changes are committed by Weblate."
+            "Used in version-control commits. The address stays in the repository forever once changes are committed by Weblate."
         ),
         required=False,
         widget=forms.RadioSelect,
@@ -219,7 +233,7 @@ class ProfileForm(ProfileBaseForm):
 
     public_email = forms.ChoiceField(
         label=gettext_lazy("Public e-mail"),
-        choices=[("", gettext_lazy("Do not publicly display e-mail address"))],
+        choices=[("", gettext_lazy("Hide e-mail address from public view"))],
         required=False,
     )
 
@@ -227,6 +241,7 @@ class ProfileForm(ProfileBaseForm):
         model = Profile
         fields = (
             "website",
+            "contact",
             "public_email",
             "liberapay",
             "codesite",
@@ -258,13 +273,21 @@ class SubscriptionForm(ProfileBaseForm):
             "auto_watch",
             "watched",
         )
-        widgets = {"watched": forms.SelectMultiple}
+        widgets = {  # noqa: RUF012
+            "watched": forms.SelectMultiple,
+        }
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         user = kwargs["instance"].user
         self.fields["watched"].required = False
         self.fields["watched"].queryset = user.allowed_projects
+        # Create a mapping of project IDs to slugs
+        project_slug_map = {str(p.id): p.slug for p in user.allowed_projects}
+        # Add the data attribute with the JSON mapping
+        self.fields["watched"].widget.attrs["data-project-slugs"] = json.dumps(
+            project_slug_map
+        )
         self.helper = FormHelper(self)
         self.helper.disable_csrf = True
         self.helper.form_tag = False
@@ -285,6 +308,7 @@ class UserSettingsForm(ProfileBaseForm):
             "hide_source_secondary",
             "editor_link",
             "special_chars",
+            "contribute_personal_tm",
         )
 
     def __init__(self, *args, **kwargs) -> None:
@@ -301,7 +325,7 @@ class DashboardSettingsForm(ProfileBaseForm):
     class Meta:
         model = Profile
         fields = ("dashboard_view", "dashboard_component_list")
-        widgets = {
+        widgets = {  # noqa: RUF012
             "dashboard_view": forms.RadioSelect,
             "dashboard_component_list": forms.HiddenInput,
         }
@@ -351,7 +375,6 @@ class DashboardSettingsForm(ProfileBaseForm):
 class UserForm(forms.ModelForm):
     """User information form."""
 
-    username = UniqueUsernameField()
     email = forms.ChoiceField(
         label=gettext_lazy("Account e-mail"),
         help_text=gettext_lazy(
@@ -361,11 +384,14 @@ class UserForm(forms.ModelForm):
         required=True,
         widget=forms.RadioSelect,
     )
-    full_name = FullNameField()
 
     class Meta:
         model = User
         fields = ("username", "full_name", "email")
+        field_classes = {  # noqa: RUF012
+            "username": UniqueUsernameField,
+            "full_name": FullNameField,
+        }
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -380,12 +406,12 @@ class UserForm(forms.ModelForm):
         self.helper.form_tag = False
 
     @classmethod
-    def from_request(cls, request):
+    def from_request(cls, request: AuthenticatedHttpRequest):
         if request.method == "POST":
             return cls(request.POST, instance=request.user)
         return cls(instance=request.user)
 
-    def audit(self, request) -> None:
+    def audit(self, request: AuthenticatedHttpRequest) -> None:
         orig = User.objects.get(pk=self.instance.pk)
         for attr in ("username", "full_name", "email"):
             orig_attr = getattr(orig, attr)
@@ -396,7 +422,174 @@ class UserForm(forms.ModelForm):
                 )
 
 
-class ContactForm(forms.Form):
+class CaptchaWidget(forms.TextInput):
+    challenge: Challenge | None = None
+
+    def render(self, name, value, attrs=None, renderer=None, **kwargs):
+        if self.challenge is None:
+            msg = "Challenge is missing!"
+            raise ValueError(msg)
+
+        return format_html(
+            "<altcha-widget challengejson='{}' strings='{}' hidefooter auto='onfocus'></altcha-widget>",
+            # Directly include challenge
+            json.dumps(
+                {
+                    "algorithm": self.challenge.algorithm,
+                    "challenge": self.challenge.challenge,
+                    "maxnumber": self.challenge.max_number,
+                    "salt": self.challenge.salt,
+                    "signature": self.challenge.signature,
+                }
+            ),
+            # Localize strings
+            json.dumps(
+                {
+                    "error": gettext("Verification failed. Try again later."),
+                    "expired": gettext("Verification expired. Try again."),
+                    "label": gettext("I'm not a robot"),
+                    "verified": gettext("Verification completed"),
+                    "verifying": gettext("Verifying…"),
+                    "waitAlert": gettext(
+                        "Verification is still in progress, please wait."
+                    ),
+                }
+            ),
+        )
+
+
+class CaptchaForm(forms.Form):
+    captcha = forms.IntegerField(required=True)
+    altcha = forms.CharField(
+        required=True, widget=CaptchaWidget, label=gettext_lazy("Human verification")
+    )
+
+    @staticmethod
+    def is_altcha_available():
+        # Altcha requires secure context in browser, which is available
+        # with HTTPS or on localhost
+        return settings.ENABLE_HTTPS or settings.SITE_DOMAIN.rsplit(":", 1)[0] in {
+            "localhost",
+            "127.0.0.1",
+        }
+
+    def __init__(
+        self,
+        *,
+        request: AuthenticatedHttpRequest,
+        hide_captcha: bool = False,
+        data=None,
+        initial=None,
+    ) -> None:
+        super().__init__(data=data, initial=initial)
+        self.request = request
+        self.challenge: Challenge | None = None
+
+        # Possibly hide fields
+        if not settings.REGISTRATION_CAPTCHA or hide_captcha:
+            self.fields["altcha"].widget = forms.HiddenInput()
+            self.fields["altcha"].required = False
+            self.fields["captcha"].widget = forms.HiddenInput()
+            self.fields["captcha"].required = False
+        elif not self.is_altcha_available():
+            self.fields["altcha"].widget = forms.HiddenInput()
+            self.fields["altcha"].required = False
+
+        # Initialize captcha if required
+        if self.fields["captcha"].required:
+            if data is None or "captcha" not in request.session:
+                self.generate_captcha()
+            else:
+                self.mathcaptcha = MathCaptcha.unserialize(request.session["captcha"])
+            self.set_label()
+
+        # Initialize altcha if required
+        if self.fields["altcha"].required:
+            self.generate_challenge()
+            self.fields["altcha"].widget.challenge = self.challenge
+            if data is None:
+                self.store_challenge()
+
+    def generate_challenge(self) -> Challenge:
+        # The expires timestamp needs to be in the local time and not
+        # timezone aware because it is converted using time.mktime(expires.timetuple())
+        # and then compared to time.time()
+        expires = datetime.now(tz=None) + timedelta(hours=1)  # noqa: DTZ005
+
+        challenge_options = ChallengeOptions(
+            hmac_key=settings.SECRET_KEY,
+            max_number=settings.ALTCHA_MAX_NUMBER,
+            expires=expires,
+        )
+        self.challenge = create_challenge(challenge_options)
+        return self.challenge
+
+    def generate_captcha(self) -> None:
+        self.mathcaptcha = MathCaptcha()
+        self.request.session["captcha"] = self.mathcaptcha.serialize()
+        self.set_label()
+
+    def set_label(self) -> None:
+        """Set correct math captcha label."""
+        self.fields["captcha"].label = format_html(
+            pgettext(
+                "Question for a mathematics-based CAPTCHA, "
+                "the %s is an arithmetic problem",
+                "What is %s?",
+            ).replace("%s", "{}"),
+            self.mathcaptcha.display,
+        )
+        if self.is_bound:
+            self["captcha"].label = cast("str", self.fields["captcha"].label)
+
+    def store_challenge(self) -> None:
+        self.request.session["captcha_challenge"] = self.challenge.challenge
+
+    def clean_captcha(self) -> None:
+        """Validate math captcha."""
+        if not self.fields["altcha"].required and not self.fields["captcha"].required:
+            return
+        if not self.mathcaptcha.validate(self.cleaned_data["captcha"]):
+            self.generate_captcha()
+            rotate_token(self.request)
+            raise forms.ValidationError(
+                # Translators: Shown on wrong answer to the mathematics-based CAPTCHA
+                gettext("That was not correct, please try again.")
+            )
+
+    def clean_altcha(self) -> None:
+        """Validate altcha."""
+        if not self.fields["altcha"].required:
+            return
+        payload = self.data.get("altcha", "")
+
+        # Validate payload
+        result = verify_solution(payload, settings.SECRET_KEY, check_expires=True)
+        if not result[0]:
+            LOGGER.error("Invalid altcha solution: %s", result[1:])
+            raise forms.ValidationError(gettext("Validation failed, please try again."))
+
+        # Manually guard against replay attacks
+        payload = json.loads(base64.b64decode(payload).decode())
+        # Use get to gracefully handle already solved challenges
+        if payload["challenge"] != self.request.session.get("captcha_challenge"):
+            LOGGER.error("Outdated altcha solution")
+            raise forms.ValidationError(gettext("Validation failed, please try again."))
+
+    def is_valid(self) -> bool:
+        result = super().is_valid()
+        if result:
+            self.cleanup_session()
+        elif self.fields["altcha"].required:
+            self.store_challenge()
+        return result
+
+    def cleanup_session(self) -> None:
+        self.request.session.pop("captcha", None)
+        self.request.session.pop("captcha_challenge", None)
+
+
+class ContactForm(CaptchaForm):
     """Form for contacting site owners."""
 
     subject = forms.CharField(
@@ -410,15 +603,24 @@ class ContactForm(forms.Form):
         label=gettext_lazy("Message"),
         required=True,
         help_text=gettext_lazy(
-            "Please contact us in English, otherwise we might "
-            "be unable to process your request."
+            "Please contact us in English. Otherwise, we might "
+            "not process your request."
         ),
         max_length=2000,
         widget=forms.Textarea,
     )
 
+    field_order = [  # noqa: RUF012
+        "subject",
+        "name",
+        "email",
+        "message",
+        "captcha",
+        "altcha",
+    ]
 
-class EmailForm(UniqueEmailMixin):
+
+class EmailForm(CaptchaForm, UniqueEmailMixin):
     """Email change form."""
 
     required_css_class = "required"
@@ -426,8 +628,14 @@ class EmailForm(UniqueEmailMixin):
 
     email = EmailField(
         label=gettext_lazy("E-mail"),
-        help_text=gettext_lazy("E-mail with a confirmation link will be sent here."),
+        help_text=gettext_lazy("An e-mail with a confirmation link will be sent here."),
     )
+
+    field_order = [  # noqa: RUF012
+        "email",
+        "captcha",
+        "altcha",
+    ]
 
 
 class RegistrationForm(EmailForm):
@@ -440,11 +648,25 @@ class RegistrationForm(EmailForm):
     # This has to be without underscore for social-auth
     fullname = FullNameField()
 
-    def __init__(self, request=None, *args, **kwargs) -> None:
+    def __init__(
+        self, request=None, data=None, initial=None, hide_captcha: bool = False
+    ) -> None:
         # The 'request' parameter is set for custom auth use by subclasses.
         # The form data comes in via the standard 'data' kwarg.
         self.request = request
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            request=request, data=data, initial=initial, hide_captcha=hide_captcha
+        )
+        self.helper = FormHelper(self)
+        self.helper.form_tag = False
+        self.helper.layout = Layout(
+            "email",
+            "username",
+            "fullname",
+            "captcha",
+            "altcha",
+            ContextDiv(template="accounts/register-password.html"),
+        )
 
     def clean(self):
         if not check_rate_limit("registration", self.request):
@@ -478,7 +700,8 @@ class SetPasswordForm(DjangoSetPasswordForm):
     )
 
     @transaction.atomic
-    def save(self, request, delete_session=False) -> None:
+    # pylint: disable-next=arguments-renamed
+    def save(self, request: AuthenticatedHttpRequest, delete_session=False) -> None:
         AuditLog.objects.create(
             self.user,
             request,
@@ -504,65 +727,8 @@ class SetPasswordForm(DjangoSetPasswordForm):
         messages.success(request, gettext("Your password has been changed."))
 
 
-class CaptchaForm(forms.Form):
-    captcha = forms.IntegerField(required=True)
-
-    def __init__(self, request, form=None, data=None, *args, **kwargs) -> None:
-        super().__init__(data, *args, **kwargs)
-        self.fresh = False
-        self.request = request
-        self.form = form
-
-        if data is None or "captcha" not in request.session:
-            self.generate_captcha()
-            self.fresh = True
-        else:
-            self.mathcaptcha = MathCaptcha.unserialize(request.session["captcha"])
-            self.set_label()
-
-    def set_label(self) -> None:
-        # Set correct label
-        self.fields["captcha"].label = (
-            pgettext(
-                "Question for a mathematics-based CAPTCHA, "
-                "the %s is an arithmetic problem",
-                "What is %s?",
-            )
-            % self.mathcaptcha.display
-        )
-        if self.is_bound:
-            self["captcha"].label = cast(str, self.fields["captcha"].label)
-
-    def generate_captcha(self) -> None:
-        self.mathcaptcha = MathCaptcha()
-        self.request.session["captcha"] = self.mathcaptcha.serialize()
-        self.set_label()
-
-    def clean_captcha(self) -> None:
-        """Validate CAPTCHA."""
-        if self.fresh or not self.mathcaptcha.validate(self.cleaned_data["captcha"]):
-            self.generate_captcha()
-            rotate_token(self.request)
-            raise forms.ValidationError(
-                # Translators: Shown on wrong answer to the mathematics-based CAPTCHA
-                gettext("That was not correct, please try again.")
-            )
-
-        mail = self.form.cleaned_data["email"] if self.form.is_valid() else "NONE"
-
-        LOGGER.info(
-            "Correct CAPTCHA for %s (%s = %s)",
-            mail,
-            self.mathcaptcha.question,
-            self.cleaned_data["captcha"],
-        )
-
-    def cleanup_session(self, request) -> None:
-        del request.session["captcha"]
-
-
 class EmptyConfirmForm(forms.Form):
-    def __init__(self, request, *args, **kwargs) -> None:
+    def __init__(self, request: AuthenticatedHttpRequest, *args, **kwargs) -> None:
         self.request = request
         self.user = request.user
         if "user" in kwargs:
@@ -573,7 +739,7 @@ class EmptyConfirmForm(forms.Form):
 class PasswordConfirmForm(EmptyConfirmForm):
     password = PasswordField(
         label=gettext_lazy("Current password"),
-        help_text=gettext_lazy("Leave empty if you have not yet set a password."),
+        help_text=gettext_lazy("Leave empty if you have not set a password yet."),
         required=False,
     )
 
@@ -594,9 +760,8 @@ class PasswordConfirmForm(EmptyConfirmForm):
 class ResetForm(EmailForm):
     def clean_email(self):
         if self.cleaned_data["email"] == "noreply@weblate.org":
-            raise forms.ValidationError(
-                "No password reset for deleted or anonymous user."
-            )
+            msg = "No password reset for deleted or anonymous user."
+            raise forms.ValidationError(msg)
         return super().clean_email()
 
 
@@ -604,7 +769,7 @@ class LoginForm(forms.Form):
     username = forms.CharField(max_length=254, label=gettext_lazy("Username or e-mail"))
     password = PasswordField(label=gettext_lazy("Password"))
 
-    error_messages = {
+    error_messages = {  # noqa: RUF012
         "invalid_login": gettext_lazy(
             "Please enter the correct username and password."
         ),
@@ -639,14 +804,14 @@ class LoginForm(forms.Form):
                     )
                     % lockout_period
                 )
-            self.user_cache = cast(
-                User | None,
+            user = self.user_cache = cast(
+                "User | None",
                 authenticate(self.request, username=username, password=password),
             )
-            if self.user_cache is None:
-                for user in try_get_user(username, True):
+            if user is None:
+                for failed_user in try_get_user(username, True):
                     audit = AuditLog.objects.create(
-                        user,
+                        failed_user,
                         self.request,
                         "failed-auth",
                         method="password",
@@ -657,14 +822,14 @@ class LoginForm(forms.Form):
                 raise forms.ValidationError(
                     self.error_messages["invalid_login"], code="invalid_login"
                 )
-            if not self.user_cache.is_active or self.user_cache.is_bot:
+            if not user.is_active or user.is_bot:
                 raise forms.ValidationError(
                     self.error_messages["inactive"], code="inactive"
                 )
             AuditLog.objects.create(
-                self.user_cache, self.request, "login", method="password", name=username
+                user, self.request, "login", method="password", name=username
             )
-            adjust_session_expiry(self.request)
+            adjust_session_expiry(request=self.request, user=user)
             reset_rate_limit("login", self.request)
         return self.cleaned_data
 
@@ -684,7 +849,7 @@ class AdminLoginForm(LoginForm):
 
 class NotificationForm(forms.Form):
     scope = forms.ChoiceField(
-        choices=SCOPE_CHOICES, widget=forms.HiddenInput, required=True
+        choices=NotificationScope.choices, widget=forms.HiddenInput, required=True
     )
     project = forms.ModelChoiceField(
         widget=forms.HiddenInput, queryset=Project.objects.none(), required=False
@@ -719,8 +884,9 @@ class NotificationForm(forms.Form):
         self.helper = FormHelper(self)
         self.helper.disable_csrf = True
         self.helper.form_tag = False
-        self.helper.label_class = "col-md-3"
-        self.helper.field_class = "col-md-9"
+        self.helper.label_class = "col-3"
+        self.helper.field_class = "col-9"
+        self.helper.form_class = "form-horizontal"
         self.helper.layout = Layout(
             "scope",
             "project",
@@ -769,7 +935,7 @@ class NotificationForm(forms.Form):
 
     @cached_property
     def form_scope(self):
-        return int(self.get_form_param("scope", SCOPE_WATCHED))
+        return int(self.get_form_param("scope", NotificationScope.SCOPE_WATCHED))
 
     @cached_property
     def form_project(self):
@@ -781,34 +947,34 @@ class NotificationForm(forms.Form):
 
     def get_name(self):
         scope = self.form_scope
-        if scope == SCOPE_ALL:
+        if scope == NotificationScope.SCOPE_ALL:
             return gettext("Other projects")
-        if scope == SCOPE_WATCHED:
+        if scope == NotificationScope.SCOPE_WATCHED:
             return gettext("Watched projects")
-        if scope == SCOPE_ADMIN:
+        if scope == NotificationScope.SCOPE_ADMIN:
             return gettext("Managed projects")
-        if scope == SCOPE_PROJECT:
+        if scope == NotificationScope.SCOPE_PROJECT:
             return gettext("Project: {}").format(self.form_project)
         return gettext("Component: {}").format(self.form_component)
 
     def get_help_component(self):
         scope = self.form_scope
-        if scope == SCOPE_ALL:
+        if scope == NotificationScope.SCOPE_ALL:
             return gettext(
                 "You will receive a notification for every such event"
                 " in non-watched projects."
             )
-        if scope == SCOPE_WATCHED:
+        if scope == NotificationScope.SCOPE_WATCHED:
             return gettext(
                 "You will receive a notification for every such event"
                 " in your watched projects."
             )
-        if scope == SCOPE_ADMIN:
+        if scope == NotificationScope.SCOPE_ADMIN:
             return gettext(
                 "You will receive a notification for every such event"
                 " in projects where you have admin permissions."
             )
-        if scope == SCOPE_PROJECT:
+        if scope == NotificationScope.SCOPE_PROJECT:
             return gettext(
                 "You will receive a notification for every such event in %(project)s."
             ) % {"project": self.form_project}
@@ -818,22 +984,22 @@ class NotificationForm(forms.Form):
 
     def get_help_translation(self):
         scope = self.form_scope
-        if scope == SCOPE_ALL:
+        if scope == NotificationScope.SCOPE_ALL:
             return gettext(
                 "You will only receive these notifications for your translated "
                 "languages in non-watched projects."
             )
-        if scope == SCOPE_WATCHED:
+        if scope == NotificationScope.SCOPE_WATCHED:
             return gettext(
                 "You will only receive these notifications for your translated "
                 "languages in your watched projects."
             )
-        if scope == SCOPE_ADMIN:
+        if scope == NotificationScope.SCOPE_ADMIN:
             return gettext(
                 "You will only receive these notifications for your translated "
                 "languages in projects where you have admin permissions."
             )
-        if scope == SCOPE_PROJECT:
+        if scope == NotificationScope.SCOPE_PROJECT:
             return gettext(
                 "You will only receive these notifications for your"
                 " translated languages in %(project)s."
@@ -854,11 +1020,7 @@ class NotificationForm(forms.Form):
         for field, notification_cls in self.notification_fields():
             frequency = self.cleaned_data[field]
             # We do not store removed field, defaults or disabled default subscriptions
-            if (
-                frequency == ""  # noqa: PLC1901
-                or frequency == "-1"
-                or (frequency == "0" and not self.show_default)
-            ):
+            if frequency in {"", "-1"} or (frequency == "0" and not self.show_default):
                 continue
             # Create/Get from database
             subscription, _created = self.user.subscription_set.update_or_create(
@@ -877,7 +1039,7 @@ class UserSearchForm(forms.Form):
     q = QueryField(parser="user")
     sort_by = forms.CharField(required=False, widget=forms.HiddenInput)
 
-    sort_choices = {
+    sort_choices: ClassVar[dict[str, StrOrPromise]] = {
         "username": gettext_lazy("Username"),
         "full_name": gettext_lazy("Full name"),
         "date_joined": gettext_lazy("Date joined"),
@@ -907,7 +1069,9 @@ class UserSearchForm(forms.Form):
         sort_by = self.cleaned_data.get("sort_by")
         if sort_by:
             if sort_by not in self.sort_values:
-                raise forms.ValidationError(gettext("Chosen sorting is not supported."))
+                raise forms.ValidationError(
+                    gettext("The chosen sorting is not supported.")
+                )
             return sort_by
         return None
 
@@ -932,7 +1096,7 @@ class GroupAddForm(forms.Form):
         super().__init__(*args, **kwargs)
         self.helper = FormHelper(self)
         self.helper.form_class = "form-inline"
-        self.helper.field_template = "bootstrap3/layout/inline_field.html"
+        self.helper.field_template = "bootstrap5/layout/inline_field.html"
         self.helper.layout = Layout(
             "add_group",
             Submit("add_group_button", gettext("Add team")),
@@ -941,3 +1105,186 @@ class GroupAddForm(forms.Form):
 
 class GroupRemoveForm(forms.Form):
     remove_group = forms.ModelChoiceField(queryset=Group.objects.all(), required=True)
+
+
+class TOTPDeviceForm(forms.Form):
+    """Based on two_factor.forms.TOTPDeviceForm."""
+
+    name = forms.CharField(
+        # Must match django_otp.models.Device.name
+        max_length=64,
+        label=gettext_lazy("Name your authentication app"),
+    )
+    token = forms.IntegerField(
+        label=gettext_lazy("Verify the code from the app"),
+        min_value=0,
+        max_value=999999,
+    )
+
+    token.widget.attrs.update(
+        {
+            "autofocus": "autofocus",
+            "inputmode": "numeric",
+            "autocomplete": "one-time-code",
+        }
+    )
+
+    remove_previous = forms.BooleanField(
+        required=False,
+        initial=True,
+        label=gettext_lazy("Discard previously configured authentication apps"),
+        help_text=format_html(
+            "{}<br>{}",
+            gettext_lazy(
+                "All previously configured authentication apps will be discarded upon verification of the new app."
+            ),
+            gettext(
+                "Other two-factor methods (such as WebAuthn and security keys) won't be affected."
+            ),
+        ),
+    )
+
+    error_messages = {  # noqa: RUF012
+        "invalid_token": gettext_lazy("The entered token is not valid."),
+    }
+
+    def __init__(self, key, user, metadata=None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.key = key
+        self.tolerance = 1
+        self.t0 = 0
+        self.step = 30
+        self.drift = 0
+        self.digits = 6
+        self.user = user
+        self.metadata = metadata or {}
+        if not self.user.totpdevice_set.exists():
+            self.fields["remove_previous"].widget = forms.HiddenInput()
+
+    @property
+    def bin_key(self):
+        """The secret key as a binary string."""
+        return unhexlify(self.key.encode())
+
+    def clean_token(self):
+        token = self.cleaned_data.get("token")
+        validated = False
+        t0s = [self.t0]
+        key = self.bin_key
+        if "valid_t0" in self.metadata:
+            t0s.append(int(time()) - self.metadata["valid_t0"])
+        for t0 in t0s:
+            for offset in range(-self.tolerance, self.tolerance + 1):
+                if totp(key, self.step, t0, self.digits, self.drift + offset) == token:
+                    self.drift = offset
+                    self.metadata["valid_t0"] = int(time()) - t0
+                    validated = True
+        if not validated:
+            raise forms.ValidationError(self.error_messages["invalid_token"])
+        return token
+
+    def save(self):
+        return TOTPDevice.objects.create(
+            user=self.user,
+            key=self.key,
+            tolerance=self.tolerance,
+            t0=self.t0,
+            step=self.step,
+            drift=self.drift,
+            digits=self.digits,
+            name=self.cleaned_data["name"],
+        )
+
+
+class WebAuthnTokenForm(forms.Form):
+    show_submit = False
+
+    def __init__(self, user, request=None, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.user = user
+        self.request = request
+
+        self.helper = FormHelper(self)
+        self.helper.form_tag = False
+        self.helper.layout = Layout(
+            ContextDiv(template="accounts/webauthn.html", context={"request": request}),
+        )
+
+
+class OTPTokenForm(DjangoOTPTokenForm):
+    show_submit = True
+    otp_token = forms.CharField(
+        label=gettext("Recovery token"),
+        help_text=gettext(
+            "Recovery codes can only be used once. Remember to mark used ones as expired."
+        ),
+    )
+    device_class: type[Device] = StaticDevice
+
+    def __init__(self, user, request=None, *args, **kwargs) -> None:
+        super().__init__(user, request, *args, **kwargs)
+        self.request = request
+        self.fields["otp_device"].widget = forms.HiddenInput()
+        self.fields["otp_device"].required = False
+        self.fields["otp_challenge"].widget = forms.HiddenInput()
+        self.fields["otp_token"].required = True
+        self.fields["otp_token"].widget.attrs["autofocus"] = "autofocus"
+        self.fields["otp_token"].widget.attrs["autocomplete"] = "off"
+
+        self.helper = FormHelper(self)
+        self.helper.form_tag = False
+
+    def _chosen_device(self, user) -> None:
+        return None
+
+    @staticmethod
+    def device_choices(user):  # noqa: ARG004
+        # Not needed as we do not support challenge/response devices
+        # Also this is incompatible with WebAuthn
+        return []
+
+    def _verify_token(
+        self, user: User, token: str, device: Device | None = None
+    ) -> Device:
+        if device is not None:
+            return super()._verify_token(user, token, device)
+
+        # We want to list only correct device classes, not all as django-otp does in match_token
+        with transaction.atomic():
+            device_set = self.device_class.objects.devices_for_user(
+                user, confirmed=True
+            )
+            result = None
+            for current_device in device_set.select_for_update():
+                if current_device.verify_token(token):
+                    result = current_device
+                    break
+
+        if result is None:
+            otp_verification_failed.send(
+                sender=self.__class__,
+                user=user,
+            )
+            raise forms.ValidationError(
+                self.otp_error_messages["invalid_token"], code="invalid_token"
+            )
+        return result
+
+
+class TOTPTokenForm(OTPTokenForm):
+    otp_token = forms.IntegerField(
+        label=gettext_lazy("Enter the code from the app"),
+        min_value=0,
+        max_value=999999,
+    )
+    device_class: type[Device] = TOTPDevice
+
+    def __init__(self, user, request=None, *args, **kwargs) -> None:
+        super().__init__(user, request, *args, **kwargs)
+        self.fields["otp_token"].widget.attrs.update(
+            {
+                "inputmode": "numeric",
+                "autocomplete": "one-time-code",
+            }
+        )

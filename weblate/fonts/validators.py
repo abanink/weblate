@@ -15,8 +15,10 @@ def validate_font(value):
     ext = os.path.splitext(value.name)[1]
     if ext.lower() not in {".ttf", ".otf"}:
         raise ValidationError(gettext("Unsupported file format."))
+    if not value:
+        return value
     try:
         get_font_name(value)
-    except OSError:
-        raise ValidationError(gettext("Unsupported file format."))
+    except OSError as error:
+        raise ValidationError(gettext("Unsupported file format.")) from error
     return value

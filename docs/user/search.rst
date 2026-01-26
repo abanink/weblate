@@ -1,7 +1,7 @@
-.. _Searching :
-
 Searching
 =========
+
+.. _search-strings:
 
 Searching for strings
 +++++++++++++++++++++
@@ -45,35 +45,58 @@ Fields
 ``added:DATETIME``
    Timestamp for when the string was added to Weblate.
 ``state:TEXT``
-   Search for string states (``approved``, ``translated``, ``needs-editing``, ``empty``, ``read-only``), supports :ref:`search-operators`.
+   Search for string states (``approved``, ``translated``, ``needs-editing``, ``empty``, ``read-only``).
+
+   This field also supports :ref:`search-operators`, so searching for completed strings can be performed as ``state:>=translated``, searching for strings needing translation as ``state:<translated``.
+``source_state:TEXT``
+   Search for source string states, see above for more info.
 ``pending:BOOLEAN``
    String pending for flushing to VCS.
 ``has:TEXT``
-   Search for string having attributes - ``plural``, ``context``, ``suggestion``, ``comment``, ``check``, ``dismissed-check``, ``translation``, ``variant``, ``screenshot``, ``flags``, ``explanation``, ``glossary``, ``note``, ``label``.
+   Search for string having attributes - ``plural``, ``context``, ``suggestion``, ``comment``, ``check``, ``dismissed-check``, ``translation``, ``variant``, ``screenshot``, ``flags``, ``explanation``, ``glossary``, ``note``, ``label``, ``location``.
 ``is:TEXT``
-   Search for pending translations (``pending``).
-   Can also search for all string states (``approved``, ``translated``, ``untranslated``, ``needs-editing``, ``read-only``).
+   Filters string on a condition:
+
+   ``read-only`` or ``readonly``
+      Read-only strings, same as ``state:read-only``.
+   ``approved``
+      Approved strings, same as ``state:approved``.
+   ``needs-editing`` or ``fuzzy``
+      Needing editing strings, same as ``state:needs-editing``.
+   ``translated``
+      Translated strings, same as ``state:>translated``.
+   ``untranslated``
+      Untranslated strings, same as ``state:<translated``.
+   ``pending``
+      Pending strings not yet committed to the file (see :ref:`lazy-commit`).
+   ``automatically-translated``
+      Strings that were translated automatically (see :ref:`auto-translation`).
 ``language:TEXT``
    String target language.
 ``component:TEXT``
    Component slug or name case-insensitive search, see :ref:`component-slug` and :ref:`component-name`.
 ``project:TEXT``
    Project slug, see :ref:`project-slug`.
+``path:TEXT``
+   Path to the object to limit searching inside component, category, project, or translation.
 ``changed_by:TEXT``
    String was changed by author with given username.
 ``changed:DATETIME``
-   String content was changed on date, supports :ref:`search-operators`.
+   String content was changed on date, supports :ref:`search-operators` and :ref:`date-search`.
 ``change_time:DATETIME``
-   String was changed on date, supports :ref:`search-operators`, unlike
-   ``changed`` this includes event which don't change content and you can apply
-   custom action filtering using ``change_action``.
+   String was changed on date, supports :ref:`search-operators` and :ref:`date-search`.
+
+   Unlike ``changed`` this includes event which don't change content and you
+   can apply custom action filtering using ``change_action``.
 ``change_action:TEXT``
    Filters on change action, useful together with ``change_time``. Accepts
    English name of the change action, either quoted and with spaces or
    lowercase and spaces replaced by a hyphen. See :ref:`search-changes` for
    examples.
 ``source_changed:DATETIME``
-   Source string was changed on date, supports :ref:`search-operators`.
+   Source string was last changed on date, supports :ref:`search-operators` and :ref:`date-search`.
+``last_changed:DATETIME``
+   The string was last changed on date, supports :ref:`search-operators` and :ref:`date-search`.
 ``check:TEXT``
    String has failing check, see :doc:`/user/checks` for check identifiers.
 ``dismissed_check:TEXT``
@@ -94,12 +117,32 @@ Fields
    Search in labels.
 ``screenshot:TEXT``
    Search in screenshots.
+``labels_count:NUMBER``
+   Filter by count of labels
+
+.. _search-boolean:
 
 Boolean operators
 -----------------
 
 You can combine lookups using ``AND``, ``OR``, ``NOT`` and parentheses to
-form complex queries. For example: ``state:translated AND (source:hello OR source:bar)``
+form complex queries.
+
+The ``NOT`` operator has higher precedence than the ``AND`` operator; the
+``AND`` operator has higher precedence than the ``OR`` operator. You can add
+parenthesis to define a precedence of your own.
+
+Omitting the operator will make the query behave like the ``AND`` operator was
+used.
+
+.. list-table:: Equivalent expressions
+
+   * - ``(state:translated AND source:hello) OR source:bar``
+     - Parenthesized expression to clearly show the precedence.
+   * - ``state:translated AND source:hello OR source:bar``
+     - The ``AND`` operator has higher precedence than the ``OR`` operator.
+   * - ``state:translated source:hello OR source:bar``
+     - Query using an implicit ``AND`` operator.
 
 .. _search-operators:
 
@@ -110,12 +153,40 @@ You can specify operators, ranges or partial lookups for date or numeric searche
 
 ``state:>=translated``
    State is ``translated`` or better (``approved``).
-``changed:2019``
-   Changed in year 2019.
 ``changed:[2019-03-01 to 2019-04-01]``
-   Changed between two given dates.
+   Changed between two given dates (inclusive).
 ``position:[10 to 100]``
    Strings with position between 10 and 100 (inclusive).
+
+.. _date-search:
+
+Searching for DATETIME fields
+-----------------------------
+
+Timestamp searching supports multiple ways to specify the value. It supports
+wide range of ways to specify date and time.
+
+* ISO 8601 formatted like :samp:`2025-09-08T12:16:55.336146+00:00`.
+* English written date and time like :samp:`July 4, 2013 PST`.
+* English adverbs of time like :samp:`yesterday`, :samp:`last month`, and :samp:`2 days ago`.
+
+Whenever only the date is specified, it is always used as inclusive and covers
+that date. Specify the exact timestamp if you need to override this behavior.
+
+Examples:
+
+``changed:>=2019-03-01``
+   Changed on 1st March 2019 and later (inclusive).
+``changed:>="2 weeks ago"``
+   Changed 2 weeks ago from the current date and time.
+``changed:>=yesterday``
+   Changed starting yesterday.
+``changed:2019``
+   Changed in the year 2019.
+``changed:[2019-03-01 to 2019-04-01]``
+   Changed between two given dates (inclusive).
+``changed:[20_days_ago to yesterday]``
+   Changed between two relative dates (inclusive).
 
 Exact operators
 ---------------
@@ -148,6 +219,16 @@ Anywhere text is accepted you can also specify a regular expression as ``r"regex
 For example, to search for all source strings which contain any digit between 2
 and 5, use ``source:r"[2-5]"``.
 
+.. hint::
+
+   The regular expressions are evaluated by the database backend and might use
+   different extensions, please consult the database documentation below for
+   more details.
+
+   * `PostgreSQL Regular Expressions Details <https://www.postgresql.org/docs/current/functions-matching.html#POSIX-SYNTAX-DETAILS>`_ (this is the default database engine for Weblate)
+   * `MariaDB Regular Expressions Overview <https://mariadb.com/docs/server/reference/sql-functions/string-functions/regular-expressions-functions/regular-expressions-overview>`_
+   * `MySQL Regular Expressions <https://dev.mysql.com/doc/refman/9.2/en/regexp.html>`_
+
 Predefined queries
 ------------------
 
@@ -162,6 +243,7 @@ There are many options to order the strings according to your needs:
 
 .. image:: /screenshots/query-sort.webp
 
+.. _search-users:
 
 Searching for users
 +++++++++++++++++++
@@ -179,9 +261,17 @@ The user browsing has similar search abilities:
 ``joined:DATETIME``
    String content was changed on date, supports :ref:`search-operators`.
 ``translates:TEXT``
-   User has contributed to a given language in the past month.
+   User has contributed to a given language.
+
+   You might want to limit contribution time by ``change_time``, for example ``change_time:>"90 days ago"``.
 ``contributes:TEXT``
-   User has contributed to a given project or component in the past month.
+   User has contributed to a given project or component.
+
+   You might want to limit contribution time by ``change_time``, for example ``change_time:>"90 days ago"``.
+``change_time:DATETIME``
+   Same as in :ref:`search-strings`.
+``change_action:TEXT``
+   Same as in :ref:`search-strings`.
 
 Additional lookups are available in the :ref:`management-interface`:
 

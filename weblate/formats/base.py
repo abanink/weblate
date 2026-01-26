@@ -9,25 +9,31 @@ from __future__ import annotations
 import os
 import tempfile
 from copy import copy
-from typing import TYPE_CHECKING, BinaryIO, TypeAlias
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, BinaryIO, ClassVar
 
+from django.http import HttpResponse
 from django.utils.functional import cached_property
 from django.utils.translation import gettext
+from translate.misc.multistring import multistring
 from translate.storage.base import TranslationStore as TranslateToolkitStore
 from translate.storage.base import TranslationUnit as TranslateToolkitUnit
 from weblate_language_data.countries import DEFAULT_LANGS
 
+from weblate.checks.flags import Flags
 from weblate.trans.util import get_string, join_plural, split_plural
 from weblate.utils.errors import add_breadcrumb
 from weblate.utils.hash import calculate_hash
+from weblate.utils.site import get_site_url
 from weblate.utils.state import STATE_EMPTY, STATE_TRANSLATED
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
 
     from django_stubs_ext import StrOrPromise
 
-    from weblate.trans.models import Unit
+    from weblate.trans.file_format_params import FileFormatParams
+    from weblate.trans.models import Component, Translation, Unit
 
 
 EXPAND_LANGS = {code[:2]: f"{code[:2]}_{code[3:].upper()}" for code in DEFAULT_LANGS}
@@ -105,7 +111,8 @@ class UnitNotFoundError(Exception):
         args = list(self.args)
         if "" in args:
             args.remove("")
-        return "Unit not found: {}".format(", ".join(args))
+        args_str = ", ".join(args)
+        return f"Unit not found: {args_str}"
 
 
 class UpdateError(Exception):
@@ -115,18 +122,22 @@ class UpdateError(Exception):
         self.output = output
 
 
+class MissingTemplateError(TypeError):
+    pass
+
+
 class BaseItem:
     pass
 
 
-InnerUnit: TypeAlias = TranslateToolkitUnit | BaseItem
+type InnerUnit = TranslateToolkitUnit | BaseItem
 
 
 class BaseStore:
     units: Sequence[InnerUnit]
 
 
-InnerStore: TypeAlias = TranslateToolkitStore | BaseStore
+type InnerStore = TranslateToolkitStore | BaseStore
 
 
 class TranslationUnit:
@@ -138,14 +149,15 @@ class TranslationUnit:
 
     id_hash_with_source: bool = False
     template: InnerUnit | None
-    unit: InnerUnit
+    unit: InnerUnit | None
     parent: TranslationFormat
     mainunit: InnerUnit
+    empty_unit_ok: ClassVar[bool] = False
 
     def __init__(
         self,
         parent: TranslationFormat,
-        unit: InnerUnit,
+        unit: InnerUnit | None,
         template: InnerUnit | None = None,
     ) -> None:
         """Create wrapper object."""
@@ -154,6 +166,10 @@ class TranslationUnit:
         self.parent = parent
         if template is not None:
             self.mainunit = template
+        elif unit is None and not self.empty_unit_ok:
+            # MultiUnit is just wrapper around more unit objects, does not have
+            # actual main unit
+            raise MissingTemplateError
         else:
             self.mainunit = unit
 
@@ -162,15 +178,39 @@ class TranslationUnit:
         if "target" in self.__dict__:
             del self.__dict__["target"]
 
+    def invalidate_all_caches(self) -> None:
+        """Invalidate attributes cache."""
+        for attr in (
+            "context",
+            "source",
+            "locations",
+            "flags",
+            "notes",
+            "explanation",
+            "source_explanation",
+            "previous_source",
+        ):
+            if attr in self.__dict__:
+                del self.__dict__[attr]
+        self._invalidate_target()
+
     @cached_property
     def locations(self) -> str:
         """Return comma separated list of locations."""
         return ""
 
     @cached_property
-    def flags(self) -> str:
+    def flags(self) -> Flags:
         """Return flags or typecomments from units."""
-        return ""
+        flags = Flags()
+        # add default flags based location extensions
+        for location in self.locations.split(","):
+            _, extension = os.path.splitext(location.split(":")[0].strip())
+            if extension == ".rst":
+                flags.merge("rst-text")
+            elif extension in {".md", ".markdown"}:
+                flags.merge("md-text")
+        return flags
 
     @cached_property
     def notes(self) -> str:
@@ -251,8 +291,12 @@ class TranslationUnit:
         return True
 
     def is_readonly(self) -> bool:
-        """Check whether unit is read only."""
+        """Check whether unit is read-only."""
         return False
+
+    def is_automatically_translated(self, fallback: bool = False) -> bool:
+        """Check whether unit is automatically translated."""
+        return fallback
 
     def set_target(self, target: str | list[str]) -> None:
         """Set translation unit target."""
@@ -268,10 +312,15 @@ class TranslationUnit:
         """Set fuzzy /approved flag on translated unit."""
         raise NotImplementedError
 
+    def set_automatically_translated(self, value: bool) -> None:
+        return
+
     def has_unit(self) -> bool:
         return self.unit is not None
 
     def clone_template(self) -> None:
+        if self.template is None:
+            raise MissingTemplateError
         self.mainunit = self.unit = copy(self.template)
         self._invalidate_target()
 
@@ -294,7 +343,7 @@ class TranslationFormat:
     language_format: str = "posix"
     simple_filename: bool = True
     new_translation: str | bytes | None = None
-    autoaddon: dict[str, dict[str, str]] = {}
+    autoaddon: ClassVar[dict[str, dict[str, Any]]] = {}
     create_empty_bilingual: bool = False
     bilingual_class: type[TranslationFormat] | None = None
     create_style = "create"
@@ -312,16 +361,20 @@ class TranslationFormat:
 
     def __init__(
         self,
-        storefile,
-        template_store=None,
+        storefile: Path | str | BinaryIO,
+        template_store: TranslationFormat | None = None,
         language_code: str | None = None,
         source_language: str | None = None,
         is_template: bool = False,
         existing_units: list[Unit] | None = None,
+        file_format_params: FileFormatParams | None = None,
     ) -> None:
         """Create file format object, wrapping up translate-toolkit's store."""
+        if isinstance(storefile, Path):
+            storefile = str(storefile.as_posix())
         if not isinstance(storefile, str) and not hasattr(storefile, "mode"):
-            storefile.mode = "r"
+            # This is BinaryIO like but without a mode
+            storefile.mode = "r"  # type: ignore[misc]
 
         self.storefile = storefile
         self.language_code = language_code
@@ -332,12 +385,12 @@ class TranslationFormat:
         self.existing_units = [] if existing_units is None else existing_units
 
         # Load store
+        self.file_format_params = file_format_params or {}
         self.store = self.load(storefile, template_store)
 
+        filename = getattr(storefile, "filename", storefile)
         self.add_breadcrumb(
-            "Loaded translation file {}".format(
-                getattr(storefile, "filename", storefile)
-            ),
+            f"Loaded translation file {filename}",
             template_store=str(template_store),
             is_template=is_template,
         )
@@ -363,7 +416,9 @@ class TranslationFormat:
         return [self.storefile.name]
 
     def load(
-        self, storefile: str | BinaryIO, template_store: InnerStore | None
+        self,
+        storefile: str | BinaryIO,
+        template_store: TranslationFormat | None,
     ) -> InnerStore:
         raise NotImplementedError
 
@@ -413,8 +468,8 @@ class TranslationFormat:
         id_hash = self._calculate_string_hash(context, source)
         try:
             result = self._unit_index[id_hash]
-        except KeyError:
-            raise UnitNotFoundError(context, source)
+        except KeyError as error:
+            raise UnitNotFoundError(context, source) from error
 
         add = False
         if not result.has_unit():
@@ -424,7 +479,7 @@ class TranslationFormat:
         return result, add
 
     @cached_property
-    def _unit_index(self):
+    def _unit_index(self) -> dict[int, TranslationUnit]:
         """Context and source based index for units."""
         return {unit.id_hash: unit for unit in self.content_units}
 
@@ -440,8 +495,8 @@ class TranslationFormat:
         id_hash = self._calculate_string_hash(context, source)
         try:
             return (self._unit_index[id_hash], False)
-        except KeyError:
-            raise UnitNotFoundError(context, source)
+        except KeyError as error:
+            raise UnitNotFoundError(context, source) from error
 
     def find_unit(self, context: str, source: str) -> tuple[TranslationUnit, bool]:
         """
@@ -456,7 +511,7 @@ class TranslationFormat:
     def ensure_index(self):
         return self._unit_index
 
-    def add_unit(self, ttkit_unit) -> None:
+    def add_unit(self, unit: TranslationUnit) -> None:
         """Add new unit to underlying store."""
         raise NotImplementedError
 
@@ -465,14 +520,15 @@ class TranslationFormat:
         return
 
     @staticmethod
-    def save_atomic(filename, callback) -> None:
+    def save_atomic(filename: str, callback: Callable[[BinaryIO], None]) -> None:
         dirname, basename = os.path.split(filename)
         if dirname and not os.path.exists(dirname):
             os.makedirs(dirname)
-        temp = tempfile.NamedTemporaryFile(prefix=basename, dir=dirname, delete=False)
         try:
-            callback(temp)
-            temp.close()
+            with tempfile.NamedTemporaryFile(
+                prefix=basename, dir=dirname, delete=False
+            ) as temp:
+                callback(temp)
             os.replace(temp.name, filename)
         finally:
             if os.path.exists(temp.name):
@@ -485,7 +541,7 @@ class TranslationFormat:
     @property
     def all_store_units(self) -> list[InnerUnit]:
         """Wrapper for all store units for possible filtering."""
-        return self.store.units
+        return self.store.units  # type: ignore[return-value]
 
     @cached_property
     def template_units(self) -> list[TranslationUnit]:
@@ -502,6 +558,8 @@ class TranslationFormat:
         )
 
     def _get_all_monolingual_units(self) -> list[TranslationUnit]:
+        if self.template_store is None:
+            raise MissingTemplateError
         return [
             self._build_monolingual_unit(unit)
             for unit in self.template_store.template_units
@@ -532,6 +590,7 @@ class TranslationFormat:
         """Check whether store seems to be valid."""
         for unit in self.content_units:
             # Just ensure that id_hash can be calculated
+            # pylint: disable-next=pointless-statement
             unit.id_hash  # noqa: B018
         return True
 
@@ -540,8 +599,9 @@ class TranslationFormat:
         cls,
         base: str,
         monolingual: bool,
-        errors: list | None = None,
+        errors: list[Exception] | None = None,
         fast: bool = False,
+        file_format_params: FileFormatParams | None = None,
     ) -> bool:
         """Check whether base is valid."""
         raise NotImplementedError
@@ -602,7 +662,8 @@ class TranslationFormat:
 
         # Handle variants
         if "_" in sanitized and len(sanitized.split("_")[1]) > 2:
-            return "b+{}".format(sanitized.replace("_", "+"))
+            variant_code = sanitized.replace("_", "+")
+            return f"b+{variant_code}"
 
         # Handle countries
         return sanitized.replace("_", "-r")
@@ -634,18 +695,23 @@ class TranslationFormat:
     @classmethod
     def add_language(
         cls,
-        filename: str,
+        filename: str | Path,
         language: str,
         base: str,
         callback: Callable | None = None,
+        file_format_params: FileFormatParams | None = None,
     ) -> None:
         """Add new language file."""
         # Create directory for a translation
-        dirname = os.path.dirname(filename)
-        if not os.path.exists(dirname):
-            os.makedirs(dirname)
+        if not isinstance(filename, Path):
+            filename = Path(filename)
+        dirname = filename.parent
+        if not dirname.exists():
+            dirname.mkdir(parents=True)
 
-        cls.create_new_file(filename, language, base, callback)
+        cls.create_new_file(
+            str(filename.as_posix()), language, base, callback, file_format_params
+        )
 
     @classmethod
     def get_new_file_content(cls) -> bytes:
@@ -658,11 +724,14 @@ class TranslationFormat:
         language: str,
         base: str,
         callback: Callable | None = None,
+        file_format_params: FileFormatParams | None = None,
     ) -> None:
         """Handle creation of new translation file."""
         raise NotImplementedError
 
-    def iterate_merge(self, fuzzy: str, only_translated: bool = True):
+    def iterate_merge(
+        self, fuzzy: str, only_translated: bool = True
+    ) -> Iterator[tuple[bool, TranslationUnit]]:
         """
         Iterate over units for merging.
 
@@ -690,7 +759,7 @@ class TranslationFormat:
         key: str,
         source: str | list[str],
         target: str | list[str] | None = None,
-    ) -> TranslationUnit:
+    ) -> InnerUnit:
         raise NotImplementedError
 
     def new_unit(
@@ -698,26 +767,20 @@ class TranslationFormat:
         key: str,
         source: str | list[str],
         target: str | list[str] | None = None,
-        skip_build: bool = False,
-    ):
+    ) -> TranslationUnit:
         """Add new unit to monolingual store."""
         # Create backend unit object
         unit = self.create_unit(key, source, target)
 
-        # Add it to the file
-        self.add_unit(unit)
-
-        if skip_build:
-            return None
-
         # Build an unit object
+        template_unit: InnerUnit | None
         if self.has_template:
             if self.is_template:
                 template_unit = unit
             else:
                 template_unit = self._find_unit_monolingual(
                     key, join_plural(source) if isinstance(source, list) else source
-                )[0]
+                )[0].unit
         else:
             template_unit = None
         result = self.unit_class(self, unit, template_unit)
@@ -733,22 +796,28 @@ class TranslationFormat:
         if "_template_index" in self.__dict__:
             self._template_index[mono_unit.id_hash] = mono_unit
 
+        # Add it to the file
+        self.add_unit(result)
+
+        # Invalidate all attributes
+        result.invalidate_all_caches()
+
         return result
 
     @classmethod
-    def get_class(cls):
+    def get_class(cls) -> InnerStore | None:
         raise NotImplementedError
 
     @classmethod
     def add_breadcrumb(cls, message, **data) -> None:
         add_breadcrumb(category="storage", message=message, **data)
 
-    def delete_unit(self, ttkit_unit) -> str | None:
+    def delete_unit(self, ttkit_unit: InnerUnit) -> str | None:
         raise NotImplementedError
 
     def cleanup_unused(self) -> list[str] | None:
         """Remove unused strings, returning list of additional changed files."""
-        if not self.template_store:
+        if not self.template_store or not self.can_delete_unit:
             return None
         existing = {template.context for template in self.template_store.template_units}
 
@@ -780,6 +849,8 @@ class TranslationFormat:
 
         Returning list of additional changed files.
         """
+        if not self.can_delete_unit:
+            return None
         changed = False
         needs_save = False
         result = []
@@ -803,7 +874,7 @@ class TranslationFormat:
         self._invalidate_units()
         return result
 
-    def remove_unit(self, ttkit_unit) -> list[str]:
+    def remove_unit(self, ttkit_unit: InnerUnit) -> list[str]:
         """High level wrapper for unit removal."""
         changed = False
 
@@ -829,6 +900,7 @@ class EmptyFormat(TranslationFormat):
     """For testing purposes."""
 
     @classmethod
+    # pylint: disable-next=arguments-differ
     def load(cls, storefile, template_store):  # noqa: ARG003
         return type("", (object,), {"units": []})()
 
@@ -845,13 +917,201 @@ class BilingualUpdateMixin:
 
     @classmethod
     def update_bilingual(cls, filename: str, template: str, **kwargs) -> None:
-        temp = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             prefix=filename, dir=os.path.dirname(filename), delete=False
-        )
-        temp.close()
+        ) as temp:
+            # We want file to be created only here
+            pass
         try:
             cls.do_bilingual_update(filename, temp.name, template, **kwargs)
             os.replace(temp.name, filename)
         finally:
             if os.path.exists(temp.name):
                 os.unlink(temp.name)
+
+    @classmethod
+    def get_msgmerge_args(cls, component: Component) -> list[str]:
+        """
+        Return list of arguments for update command.
+
+        This is used to pass additional arguments to update command.
+        """
+        params = component.file_format_params
+        args: list[str] = []
+        if not params.get("po_fuzzy_matching", True):
+            args.append("--no-fuzzy-matching")
+        if params.get("po_keep_previous", True):
+            args.append("--previous")
+        if params.get("po_no_location", False):
+            args.append("--no-location")
+        if int(params.get("po_line_wrap", 77)) != 77:
+            args.append("--no-wrap")
+        return args
+
+
+class BaseExporter:
+    content_type = "text/plain"
+    extension = "txt"
+    name = ""
+    verbose: StrOrPromise = ""
+    set_id = False
+    storage_class: ClassVar[type[TranslateToolkitStore]]
+
+    def __init__(
+        self,
+        project=None,
+        source_language=None,
+        language=None,
+        url=None,
+        translation=None,
+        fieldnames=None,
+    ) -> None:
+        self.translation = translation
+        if translation is not None:
+            self.plural = translation.plural
+            self.project = translation.component.project
+            self.source_language = translation.component.source_language
+            self.language = translation.language
+            self.url = get_site_url(translation.get_absolute_url())
+        else:
+            self.project = project
+            self.language = language
+            self.source_language = source_language
+            self.plural = language.plural
+            self.url = url
+        self.fieldnames = fieldnames
+
+    @staticmethod
+    def supports(translation: Translation) -> bool:  # noqa: ARG004
+        return True
+
+    @cached_property
+    def storage(self):
+        storage = self.get_storage()
+        storage.setsourcelanguage(self.source_language.code)
+        storage.settargetlanguage(self.language.code)
+        return storage
+
+    def string_filter(self, text):
+        return text
+
+    def handle_plurals(self, plurals):
+        if len(plurals) == 1:
+            return self.string_filter(plurals[0])
+        return multistring([self.string_filter(plural) for plural in plurals])
+
+    @classmethod
+    def get_identifier(cls):
+        return cls.name
+
+    def get_storage(self):
+        return self.storage_class()
+
+    def add(self, unit: TranslateToolkitUnit, word: str) -> None:
+        unit.target = word
+
+    def create_unit(self, source: str) -> TranslateToolkitUnit:
+        return self.storage.UnitClass(source)
+
+    def add_units(self, units: list[Unit]) -> None:
+        for unit in units:
+            self.add_unit(unit)
+
+    def build_unit(self, unit: Unit) -> TranslateToolkitUnit:
+        output = self.create_unit(self.handle_plurals(unit.get_source_plurals()))
+        # Propagate source language
+        if hasattr(output, "setsource"):
+            output.setsource(output.source, sourcelang=self.source_language.code)
+        self.add(output, self.handle_plurals(unit.get_target_plurals()))
+        return output
+
+    def add_note(self, output, note: str, origin: str) -> None:
+        output.addnote(note, origin=origin)
+
+    def add_unit(self, unit: Unit) -> None:
+        output = self.build_unit(unit)
+        # Location needs to be set prior to ID to avoid overwrite
+        # on some formats (for example xliff)
+        for location in self.string_filter(unit.location).split(","):
+            location = location.strip()
+            if location:
+                output.addlocation(location)
+
+        # Store context as context and ID
+        context = self.string_filter(unit.context)
+        if context:
+            output.setcontext(context)
+            if self.set_id:
+                output.setid(context)
+        elif self.set_id:
+            # Use checksum based ID on formats requiring it
+            output.setid(unit.checksum)
+
+        # Store note
+        note = self.string_filter(unit.note)
+        if note:
+            self.add_note(output, note, origin="developer")
+        # In Weblate explanation
+        note = self.string_filter(unit.source_unit.explanation)
+        if note:
+            self.add_note(output, note, origin="developer")
+        # Comments
+        for comment in unit.unresolved_comments:
+            self.add_note(
+                output, self.string_filter(comment.comment), origin="translator"
+            )
+        # Suggestions
+        for suggestion in unit.suggestions:
+            suggestions_str = ", ".join(split_plural(suggestion.target))
+            self.add_note(
+                output,
+                self.string_filter(f"Suggested in Weblate: {suggestions_str}"),
+                origin="translator",
+            )
+
+        # Store flags
+        if unit.all_flags:
+            self.store_flags(output, unit.all_flags)
+
+        # Store fuzzy flag
+        self.store_unit_state(output, unit)
+
+        self.storage.addunit(output)
+
+    def store_unit_state(self, output, unit) -> None:
+        if unit.fuzzy:
+            output.markfuzzy(True)
+        if hasattr(output, "markapproved"):
+            output.markapproved(unit.approved)
+
+    def get_filename(self, filetemplate: str = "{path}.{extension}"):
+        return filetemplate.format(
+            project=self.project.slug,
+            language=self.language.code,
+            extension=self.extension,
+            path="-".join(
+                self.translation.get_url_path()
+                if self.translation
+                else (self.project.slug, self.language.code)
+            ),
+        )
+
+    def get_response(self, filetemplate: str = "{path}.{extension}"):
+        filename = self.get_filename(filetemplate)
+
+        response = HttpResponse(content_type=f"{self.content_type}; charset=utf-8")
+        response["Content-Disposition"] = f"attachment; filename={filename}"
+
+        # Save to response
+        response.write(self.serialize())
+
+        return response
+
+    def serialize(self) -> bytes:
+        """Return storage content."""
+        from weblate.formats.ttkit import TTKitFormat
+
+        return TTKitFormat.serialize(self.storage)
+
+    def store_flags(self, output, flags) -> None:
+        return

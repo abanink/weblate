@@ -1,7 +1,7 @@
 .. _formats:
 
-Supported file formats
-======================
+Localization file formats
+=========================
 
 Weblate supports a wide range of translation formats. Each format is slightly
 different and provides a different set of capabilities.
@@ -12,12 +12,6 @@ different and provides a different set of capabilities.
     well established format in the toolkit/platform you use. This way your
     translators can additionally use whatever tools they are used to, and will more
     likely contribute to your project.
-
-.. toctree::
-   :maxdepth: 1
-   :glob:
-
-   formats/*
 
 .. seealso::
 
@@ -324,7 +318,7 @@ Translation types capabilities
      - bilingual
      - no
      - yes
-     - no
+     - yes
      - no
      - yes
      -
@@ -365,7 +359,7 @@ Translation types capabilities
 .. [#lp] The plurals are supported only for Laravel which uses in string syntax to define them, see `Localization in Laravel`_.
 .. [#fp] Plurals are handled in the syntax of the strings and not exposed as plurals in Weblate.
 
-.. _Localization in Laravel: https://laravel.com/docs/7.x/localization
+.. _Localization in Laravel: https://laravel.com/docs/localization
 
 .. _bimono:
 
@@ -446,13 +440,13 @@ This feature is modelled on flags in :ref:`gettext`.
 Additionally, for all XML based format, the flags are extracted from the
 non-standard attribute ``weblate-flags``. Additionally ``max-length:N`` is
 supported through the ``maxwidth`` `attribute
-<http://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html#maxwidth>`_ as
+<https://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html#maxwidth>`_ as
 defined in the XLIFF standard, see :ref:`xliff-flags`.
 
 .. seealso::
 
-   :ref:`custom-checks`,
-   `PO files documentation`_
+   * :ref:`custom-checks`
+   * `PO files documentation`_
 
 .. _PO files documentation: https://www.gnu.org/software/gettext/manual/html_node/PO-Files.html
 
@@ -499,9 +493,9 @@ Supporting other formats
 ------------------------
 
 Most formats supported by `translate-toolkit`_ which support serializing can be
-easily supported, but they did not (yet) receive any testing. In most cases
-some thin layer is needed in Weblate to hide differences in behavior of
-different `translate-toolkit`_ storages.
+easily supported, but they did not (yet) received any testing. In most cases,
+an additional thin layer is needed in Weblate to hide differences in behavior
+of different storages.
 
 To add support for a new format, the preferred approach is to first implement
 support for it in the `translate-toolkit`_.
@@ -512,3 +506,17 @@ support for it in the `translate-toolkit`_.
 
 
 .. _translate-toolkit: https://toolkit.translatehouse.org/
+
+.. _file_format_params:
+
+File format parameters
+----------------------
+
+File format parameters provide a way to configure settings related to the file format.
+They are configured at component level and allow you to customize how file parsing and serialization are handled.
+
+
+List of file format parameters
+++++++++++++++++++++++++++++++
+
+.. include:: /snippets/file-format-parameters.rst

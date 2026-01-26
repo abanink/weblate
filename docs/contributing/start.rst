@@ -31,14 +31,14 @@ sources.
 
    .. code-block:: sh
 
-      virtualenv .venv
-      . .venv/bin/activate
+      uv venv .venv
+      source .venv/bin/activate
 
 3. Install Weblate (for this you need some system dependencies, see :doc:`../admin/install/source`) and all dependencies useful for development:
 
    .. code-block:: sh
 
-      pip install -e '.[all,dev,ci,test,mypy,lint]'
+      uv pip install -e '.[dev]'
 
 3. Start a development server:
 
@@ -57,7 +57,7 @@ sources.
    .. code-block:: sh
 
       . scripts/test-database.sh
-      ./manage.py test
+      pytest
 
 .. seealso::
 
@@ -81,6 +81,9 @@ It will create a development Docker image and start it. Weblate is running on
 as the password. The new installation is empty, so you might want to continue with
 :ref:`adding-projects`.
 
+Weblate is configured to use :program:`maildev` container as a e-mail server.
+The delivered e-mails can be seen at <http://127.0.0.1:1080/>.
+
 The :file:`Dockerfile` and :file:`docker-compose.yml` for this are located in the
 :file:`dev-docker` directory. For easier access to the database during development,
 the container running PostgreSQL is exposed on port ``5433``.
@@ -91,7 +94,7 @@ for example running only tests in the ``weblate.machine`` module:
 
 .. code-block:: sh
 
-   ./rundev.sh test --failfast weblate.machine
+   ./rundev.sh test --exitfirst weblate/machine
 
 .. note::
 
@@ -112,17 +115,21 @@ To stop the background containers, run:
 
 Running the script without arguments will re-create the Docker container and restart it.
 
-.. note::
+.. warning::
 
-   This is not a suitable setup for production, as it includes several hacks which
-   are insecure, but they make development easier.
+   This container is not suitable for production use. Security is sacrificed to
+   make the development easier.
 
+.. _devel-demo:
 
 Bootstrapping your devel instance
 ---------------------------------
 
 You might want to use :wladmin:`import_demo` to create demo translations and
 :wladmin:`createadmin` to make an admin user.
+
+If you have :ref:`billing` installed as well, you can use
+:wladmin:`billing_demo` to create a demo billing project.
 
 Coding Weblate with PyCharm
 ---------------------------

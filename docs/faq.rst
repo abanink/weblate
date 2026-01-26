@@ -23,7 +23,8 @@ without interaction, unless some merge conflict occurs.
 
 .. seealso::
 
-   :ref:`continuous-translation`, :ref:`avoid-merge-conflicts`
+   * :ref:`continuous-translation`
+   * :ref:`avoid-merge-conflicts`
 
 How to access repositories over SSH?
 ------------------------------------
@@ -40,7 +41,7 @@ both Weblate and the upstream repository concurrently. You can usually avoid thi
 Weblate translations prior to making changes in the translation files (e.g.
 before running msgmerge). Just tell Weblate to commit all pending
 translations (you can do it in :guilabel:`Repository maintenance` in the
-:guilabel:`Manage` menu) and merge the repository (if automatic push is not
+:guilabel:`Operations` menu) and merge the repository (if automatic push is not
 on).
 
 If you've already encountered a merge conflict, the easiest way to solve all
@@ -147,10 +148,10 @@ upstream Git repository: An intact and a working copy):
 
 .. seealso::
 
-   :ref:`git-export`,
-   :ref:`continuous-translation`,
-   :ref:`avoid-merge-conflicts`,
-   :ref:`wlc`
+   * :ref:`git-export`
+   * :ref:`continuous-translation`
+   * :ref:`avoid-merge-conflicts`
+   * :ref:`wlc`
 
 How do I translate several branches at once?
 --------------------------------------------
@@ -255,23 +256,33 @@ open the ``/manage/performance/`` URL directly.
 
 .. seealso::
 
-   :ref:`monitoring`,
-   :ref:`monitoring-celery`
+   * :ref:`monitoring`
+   * :ref:`monitoring-celery`
 
 
 Why are all commits committed by Weblate <noreply@weblate.org>?
 ---------------------------------------------------------------
 
-This is the default committer name, configured by
-:setting:`DEFAULT_COMMITER_EMAIL` and :setting:`DEFAULT_COMMITER_NAME`.
+Weblate uses ``Weblate <noreply@weblate.org>`` as the default **committer** for all
+commits, which is configured by :setting:`DEFAULT_COMMITER_EMAIL` and
+:setting:`DEFAULT_COMMITER_NAME`. This is a technical identifier showing that
+the commit was processed through Weblate.
 
-The author of every commit (if the underlying VCS supports it) is still recorded
-correctly as the user that made the translation.
+However, the **author** of each commit is correctly recorded as the individual
+user who made the translation (when using Git). This means you can see who
+actually translated each string by examining the commit author field. The same
+applies to Mercurial; only Subversion does not have this capability.
 
-For commits where no authorship is known (for example anonymous suggestions or
-machine translation results), the authorship is credited to the anonymous user
-(see :setting:`ANONYMOUS_USER_NAME`). You can change the name and e-mail in the
-management interface.
+.. note::
+
+   In Git, there is a distinction between the committer (who created the commit
+   object) and the author (who made the changes). Weblate acts as the committer
+   while preserving individual translator attribution as authors.
+
+For commits where authorship cannot be determined (such as automated changes
+from anonymous suggestions or machine translation results), the author is set
+to the anonymous user. You can configure the anonymous user's name and e-mail
+in :setting:`ANONYMOUS_USER_NAME`.
 
 .. seealso::
 
@@ -295,6 +306,10 @@ The solution to this is to perform the operation in sync with Weblate:
 5. Change the :ref:`component` to match the new setup; upon changing configuration, Weblate will fetch the updated repository and notice the changed locations while keeping existing strings.
 6. Unlock the component and re-enable hooks in the project configuration.
 
+.. hint::
+
+   :ref:`projectbackup` might be useful to perform prior to such disrupting changes.
+
 Usage
 +++++
 
@@ -302,7 +317,7 @@ How do I review the translations of others?
 ---------------------------------------------
 
 - There are several review based workflows available in Weblate, see :ref:`workflows`.
-- You can subscribe to any changes made in :ref:`subscriptions` and then check
+- You can subscribe to any changes made in :ref:`notifications` and then check
   others contributions as they come in by e-mail.
 - There is a review tool available at the bottom of the translation view, where you can
   choose to browse translations made by others since a given date.
@@ -319,8 +334,8 @@ provide feedback on a source string, or discuss it with other translators.
 
 .. seealso::
 
-    :ref:`report-source`,
-    :ref:`user-comments`
+   * :ref:`report-source`
+   * :ref:`user-comments`
 
 How can I use existing translations while translating?
 ------------------------------------------------------
@@ -339,9 +354,9 @@ How can I use existing translations while translating?
 
 .. seealso::
 
-   :ref:`machine-translation-setup`,
-   :ref:`machine-translation`,
-   :ref:`memory`
+   * :ref:`machine-translation-setup`
+   * :ref:`machine-translation`
+   * :ref:`memory`
 
 .. _faq-cleanup:
 
@@ -355,6 +370,12 @@ keep the file formatted your way, please use a pre-commit hook for that.
 .. seealso::
 
    :ref:`updating-target-files`
+
+How do I merge updated POT file with PO translations?
+-----------------------------------------------------
+
+See :ref:`updating-target-files` for information on updating PO files when
+the POT template changes.
 
 
 Where do language definitions come from and how can I add my own?
@@ -404,10 +425,10 @@ will then pick up the changes automatically.
 
 .. seealso::
 
-   :ref:`translations-update`,
-   :ref:`updating-target-files`,
-   :doc:`/devel/gettext`,
-   :doc:`/devel/sphinx`
+   * :ref:`translations-update`
+   * :ref:`updating-target-files`
+   * :doc:`/devel/gettext`
+   * :doc:`/devel/sphinx`
 
 How to handle renaming translation files?
 -----------------------------------------
@@ -425,6 +446,10 @@ To avoid that, perform renaming in following steps:
 5. Perform the renaming of the files in the repository.
 6. Update the component configuration to match new file names.
 7. Enable update hooks and unlock the component.
+
+.. hint::
+
+   :ref:`projectbackup` might be useful to perform prior to such disrupting changes.
 
 Troubleshooting
 +++++++++++++++
@@ -504,8 +529,6 @@ Weblate currently does not have native support for anything other than
 and :ref:`vcs-git-svn`) and :ref:`vcs-mercurial`, but it is possible to write
 backends for other VCSes.
 
-You can also use :ref:`vcs-git-helpers` in Git to access other VCSes.
-
 Weblate also supports VCS-less operation, see :ref:`vcs-local`.
 
 .. note::
@@ -514,7 +537,9 @@ Weblate also supports VCS-less operation, see :ref:`vcs-local`.
     probably be adjusted to work with anything other than Git and Mercurial, but
     somebody has to implement this support.
 
-.. seealso:: :ref:`vcs`
+.. seealso::
+
+   :ref:`vcs`
 
 How does Weblate credit translators?
 ------------------------------------
@@ -528,8 +553,8 @@ updated to include the translator's name.
 
 .. seealso::
 
-   :wladmin:`list_translators`,
-   :doc:`../devel/reporting`
+   * :wladmin:`list_translators`
+   * :doc:`../devel/reporting`
 
 Why does Weblate force showing all PO files in a single tree?
 -------------------------------------------------------------
@@ -563,6 +588,6 @@ current one - for example ``sr@latin`` will be handled as ``sr_Latn`` or
 
 .. seealso::
 
-   :ref:`languages`,
-   :ref:`component-language_code_style`,
-   :ref:`adding-translation`
+   * :ref:`languages`
+   * :ref:`component-language_code_style`
+   * :ref:`adding-translation`

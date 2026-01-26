@@ -4,56 +4,79 @@
 
 from __future__ import annotations
 
+from email.errors import HeaderDefect
 from email.headerregistry import Address
 from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 from django.db import IntegrityError
+from social_core.backends.utils import load_backends
 
 from weblate.auth.data import (
+    GLOBAL_PERM_NAMES,
     GLOBAL_PERMISSIONS,
     GROUPS,
+    PERMISSION_NAMES,
     PERMISSIONS,
     ROLES,
     SELECTION_ALL,
 )
 
 if TYPE_CHECKING:
-    from weblate.auth.models import Group, Role
+    from weblate.auth.models import Group, Permission, Role
+
+
+def get_auth_backends():
+    return load_backends(settings.AUTHENTICATION_BACKENDS)
+
+
+def get_auth_keys() -> set[str]:
+    return set(get_auth_backends().keys())
 
 
 def is_django_permission(permission: str):
     """
-    Check whether permission looks like a Django one.
+    Check whether permission looks is a Django one.
 
-    Django permissions are <app>.<action>_<model>, while
-    Weblate ones are <scope>.<action> where action lacks underscores
-    with single exception of "add_more".
+    This is purely based on the list of permissions defined in Weblate.
     """
-    parts = permission.split(".", 1)
-    if len(parts) != 2:
-        return False
-    return "_" in parts[1] and parts[1] != "add_more"
+    return (
+        permission not in PERMISSION_NAMES
+        and permission not in GLOBAL_PERM_NAMES
+        and not permission.startswith(("meta:", "billing:"))
+    )
 
 
-def migrate_permissions_list(model, permissions):
+def migrate_permissions_list(
+    model: type[Permission], permissions: tuple[tuple[str, str], ...]
+) -> set[int]:
     ids = set()
-    # Update/create permissions
+    # Get all existing permissions
+    existing_objects = model.objects.filter(
+        codename__in=[perm[0] for perm in permissions]
+    )
+    existing = {permission.codename: permission for permission in existing_objects}
+
+    # Iterate over expected permissions
     for code, name in permissions:
-        instance, created = model.objects.get_or_create(
-            codename=code, defaults={"name": name}
-        )
+        try:
+            instance = existing[code]
+        except KeyError:
+            # Missing, create one
+            instance = model.objects.create(codename=code, name=name)
+        else:
+            # Update if needed
+            if instance.name != name:
+                instance.name = name
+                instance.save(update_fields=["name"])
         ids.add(instance.pk)
-        if not created and instance.name != name:
-            instance.name = name
-            instance.save(update_fields=["name"])
     return ids
 
 
-def migrate_permissions(model) -> None:
+def migrate_permissions(model: type[Permission]) -> None:
     """Create permissions as defined in the data."""
-    ids = set()
+    ids: set[int] = set()
     # Per object permissions
     ids.update(migrate_permissions_list(model, PERMISSIONS))
     # Global permissions
@@ -62,12 +85,15 @@ def migrate_permissions(model) -> None:
     model.objects.exclude(id__in=ids).delete()
 
 
-def migrate_roles(model, perm_model) -> set[str]:
+def migrate_roles(model: type[Role], perm_model: type[Permission]) -> set[str]:
     """Create roles as defined in the data."""
     result = set()
+    existing: dict[str, Role] = {obj.name: obj for obj in model.objects.all()}
     for role, permissions in ROLES:
-        instance, created = model.objects.get_or_create(name=role)
-        if created:
+        if role in existing:
+            instance = existing[role]
+        else:
+            instance = model.objects.create(name=role)
             result.add(role)
         instance.permissions.set(
             perm_model.objects.filter(codename__in=permissions), clear=True
@@ -79,22 +105,31 @@ def migrate_groups(
     model: type[Group], role_model: type[Role], update: bool = False
 ) -> dict[str, Group]:
     """Create groups as defined in the data."""
-    result: dict[str, Group] = {}
+    result: dict[str, Group] = {
+        obj.name: obj
+        for obj in model.objects.filter(internal=True, defining_project=None)
+    }
     for group, roles, selection in GROUPS:
-        instance, created = model.objects.get_or_create(
-            name=group,
-            internal=True,
-            defining_project=None,
-            defaults={
-                "project_selection": selection,
-                "language_selection": SELECTION_ALL,
-            },
-        )
-        result[group] = instance
-        if update and not created:
-            instance.project_selection = selection
-            instance.language_selection = SELECTION_ALL
-            instance.save()
+        if group in result:
+            instance = result[group]
+            created = False
+            if update and (
+                instance.project_selection != selection
+                or instance.language_selection != SELECTION_ALL
+            ):
+                instance.project_selection = selection
+                instance.language_selection = SELECTION_ALL
+                instance.save(update_fields=["project_selection", "language_selection"])
+        else:
+            instance = model.objects.create(
+                name=group,
+                internal=True,
+                defining_project=None,
+                project_selection=selection,
+                language_selection=SELECTION_ALL,
+            )
+            created = True
+            result[group] = instance
         if created or update:
             instance.roles.set(role_model.objects.filter(name__in=roles), clear=True)
     return result
@@ -112,16 +147,18 @@ def create_anonymous(model, group_model, update=True) -> None:
             },
         )
     except IntegrityError as error:
-        raise ValueError(
+        msg = (
             f"Anonymous user ({settings.ANONYMOUS_USER_NAME}) and could not be created, "
             f"most likely because other user is using noreply@weblate.org e-mail.: {error}"
-        ) from error
+        )
+        raise ValueError(msg) from error
     if user.is_active:
-        raise ValueError(
+        msg = (
             f"Anonymous user ({settings.ANONYMOUS_USER_NAME}) already exists and is "
             "active, please change the ANONYMOUS_USER_NAME setting or mark the user "
             "as not active in the admin interface."
         )
+        raise ValueError(msg)
 
     if created or update:
         user.set_unusable_password()
@@ -131,12 +168,16 @@ def create_anonymous(model, group_model, update=True) -> None:
         )
 
 
-def format_address(display_name, email):
+def format_address(display_name: str, email: str) -> str:
     """Format e-mail address with display name."""
     # While Address does quote the name following RFC 5322,
     # git still doesn't like <> being used in the string
-    return str(
-        Address(
-            display_name=display_name.replace("<", "").replace(">", ""), addr_spec=email
+    try:
+        address = Address(
+            display_name=display_name.replace("<", "").replace(">", ""),
+            addr_spec=email,
         )
-    )
+    except HeaderDefect as error:
+        msg = f"Invalid e-mail address '{email}': {error}"
+        raise ValueError(msg) from error
+    return str(address)

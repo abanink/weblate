@@ -1,8 +1,11 @@
 {% load i18n %}
+
 {% autoescape off %}
-{% if change.action == 14 %}
-{% blocktrans %}Component {{ component }} was locked{% endblocktrans %}
-{% else %}
-{% blocktrans %}Component {{ component }} was unlocked{% endblocktrans %}
-{% endif %}
+  {% if change.action == 14 %}
+    {# Translators: e-mail subject #}
+    {% blocktranslate %}Component {{ component }} was locked{% endblocktranslate %}
+  {% else %}
+    {# Translators: e-mail subject #}
+    {% blocktranslate %}Component {{ component }} was unlocked{% endblocktranslate %}
+  {% endif %}
 {% endautoescape %}

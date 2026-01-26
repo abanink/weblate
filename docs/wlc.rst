@@ -13,11 +13,21 @@ Installation
 ++++++++++++
 
 The Weblate Client is shipped separately and includes the Python module.
-To use the commands below, you need to install :mod:`wlc`:
+To use the commands below, you need to install :program:`wlc` using pip:
 
 .. code-block:: sh
 
     pip install wlc
+
+You can also execute it directly using :program:`uvx`:
+
+.. code-block:: sh
+
+   uvx wlc --help
+
+.. hint::
+
+   You can also use this :program:`wlc` as a Python module, see :mod:`wlc`.
 
 .. _docker-wlc:
 
@@ -62,7 +72,7 @@ volume:
 Getting started
 +++++++++++++++
 
-The wlc configuration is stored in ``~/.config/weblate`` (see :ref:`wlc-config`
+The :program:`wlc` configuration is stored in :file:`~/.config/weblate` (see :ref:`wlc-config`
 for other locations), please create it to match your environment:
 
 .. code-block:: ini
@@ -84,6 +94,33 @@ You can then invoke commands on the default server:
 .. seealso::
 
     :ref:`wlc-config`
+
+.. _wlc_legacy:
+
+Legacy configuration
+++++++++++++++++++++
+
+.. versionchanged:: 1.17
+
+   The legacy configuration using unscoped ``key`` is no longer supported.
+
+Migrate legacy configuration:
+
+.. code-block:: ini
+
+   [weblate]
+   url = https://hosted.weblate.org/api
+   key = YOUR_KEY_HERE
+
+To a configuration with key scoped to an API URL:
+
+.. code-block:: ini
+
+   [weblate]
+   url = https://hosted.weblate.org/api
+
+   [keys]
+   https://hosted.weblate.org/api = YOUR_KEY_HERE
 
 Synopsis
 ++++++++
@@ -176,17 +213,9 @@ The following commands are available:
 
 .. option:: reset
 
-    .. versionadded:: 0.7
-
-        Supported since wlc 0.7.
-
     Resets changes in Weblate object to match remote repository (translation, component or project).
 
 .. option:: cleanup
-
-    .. versionadded:: 0.9
-
-        Supported since wlc 0.9.
 
     Removes any untracked changes in a Weblate object to match the remote repository (translation, component or project).
 
@@ -200,41 +229,21 @@ The following commands are available:
 
 .. option:: lock-status
 
-    .. versionadded:: 0.5
-
-        Supported since wlc 0.5.
-
     Displays lock status.
 
 .. option:: lock
-
-    .. versionadded:: 0.5
-
-        Supported since wlc 0.5.
 
     Locks component from further translation in Weblate.
 
 .. option:: unlock
 
-    .. versionadded:: 0.5
-
-        Supported since wlc 0.5.
-
     Unlocks translation of Weblate component.
 
 .. option:: changes
 
-    .. versionadded:: 0.7
-
-        Supported since wlc 0.7 and Weblate 2.10.
-
     Displays changes for a given object.
 
 .. option:: download
-
-    .. versionadded:: 0.7
-
-        Supported since wlc 0.7.
 
     Downloads a translation file.
 
@@ -248,10 +257,6 @@ The following commands are available:
         Specifies file to save output in, if left unspecified it is printed to stdout.
 
 .. option:: upload
-
-    .. versionadded:: 0.9
-
-        Supported since wlc 0.9.
 
     Uploads a translation file.
 
@@ -291,24 +296,31 @@ Configuration files
 +++++++++++++++++++
 
 :file:`.weblate`, :file:`.weblate.ini`, :file:`weblate.ini`
-    Per project configuration file
-:file:`C:\\Users\\NAME\\AppData\\weblate.ini`
-    User configuration file on Windows.
+    Configuration file placed in the project directory.
+:file:`C:\\Users\\NAME\\AppData\\Roaming\\weblate.ini`
+    User configuration file on Windows in the roamed profile.
+:file:`C:\\Users\\NAME\\AppData\\Local\\weblate.ini`
+    User configuration file on Windows in the local profile.
 :file:`~/.config/weblate`
-    User configuration file
+    User configuration file.
 :file:`/etc/xdg/weblate`
-    System wide configuration file
+    System wide configuration file.
 
-The program follows the XDG specification, so you can adjust placement of config files
-by environment variables ``XDG_CONFIG_HOME`` or ``XDG_CONFIG_DIRS``. On Windows
-``APPDATA`` directory is preferred location for the configuration file.
+The program follows the XDG specification, so you can adjust the placement of
+config files by environment variables ``XDG_CONFIG_HOME`` or
+``XDG_CONFIG_DIRS``.
+
+On Windows ``APPDATA`` and ``LOCALAPPDATA`` directories are the preferred
+locations for the configuration file.
 
 Following settings can be configured in the ``[weblate]`` section (you can
 customize this by :option:`--config-section`):
 
 .. describe:: key
 
-    API KEY to access Weblate.
+   .. versionremoved:: 1.17
+
+      Use the ``[keys]`` section to specify keys scoped for individual API URLs, see :ref:`wlc_legacy`.
 
 .. describe:: url
 
@@ -324,10 +336,9 @@ The configuration file is an INI file, for example:
 
     [weblate]
     url = https://hosted.weblate.org/api/
-    key = APIKEY
     translation = weblate/application
 
-Additionally API keys can be stored in the ``[keys]`` section:
+The API keys are stored in the ``[keys]`` section:
 
 .. code-block:: ini
 
@@ -335,7 +346,7 @@ Additionally API keys can be stored in the ``[keys]`` section:
     https://hosted.weblate.org/api/ = APIKEY
 
 This allows you to store keys in your personal settings, while using the
-:file:`.weblate` configuration in the VCS repository so that wlc knows which
+:file:`.weblate` configuration in the VCS repository so that :program:`wlc` knows which
 server it should talk to.
 
 Examples
@@ -365,7 +376,7 @@ Upload translation file:
 
    $ wlc upload project/component/language --input /tmp/hello.po
 
-You can also designate what project wlc should work on:
+You can also designate what project :program:`wlc` should work on:
 
 .. code-block:: sh
 

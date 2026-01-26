@@ -2,26 +2,45 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
 import logging
-import os
 from datetime import timedelta
 from email.mime.image import MIMEImage
-from smtplib import SMTP
+from smtplib import SMTP, SMTPConnectError
 from types import MethodType
+from typing import TYPE_CHECKING, TypedDict
 
 import sentry_sdk
 from celery.schedules import crontab
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.core.mail.backends.smtp import EmailBackend as DjangoSMTPEmailBackend
+from django.db import transaction
 from django.utils.timezone import now
 from social_django.models import Code, Partial
 
 from weblate.utils.celery import app
 from weblate.utils.errors import report_error
 from weblate.utils.html import HTML2Text
+from weblate.utils.icons import load_icon
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from weblate.accounts.notifications import Notification
 
 LOGGER = logging.getLogger("weblate.smtp")
+
+# The batch size needs to be below exim's default connection_max_messages = 500.
+EMAIL_BATCH_SIZE = 200
+
+
+class OutgoingEmail(TypedDict):
+    address: str
+    subject: str
+    body: str
+    headers: dict[str, str]
 
 
 @app.task(trail=False)
@@ -40,46 +59,77 @@ def cleanup_auditlog() -> None:
     """Cleanup old auditlog entries."""
     from weblate.accounts.models import AuditLog
 
+    timestamp = now()
+
+    # Cleanup old entries
     AuditLog.objects.filter(
-        timestamp__lt=now() - timedelta(days=settings.AUDITLOG_EXPIRY)
+        timestamp__lt=timestamp - timedelta(days=settings.AUDITLOG_EXPIRY)
     ).delete()
+
+    # Finalize pending two-factor entries, these happen due to
+    # WebAuthn keys being added in two stages. Mature entries older than 5 minutes
+    # but look only two hours into past for performance reasons
+    for audit in AuditLog.objects.filter(
+        timestamp__range=(
+            timestamp - timedelta(hours=2),
+            timestamp - timedelta(minutes=5),
+        ),
+        activity="twofactor-add",
+    ):
+        if "skip_notify" in audit.params:
+            del audit.params["skip_notify"]
+            audit.save(update_fields=["params"])
+
+
+class NotificationFactory:
+    def __init__(self) -> None:
+        self.outgoing: list[OutgoingEmail] = []
+        self.instances: dict[str, Notification] = {}
+
+    def for_action(self, action: int) -> Generator[Notification]:
+        from weblate.accounts.notifications import NOTIFICATIONS_ACTIONS
+
+        if action not in NOTIFICATIONS_ACTIONS:
+            return
+        for notification_cls in NOTIFICATIONS_ACTIONS[action]:
+            name = notification_cls.get_name()
+            try:
+                yield self.instances[name]
+            except KeyError:
+                result = self.instances[name] = notification_cls(self.outgoing)
+                yield result
+
+    def send_queued(self) -> None:
+        if self.outgoing:
+            queue_mails(self.outgoing)
+            self.outgoing.clear()
 
 
 @app.task(trail=False)
-def notify_change(change_id) -> None:
-    from weblate.accounts.notifications import (
-        NOTIFICATIONS_ACTIONS,
-        is_notificable_action,
-    )
+@transaction.atomic
+def notify_changes(change_ids: list[int]) -> None:
     from weblate.trans.models import Change
 
-    try:
-        change = Change.objects.get(pk=change_id)
-    except Change.DoesNotExist:
-        # The change was removed meanwhile
-        return
-    perm_cache = {}
+    changes = Change.objects.prefetch_for_render().filter(pk__in=change_ids)
+    factory = NotificationFactory()
 
-    # The same condition is applied at notify_change.delay, but we need to recheck
-    # here to make sure this doesn't break on upgrades when processing older tasks
-    if is_notificable_action(change.action):
-        outgoing = []
-        for notification_cls in NOTIFICATIONS_ACTIONS[change.action]:
-            notification = notification_cls(outgoing, perm_cache)
+    for change in changes.iterator(chunk_size=200):
+        change.fill_in_prefetched()
+        for notification in factory.for_action(change.action):
             notification.notify_immediate(change)
-        if outgoing:
-            send_mails.delay(outgoing)
+        factory.send_queued()
 
 
+@transaction.atomic
 def notify_digest(method) -> None:
     from weblate.accounts.notifications import NOTIFICATIONS
 
-    outgoing = []
+    outgoing: list[OutgoingEmail] = []
     for notification_cls in NOTIFICATIONS:
         notification = notification_cls(outgoing)
         getattr(notification, method)()
     if outgoing:
-        send_mails.delay(outgoing)
+        queue_mails(outgoing)
 
 
 @app.task(trail=False)
@@ -98,19 +148,19 @@ def notify_monthly() -> None:
 
 
 @app.task(trail=False)
-def notify_auditlog(log_id, email) -> None:
+def notify_auditlog(log_id: int, email: str) -> None:
     from weblate.accounts.models import AuditLog
     from weblate.accounts.notifications import send_notification_email
 
     audit = AuditLog.objects.get(pk=log_id)
     send_notification_email(
-        audit.user.profile.language,
+        audit.user.profile.language if audit.user else "en",
         [email],
         "account_activity",
         context={
             "message": audit.get_message,
             "extra_message": audit.get_extra_message,
-            "address": audit.address,
+            "address": audit.shortened_address,
             "user_agent": audit.user_agent,
         },
         info=f"{audit.activity} from {audit.address}",
@@ -138,20 +188,29 @@ def monkey_patch_smtp_logging(connection):
         backend = connection.connection
         if isinstance(backend, SMTP) and not hasattr(backend, SMTP_DATA_PATCH):
             setattr(backend, SMTP_DATA_PATCH, backend.data)
-            backend.data = MethodType(weblate_logging_smtp_data, backend)
+            backend.data = MethodType(weblate_logging_smtp_data, backend)  # type: ignore[method-assign]
 
     return connection
 
 
-@app.task(trail=False)
-def send_mails(mails) -> None:
+def queue_mails(mails: list[OutgoingEmail]) -> None:
+    """Enqueue e-mails for delivery in reasonable batches."""
+    for offset in range(0, len(mails), EMAIL_BATCH_SIZE):
+        send_mails.delay(mails[offset : offset + EMAIL_BATCH_SIZE])
+
+
+@app.task(
+    trail=False,
+    autoretry_for=(SMTPConnectError, OSError),
+    retry_backoff=600,
+    retry_backoff_max=3600,
+)
+def send_mails(mails: list[OutgoingEmail]) -> None:
     """Send multiple mails in single connection."""
     images = []
     with sentry_sdk.start_span(op="email.images"):
         for name in ("email-logo.png", "email-logo-footer.png"):
-            filename = os.path.join(settings.STATIC_ROOT, name)
-            with open(filename, "rb") as handle:
-                image = MIMEImage(handle.read())
+            image = MIMEImage(load_icon(name, auto_prefix=False))
             image.add_header("Content-ID", f"<{name}@cid.weblate.org>")
             image.add_header("Content-Disposition", "inline", filename=name)
             images.append(image)
@@ -162,7 +221,7 @@ def send_mails(mails) -> None:
             connection.open()
         except Exception:
             LOGGER.exception("Could not initialize e-mail backend")
-            report_error(cause="Could not send notifications")
+            report_error("Could not send notifications")
             connection.close()
             return
         connection = monkey_patch_smtp_logging(connection)

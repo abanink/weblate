@@ -7,13 +7,16 @@ from __future__ import annotations
 import os.path
 from contextlib import suppress
 from datetime import timedelta
+from functools import partial
+from pathlib import Path
+from typing import ClassVar
 
 from appconf import AppConf
 from django.conf import settings
 from django.contrib import admin
 from django.core.exceptions import ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Prefetch, Q
 from django.db.models.signals import m2m_changed, post_delete, post_save, pre_delete
 from django.dispatch import receiver
@@ -26,6 +29,7 @@ from django.utils.translation import gettext, gettext_lazy, ngettext
 from weblate.auth.models import User
 from weblate.trans.models import Alert, Component, Project, Translation
 from weblate.utils.decorators import disable_for_loaddata
+from weblate.utils.html import format_html_join_comma, list_to_tuples
 from weblate.utils.stats import prefetch_stats
 
 
@@ -42,7 +46,7 @@ class LibreCheck:
         return self.message
 
 
-class PlanQuerySet(models.QuerySet):
+class PlanQuerySet(models.QuerySet["Plan"]):
     def public(self, user=None):
         """List of public paid plans which are available."""
         base = self.exclude(Q(price=0) & Q(yearly_price=0))
@@ -114,7 +118,7 @@ class BillingQuerySet(models.QuerySet["Billing"]):
             )
         )
 
-    def for_user(self, user):
+    def for_user(self, user: User):
         if user.has_perm("billing.manage"):
             return self.all().order_by("state")
         return (
@@ -124,6 +128,16 @@ class BillingQuerySet(models.QuerySet["Billing"]):
             .distinct()
             .order_by("state")
         )
+
+    def for_user_within_limits(self, user: User):
+        """Return billings for the given user which are valid and within project creation limits."""
+        billings = self.get_valid().for_user(user).prefetch()
+        pks = set()
+        for billing in billings:
+            limit = billing.plan.display_limit_projects
+            if limit == 0 or billing.count_projects < limit:
+                pks.add(billing.pk)
+        return Billing.objects.filter(pk__in=pks).prefetch()
 
     def prefetch(self):
         return self.prefetch_related(
@@ -146,8 +160,8 @@ class Billing(models.Model):
     STATE_TRIAL = 1
     STATE_TERMINATED = 3
 
-    EXPIRING_STATES = {STATE_TRIAL}
-    ACTIVE_STATES = {STATE_ACTIVE, STATE_TRIAL}
+    EXPIRING_STATES: ClassVar[set[int]] = {STATE_TRIAL}
+    ACTIVE_STATES: ClassVar[set[int]] = {STATE_ACTIVE, STATE_TRIAL}
 
     plan = models.ForeignKey(
         Plan,
@@ -204,12 +218,15 @@ class Billing(models.Model):
         if projects:
             base = projects
         elif owners:
-            base = ", ".join(x.get_visible_name() for x in owners)
+            base = format_html_join_comma(
+                "{}", list_to_tuples(x.get_visible_name() for x in owners)
+            )
         else:
             base = "Unassigned"
         trial = ", trial" if self.is_trial else ""
         return f"{base} ({self.plan}{trial})"
 
+    # pylint: disable-next=arguments-differ
     def save(
         self,
         force_insert=False,
@@ -234,7 +251,7 @@ class Billing(models.Model):
             update_fields=update_fields,
         )
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("billing-detail", kwargs={"pk": self.pk})
 
     @cached_property
@@ -247,7 +264,7 @@ class Billing(models.Model):
 
     @cached_property
     def projects_display(self):
-        return ", ".join(str(x) for x in self.all_projects)
+        return format_html_join_comma("{}", list_to_tuples(self.all_projects))
 
     @property
     def is_trial(self):
@@ -352,15 +369,19 @@ class Billing(models.Model):
     def unit_count(self):
         return sum(p.stats.all for p in self.all_projects)
 
+    def get_last_invoice_object(self):
+        return self.invoice_set.order_by("-start")[0]
+
     @admin.display(description=gettext_lazy("Last invoice"))
     def last_invoice(self):
         try:
-            invoice = self.invoice_set.order_by("-start")[0]
+            invoice = self.get_last_invoice_object()
         except IndexError:
             return gettext("N/A")
         return f"{invoice.start} - {invoice.end}"
 
     @admin.display(
+        # Translators: Whether the package is inside displayed (soft) limits
         description=gettext_lazy("In display limits"),
         boolean=True,
     )
@@ -374,7 +395,7 @@ class Billing(models.Model):
             )
             and (
                 plan.display_limit_hosted_strings == 0
-                or self.count_strings <= plan.display_limit_hosted_strings
+                or self.count_hosted_strings <= plan.display_limit_hosted_strings
             )
             and (
                 plan.display_limit_strings == 0
@@ -386,9 +407,7 @@ class Billing(models.Model):
             )
         )
 
-    # Translators: Whether the package is inside displayed (soft) limits
-
-    def check_payment_status(self, now: bool = False):
+    def check_payment_status(self, now: bool = False) -> bool:
         """
         Check current payment status.
 
@@ -403,7 +422,8 @@ class Billing(models.Model):
             or self.state == Billing.STATE_TRIAL
         )
 
-    def check_limits(self, save=True):
+    @transaction.atomic
+    def check_limits(self, save=True) -> bool:
         self.flush_cache()
         in_limits = self.check_in_limits()
         paid = self.check_payment_status()
@@ -413,6 +433,10 @@ class Billing(models.Model):
             self.expiry = None
             self.removal = timezone.now() + timedelta(
                 days=settings.BILLING_REMOVAL_PERIOD
+            )
+            self.billinglog_set.create(
+                event=BillingEvent.EXPIRED,
+                summary=f"Scheduled removal at {self.removal.isoformat()}",
             )
             modified = True
 
@@ -427,6 +451,7 @@ class Billing(models.Model):
 
         if save:
             if modified:
+                Billing.objects.select_for_update().get(pk=self.pk)
                 self.save(skip_limits=True)
             self.update_alerts()
 
@@ -463,12 +488,16 @@ class Billing(models.Model):
             yield LibreCheck(
                 bool(project.web),
                 format_html(
-                    '<a href="{0}">{1}</a>, <a href="{2}">{2}</a>',
+                    '<a href="{0}">{1}</a>, <a href="{2}">{3}</a>',
                     project.get_absolute_url(),
                     project,
+                    project.web
+                    or reverse("settings", kwargs={"path": project.get_url_path()}),
                     project.web or gettext("Project website missing!"),
                 ),
             )
+            if project.access_control:
+                yield LibreCheck(False, gettext("Only public projects are allowed"))
         components = Component.objects.filter(
             project__in=self.all_projects
         ).prefetch_related("project")
@@ -478,19 +507,37 @@ class Billing(models.Model):
             % len(components),
         )
         for component in components:
+            license_name = component.get_license_display()
+            if not component.libre_license:
+                if not license_name:
+                    license_name = format_html(
+                        "<strong>{0}</strong>", gettext("Missing license")
+                    )
+                else:
+                    license_name = format_html(
+                        "{0} (<strong>{1}</strong>)",
+                        license_name,
+                        gettext("Not a libre license"),
+                    )
+            if component.license_url:
+                license_name = format_html(
+                    '<a href="{0}">{1}</a>', component.license_url, license_name
+                )
+            repo_url = component.repo
+            if repo_url.startswith("https://"):
+                repo_url = format_html('<a href="{0}">{0}</a>', repo_url)
             yield LibreCheck(
                 component.libre_license,
                 format_html(
                     """
                     <a href="{0}">{1}</a>,
-                    <a href="{2}">{3}</a>,
-                    <a href="{4}">{4}</a>,
-                    {5}""",
+                    {2},
+                    {3},
+                    {4}""",
                     component.get_absolute_url(),
                     component.name,
-                    component.license_url or "#",
-                    component.get_license_display() or gettext("Missing license"),
-                    component.repo,
+                    license_name,
+                    repo_url,
                     component.get_file_format_display(),
                 ),
                 component=component,
@@ -505,7 +552,7 @@ class Billing(models.Model):
         return all(self.libre_checklist)
 
 
-class InvoiceQuerySet(models.QuerySet):
+class InvoiceQuerySet(models.QuerySet["Invoice"]):
     def order(self):
         return self.order_by("-start")
 
@@ -516,7 +563,7 @@ class Invoice(models.Model):
     CURRENCY_USD = 2
     CURRENCY_CZK = 3
 
-    billing = models.ForeignKey(Billing, on_delete=models.deletion.CASCADE)
+    billing = models.ForeignKey(Billing, on_delete=models.deletion.RESTRICT)
     start = models.DateField()
     end = models.DateField()
     amount = models.FloatField()
@@ -534,6 +581,7 @@ class Invoice(models.Model):
     # Payment detailed information, used for integration
     # with payment processor
     payment = models.JSONField(editable=False, default=dict)
+    created = models.DateTimeField(auto_now_add=True)
 
     objects = InvoiceQuerySet.as_manager()
 
@@ -545,25 +593,43 @@ class Invoice(models.Model):
         return f"{self.start} - {self.end}: {self.billing if self.billing_id else None}"
 
     @cached_property
+    def is_legacy(self):
+        return len(self.ref) <= 6
+
+    @cached_property
     def filename(self) -> str | None:
-        if self.ref:
+        if not self.ref:
+            return None
+        if self.is_legacy:
             return f"{self.ref}.pdf"
-        return None
+        return f"Weblate_Invoice_{self.ref}.pdf"
 
     @cached_property
-    def full_filename(self) -> str:
-        return os.path.join(settings.INVOICE_PATH, self.filename or "")
+    def full_filename(self) -> str | None:
+        if not self.ref:
+            return None
+        if self.is_legacy:
+            invoice_path = Path(settings.INVOICE_PATH_LEGACY)
+        else:
+            invoice_path = (
+                Path(settings.INVOICE_PATH)
+                / f"{self.created.year}"
+                / f"{self.created.month:02d}"
+            )
+        full_path = invoice_path / (self.filename or "")
+        return full_path.as_posix()
 
     @cached_property
-    def filename_valid(self):
-        return os.path.exists(self.full_filename)
+    def filename_valid(self) -> bool:
+        return self.full_filename and os.path.exists(self.full_filename)
 
     def clean(self) -> None:
         if self.end is None or self.start is None:
             return
 
         if self.end <= self.start:
-            raise ValidationError("Start has be to before end!")
+            msg = "Start has be to before end!"
+            raise ValidationError(msg)
 
         if not self.billing_id:
             return
@@ -577,11 +643,51 @@ class Invoice(models.Model):
             overlapping = overlapping.exclude(pk=self.pk)
 
         if overlapping.exists():
-            raise ValidationError(
-                "Overlapping invoices exist: {}".format(
-                    ", ".join(str(x) for x in overlapping)
-                )
-            )
+            msg = f"Overlapping invoices exist: {format_html_join_comma('{}', list_to_tuples(overlapping))}"
+            raise ValidationError(msg)
+
+
+class BillingEvent(models.IntegerChoices):
+    EMAIL = 1, "Outbound e-mail"
+    EXPIRED = 2, "Trial expired"
+    REMOVED = 3, "Projects removed"
+    PAYMENT = 4, "Payment received"
+    UNPAID = 5, "Unpaid billing"
+    CREATED = 6, "Created billing"
+    DISABLED_RECURRING = 7, "Disabled recurring payment"
+    LIBRE_REQUEST = 8, "Requested Libre hosting"
+    LIBRE_APPROVED = 9, "Approved Libre hosting"
+    TERMINATED = 10, "Billing terminated"
+    EXTENDED_TRIAL = 11, "Trial extended"
+    PROJECT_BACKUP = 12, "Project backed up"
+
+
+class BillingLogQuerySet(models.QuerySet["BillingLog"]):
+    def order(self) -> BillingLogQuerySet:
+        return self.order_by("-timestamp")
+
+    def recent(self) -> BillingLogQuerySet:
+        return self.order()[:20]
+
+
+class BillingLog(models.Model):
+    billing = models.ForeignKey(
+        Billing,
+        on_delete=models.deletion.RESTRICT,
+        verbose_name=gettext_lazy("Billing"),
+    )
+    timestamp = models.DateTimeField(default=timezone.now, verbose_name="Timestamp")
+    event = models.IntegerField(
+        choices=BillingEvent, verbose_name=gettext_lazy("Billing event")
+    )
+    summary = models.CharField(max_length=200, verbose_name="Summary")
+    user = models.ForeignKey(User, null=True, on_delete=models.RESTRICT)
+    details = models.JSONField(default=dict)
+
+    objects = BillingLogQuerySet.as_manager()
+
+    def __str__(self) -> str:
+        return f"{self.timestamp.isoformat()}: {self.billing}: {self.get_event_display()} {self.summary}"
 
 
 @receiver(post_save, sender=Component)
@@ -599,27 +705,52 @@ def update_project_bill(sender, instance, **kwargs) -> None:
 @receiver(pre_delete, sender=Component)
 @receiver(post_delete, sender=Translation)
 @disable_for_loaddata
-def record_project_bill(sender, instance, **kwargs) -> None:
+def record_project_bill(
+    sender, instance: Project | Component | Translation, **kwargs
+) -> None:
     if isinstance(instance, Translation):
-        instance = instance.component
+        try:
+            instance = instance.component
+        except Component.DoesNotExist:
+            # Happens during component removal
+            return
     if isinstance(instance, Component):
         instance = instance.project
-    # Track billings to update for delete_project_bill
-    instance.billings_to_update = list(instance.billing_set.all())
+
+    # Sync billing access upon project removal, otherwise users will lose access
+    if isinstance(instance, Project):
+        users = User.objects.having_perm("billing.view", instance)
+        for billing in instance.billing_set.all():
+            billing.owners.add(*users)
+
+    # Collect billings to update for delete_project_bill
+    instance.billings_to_update = list(
+        instance.billing_set.values_list("pk", flat=True)
+    )
 
 
 @receiver(post_delete, sender=Project)
 @receiver(post_delete, sender=Component)
 @receiver(post_delete, sender=Translation)
 @disable_for_loaddata
-def delete_project_bill(sender, instance, **kwargs) -> None:
+def delete_project_bill(
+    sender, instance: Project | Component | Translation, **kwargs
+) -> None:
+    from weblate.billing.tasks import billing_check
+
     if isinstance(instance, Translation):
-        instance = instance.component
+        try:
+            instance = instance.component
+        except Component.DoesNotExist:
+            # Happens during component removal
+            return
     if isinstance(instance, Component):
         instance = instance.project
-    # This is set in record_project_bill
-    for billing in instance.billings_to_update:
-        billing.check_limits()
+    # This is collected in record_project_bill
+    for billing_id in instance.billings_to_update:
+        transaction.on_commit(partial(billing_check, billing_id))
+    # Clear the list to avoid repeated trigger
+    instance.billings_to_update.clear()
 
 
 @receiver(post_save, sender=Invoice)

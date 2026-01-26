@@ -1,61 +1,61 @@
 {% extends "base.html" %}
-{% load i18n %}
-{% load translations %}
-{% load crispy_forms_tags %}
-{% load permissions %}
+
+{% load crispy_forms_tags i18n permissions translations %}
 
 {% block breadcrumbs %}
-{% if object %}
+  {% if object %}
     {% path_object_breadcrumbs object %}
-    <li><a href="{% url 'addons' path=object.get_url_path %}">{% trans "Add-ons" %}</a></li>
-{% else %}
-    <li><a href="{% url 'manage-addons' %}">{% trans "Add-ons" %}</a></li>
-{% endif %}
-<li>
-{% if instance %}
-<a href="{% url 'addon-detail' pk=instance.pk %}">{{ addon.verbose }}</a>
-{% else %}
-{{ addon.verbose }}
-{% endif %}
-</li>
-{% endblock %}
+    <li class="breadcrumb-item">
+      <a href="{% url 'addons' path=object.get_url_path %}">{% translate "Add-ons" %}</a>
+    </li>
+  {% else %}
+    <li class="breadcrumb-item">
+      <a href="{% url 'manage-addons' %}">{% translate "Add-ons" %}</a>
+    </li>
+  {% endif %}
+  <li class="breadcrumb-item">
+    {% if instance %}
+      <a href="{% url 'addon-detail' pk=instance.pk %}">{{ addon.verbose }}</a>
+    {% else %}
+      {{ addon.verbose }}
+    {% endif %}
+  </li>
+{% endblock breadcrumbs %}
 
 {% block content %}
 
-<div class="panel panel-default">
-    <div class="panel-heading">
-      <h4 class="panel-title">{% trans "Add-on Activity Logs" %}</h4>
+  <div class="card">
+    <div class="card-header">
+      <h4 class="card-title">{% translate "Add-on Activity Logs" %}</h4>
     </div>
     <table class="table table-striped">
       <thead>
         <tr>
-          <th width="30">{% trans "Status" %}</th>
-          <th>{% trans "Event" %}</th>
-          <th>{% trans "Details" %}</th>
-          <th>{% trans "Timestamp" %}</th>
+          <th width="30">{% translate "Status" %}</th>
+          <th>{% translate "Event" %}</th>
+          <th>{% translate "Details" %}</th>
+          <th>{% translate "Timestamp" %}</th>
         </tr>
       </thead>
       <tbody>
         {% for log in addon_activity_log %}
           <tr>
             <td>
-              {% if log.details.error_occured %}
+              {% if log.details.error %}
                 <!-- This is a warning sign -->
-                <span class="text-danger">&#9888;</span>
+                <span class="text-danger">⚠</span>
               {% else %}
                 <!-- This is a green tick -->
-                <span class="text-success">&#10004;</span>
+                <span class="text-success">✔</span>
               {% endif %}
             </td>
-            <td>
-              {{ log.get_event_display }}
-            </td>
-            <td>{{ log.details.result }}</td>
-            <td>{{ log.created|date:"Y-m-d H:i" }}</td>
+            <td>{{ log.get_event_display }}</td>
+            <td>{{ log.get_details_display }}</td>
+            <td>{{ log.created|naturaltime:True }}</td>
           </tr>
         {% empty %}
           <tr>
-            <td colspan="4">{% trans "No add-on activity logs available." %}</td>
+            <td colspan="4">{% translate "No add-on activity logs available." %}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -63,15 +63,19 @@
 
     <!-- Pagination -->
     {% if addon_activity_log.has_other_pages %}
-      <div class="panel-footer">
+      <div class="card-footer">
         <div class="text-center">
           <nav>
             <ul class="pagination">
               {% if addon_activity_log.has_previous %}
-                <li><a href="?page={{ addon_activity_log.previous_page_number }}">&laquo; {% trans "Previous" %}</a></li>
+                <li>
+                  <a href="?page={{ addon_activity_log.previous_page_number }}">« {% translate "Previous" %}</a>
+                </li>
               {% endif %}
               {% if addon_activity_log.has_next %}
-                <li><a href="?page={{ addon_activity_log.next_page_number }}">{% trans "Next" %} &raquo;</a></li>
+                <li>
+                  <a href="?page={{ addon_activity_log.next_page_number }}">{% translate "Next" %} »</a>
+                </li>
               {% endif %}
             </ul>
           </nav>
@@ -80,4 +84,4 @@
     {% endif %}
   </div>
 
-  {% endblock %}
+{% endblock content %}

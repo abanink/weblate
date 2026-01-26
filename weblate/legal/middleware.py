@@ -2,7 +2,10 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
 import re
+from typing import TYPE_CHECKING
 
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -12,6 +15,9 @@ from django.utils.translation import gettext
 from weblate.legal.models import Agreement
 from weblate.utils import messages
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
+
 
 class RequireTOSMiddleware:
     """Middleware to enforce TOS confirmation on certain requests."""
@@ -20,10 +26,12 @@ class RequireTOSMiddleware:
         self.get_response = get_response
         # Ignored paths regexp, mostly covers API and legal pages
         self.matcher = re.compile(
-            r"^/(legal|about|contact|api|static|widgets|data|hooks)/"
+            r"^/(legal|about|contact|api|static|widget|data|hooks|avatar|healthz|js|css)/"
         )
 
-    def process_view(self, request, view_func, view_args, view_kwargs):
+    def process_view(
+        self, request: AuthenticatedHttpRequest, view_func, view_args, view_kwargs
+    ):
         """Check request whether user has agreed to TOS."""
         # We intercept only GET requests for authenticated users
         if request.method != "GET" or not request.user.is_authenticated:
@@ -39,19 +47,16 @@ class RequireTOSMiddleware:
             messages.info(
                 request,
                 gettext(
-                    "We have a new version of the Terms of Service document, "
+                    "We have an updated version of the General Terms and Conditions document, "
                     "please read it and confirm that you agree with it."
                 ),
             )
             return redirect(
-                "{}?{}".format(
-                    reverse("legal:confirm"),
-                    urlencode({"next": request.get_full_path()}),
-                )
+                f"{reverse('legal:confirm')}?{urlencode({'next': request.get_full_path()})}"
             )
 
         # Explicitly return None for all non-matching requests
         return None
 
-    def __call__(self, request):
+    def __call__(self, request: AuthenticatedHttpRequest):
         return self.get_response(request)

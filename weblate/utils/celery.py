@@ -9,17 +9,23 @@ from __future__ import annotations
 import os
 import time
 from collections import defaultdict
+from typing import Any
 
 from celery import Celery
+from celery.contrib.django.task import DjangoTask
 from celery.signals import after_setup_logger, task_failure
 from django.conf import settings
 from django.core.cache import cache
 from django.core.checks import run_checks
 
+# Type annotation compatibility
+Celery.__class_getitem__ = classmethod(lambda cls, *args, **kwargs: cls)  # noqa: ARG005
+DjangoTask.__class_getitem__ = classmethod(lambda cls, *args, **kwargs: cls)  # noqa: ARG005
+
 # set the default Django settings module for the 'celery' program.
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "weblate.settings")
 
-app = Celery("weblate")
+app = Celery[DjangoTask[..., Any]]("weblate")
 
 # Using a string here means the worker doesn't have to serialize
 # the configuration object to child processes.
@@ -32,12 +38,11 @@ app.autodiscover_tasks()
 
 
 @task_failure.connect
-def handle_task_failure(exception=None, **kwargs) -> None:
+def handle_task_failure(task_id="", exception=None, **kwargs) -> None:
     from weblate.utils.errors import report_error
 
     report_error(
-        extra_log=repr(kwargs),
-        cause="Failure while executing task",
+        f"Failure while executing task {task_id}",
         skip_sentry=True,
         print_tb=True,
         level="error",
@@ -64,7 +69,7 @@ def show_failing_system_check(sender, logger, **kwargs) -> None:
 
 
 def get_queue_length(queue="celery"):
-    with app.connection_or_acquire() as conn:  # types: ignore[attr-defined]
+    with app.connection_or_acquire() as conn:  # type: ignore[attr-defined]
         return conn.default_channel.queue_declare(
             queue=queue, durable=True, auto_delete=False
         ).message_count
@@ -84,26 +89,10 @@ def get_queue_stats():
     return {queue: get_queue_length(queue) for queue in get_queue_list()}
 
 
-def is_task_ready(task):
-    """
-    Workaround broken ready() for failed Celery results.
-
-    In case the task ends with an exception, the result tries to reconstruct
-    that. It can fail in case the exception can not be reconstructed using
-    data in args attribute.
-
-    See https://github.com/celery/celery/issues/5057
-    """
-    try:
-        return task.ready()
-    except TypeError:
-        return True
-
-
 def get_task_progress(task):
     """Return progress of a Celery task."""
     # Completed task
-    if is_task_ready(task):
+    if task.ready():
         return 100
     # In progress
     result = task.result

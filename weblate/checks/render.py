@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from django.core.cache import cache
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import Http404, HttpResponse
@@ -15,7 +17,13 @@ from weblate.checks.base import TargetCheckParametrized
 from weblate.checks.parser import multi_value_flag
 from weblate.fonts.utils import check_render_size
 
-IMAGE = '<a href="{0}" class="thumbnail img-check"><img class="img-responsive" src="{0}" /></a>'
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
+    from weblate.trans.models import Unit
+
+IMAGE = (
+    '<a href="{0}" class="thumbnail img-check"><img class="img-fluid" src="{0}" /></a>'
+)
 
 
 class MaxSizeCheck(TargetCheckParametrized):
@@ -23,7 +31,9 @@ class MaxSizeCheck(TargetCheckParametrized):
 
     check_id = "max-size"
     name = gettext_lazy("Maximum size of translation")
-    description = gettext_lazy("Translation rendered text should not exceed given size")
+    description = gettext_lazy(
+        "Translation rendered text should not exceed given size."
+    )
     default_disabled = True
     last_font = None
     always_display = True
@@ -32,7 +42,7 @@ class MaxSizeCheck(TargetCheckParametrized):
     def param_type(self):
         return multi_value_flag(int, 1, 2)
 
-    def get_params(self, unit) -> tuple[str, None | int, int, int]:
+    def get_params(self, unit: Unit) -> tuple[str, int | None, int, int]:
         all_flags = unit.all_flags
         return (
             all_flags.get_value_fallback("font-family", "sans"),
@@ -52,7 +62,9 @@ class MaxSizeCheck(TargetCheckParametrized):
             return f"{group.font.family} {group.font.style}"
         return f"{override.font.family} {override.font.style}"
 
-    def check_target_params(self, sources, targets, unit, value):
+    def check_target_params(
+        self, sources: list[str], targets: list[str], unit: Unit, value
+    ):
         if len(value) == 2:
             width, lines = value
         else:
@@ -102,7 +114,7 @@ class MaxSizeCheck(TargetCheckParametrized):
             )
         return images
 
-    def render(self, request, unit):
+    def render(self, request: AuthenticatedHttpRequest, unit: Unit):
         try:
             pos = int(request.GET.get("pos", "0"))
         except ValueError:
@@ -115,7 +127,8 @@ class MaxSizeCheck(TargetCheckParametrized):
             )
             result = cache.get(key)
         if result is None:
-            raise Http404("Invalid check")
+            msg = "Invalid check"
+            raise Http404(msg)
         response = HttpResponse(content_type="image/png")
         response.write(result)
         return response

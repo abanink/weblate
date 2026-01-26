@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .base import DownloadTranslations, MachineTranslation
+from .base import MachineTranslation
 from .forms import SAPMachineryForm
 
 if TYPE_CHECKING:
     from requests.auth import AuthBase
+
+    from .base import DownloadTranslations
 
 
 class SAPTranslationHub(MachineTranslation):
@@ -35,7 +37,7 @@ class SAPTranslationHub(MachineTranslation):
 
         return result
 
-    def get_auth(self) -> None | tuple[str, str] | AuthBase:
+    def get_auth(self) -> tuple[str, str] | AuthBase | None:
         # to access the productive API
         if self.settings["username"] and self.settings["password"]:
             return (self.settings["username"], self.settings["password"])
@@ -51,8 +53,8 @@ class SAPTranslationHub(MachineTranslation):
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
         unit,
         user,
@@ -65,8 +67,8 @@ class SAPTranslationHub(MachineTranslation):
 
         # build the json body
         data = {
-            "targetLanguages": [language],
-            "sourceLanguage": source,
+            "targetLanguages": [target_language],
+            "sourceLanguage": source_language,
             "enableMT": enable_mt,
             "enableTranslationQualityEstimation": enable_mt,
             "units": [{"value": text}],

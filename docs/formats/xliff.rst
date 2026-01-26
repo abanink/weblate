@@ -1,14 +1,14 @@
 .. _xliff:
 
-XLIFF
------
+XLIFF 1.1 and 1.2
+-----------------
 
 .. index::
     pair: XLIFF; file format
 
 .. note::
 
-   Weblate currently supports XLIFF 1.2. XLIFF 2.0 is not supported and is not backwards compatible with XLIFF 1.2.
+   :doc:`/formats/xliff2` is a different format and is not backwards compatible with XLIFF 1.2.
 
 XML-based format created to standardize translation files, but in the end it
 is one of `many standards <https://xkcd.com/927/>`_, in this area.
@@ -27,12 +27,12 @@ Weblate supports XLIFF in several variants:
 
 .. seealso::
 
-    `XML Localization Interchange File Format (XLIFF)`_ specification,
-    `XLIFF 1.2 Representation Guide for Gettext PO`_,
-    `XLIFF on Wikipedia <https://en.wikipedia.org/wiki/XLIFF>`_,
-    :doc:`tt:formats/xliff`
+    * `XML Localization Interchange File Format (XLIFF)`_ specification
+    * `XLIFF 1.2 Representation Guide for Gettext PO`_
+    * `XLIFF on Wikipedia <https://en.wikipedia.org/wiki/XLIFF>`_
+    * :doc:`tt:formats/xliff`
 
-.. _XML Localization Interchange File Format (XLIFF): http://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html
+.. _XML Localization Interchange File Format (XLIFF): https://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html
 .. _XLIFF 1.2 Representation Guide for Gettext PO: https://docs.oasis-open.org/xliff/v1.2/xliff-profile-po/xliff-profile-po-1.2-cd02.html
 
 
@@ -111,8 +111,8 @@ in the font family is converted to underscore, so ``Source Sans Pro`` becomes
 
 .. seealso::
 
-    `font attribute in XLIFF 1.2 <http://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html#font>`_,
-    `maxwidth attribute in XLIFF 1.2 <http://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html#maxwidth>`_
+    * `font attribute in XLIFF 1.2 <https://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html#font>`_
+    * `maxwidth attribute in XLIFF 1.2 <https://docs.oasis-open.org/xliff/v1.2/os/xliff-core.html#maxwidth>`_
 
 String keys
 +++++++++++

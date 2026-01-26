@@ -4,15 +4,23 @@
 
 """Test for ACL management."""
 
+from typing import TYPE_CHECKING, cast
+
 from django.conf import settings
 from django.core import mail
-from django.test.utils import override_settings
+from django.test.utils import modify_settings, override_settings
 from django.urls import reverse
 
 from weblate.auth.models import Group, Invitation, Role, User, get_anonymous
 from weblate.lang.models import Language
+from weblate.trans.actions import ActionEvents
 from weblate.trans.models import Project
 from weblate.trans.tests.test_views import FixtureTestCase, RegistrationTestMixin
+from weblate.trans.tests.utils import enable_login_required_settings
+from weblate.utils.pii import mask_email
+
+if TYPE_CHECKING:
+    from weblate.accounts.models import AuditLog
 
 
 class ACLTest(FixtureTestCase, RegistrationTestMixin):
@@ -48,7 +56,7 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         response = self.client.get(self.access_url)
         self.assertEqual(response.status_code, 403)
         response = self.client.get(self.translate_url)
-        self.assertContains(response, 'type="submit" name="save"')
+        self.assertContains(response, ' name="save"')
 
     def test_acl_protected(self) -> None:
         """Test ACL protected project."""
@@ -106,6 +114,8 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         # Ensure user is now listed
         response = self.client.get(self.access_url)
         self.assertContains(response, self.second_user.username)
+        invitation_audit = self.second_user.auditlog_set.get(activity="invited")
+        self.assertIsNone(invitation_audit.address)
 
     def test_invite_invalid(self) -> None:
         """Test inviting invalid form."""
@@ -130,8 +140,34 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         # Ensure invitation was mapped to existing user
         self.assertEqual(invitation.user, self.user)
 
+        # check change display is user's username
+        change = Project.objects.get(pk=self.project.pk).change_set.get(
+            action=ActionEvents.INVITE_USER
+        )
+        self.assertEqual(change.get_details_display(), self.user.username)
+
+    @override_settings(REGISTRATION_OPEN=False, REGISTRATION_CAPTCHA=False)
+    def test_invite_user_closed(self) -> None:
+        self.project.add_user(self.user, "Administration")
+        response = self.client.post(
+            reverse("invite-user", kwargs=self.kw_project),
+            {"email": "user@example.com", "group": self.admin_group.pk},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 403)
+
+        # It should work for the superuser
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.post(
+            reverse("invite-user", kwargs=self.kw_project),
+            {"email": "user@example.com", "group": self.admin_group.pk},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
     @override_settings(REGISTRATION_OPEN=True, REGISTRATION_CAPTCHA=False)
-    def test_invite_user(self) -> None:
+    def test_invite_user_open(self) -> None:
         """Test inviting user."""
         self.project.add_user(self.user, "Administration")
         response = self.client.post(
@@ -145,8 +181,17 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         # Check invitation mail
         self.assertEqual(len(mail.outbox), 1)
         message = mail.outbox[0]
-        self.assertEqual(message.subject, "[Weblate] Invitation to Weblate")
+        self.assertEqual(
+            message.subject,
+            "[Weblate] testuser has invited you to join the Test project",
+        )
         mail.outbox = []
+
+        # Check change display is user's email masked
+        change = Project.objects.get(pk=self.project.pk).change_set.get(
+            action=ActionEvents.INVITE_USER
+        )
+        self.assertEqual(change.get_details_display(), mask_email("user@example.com"))
 
         self.assertEqual(Invitation.objects.count(), 1)
 
@@ -161,7 +206,10 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         # Check invitation mail
         self.assertEqual(len(mail.outbox), 1)
         message = mail.outbox[0]
-        self.assertEqual(message.subject, "[Weblate] Invitation to Weblate")
+        self.assertEqual(
+            message.subject,
+            "[Weblate] testuser has invited you to join the Test project",
+        )
         mail.outbox = []
 
         user_client = self.client_class()
@@ -170,6 +218,7 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         response = user_client.get(invitation.get_absolute_url(), follow=True)
         self.assertRedirects(response, reverse("register"))
         self.assertContains(response, "user@example.com")
+        self.assertContains(response, "You were invited")
 
         # Perform registration
         response = user_client.post(
@@ -183,11 +232,30 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         )
         url = self.assert_registration_mailbox()
         response = user_client.get(url, follow=True)
+
+        # Accept terms if using legal
+        if "weblate.legal.pipeline.tos_confirm" in settings.SOCIAL_AUTH_PIPELINE:
+            response = self.confirm_tos(user_client, response)
+
         self.assertRedirects(response, reverse("password"))
 
         # Verify user was added
         response = self.client.get(self.access_url)
         self.assertContains(response, "example-username")
+
+        user = User.objects.get(username="example-username")
+
+        # Inspect audit log
+        audit: AuditLog | None = None
+        for current in user.auditlog_set.filter(activity="team-add"):
+            if current.params["team"] == "Administration":
+                audit = current
+                break
+
+        self.assertIsNotNone(
+            audit, "Audit log entry for adding to the Administration team not found"
+        )
+        self.assertEqual(cast("AuditLog", audit).params["username"], self.user.username)
 
     def remove_user(self) -> None:
         # Remove user
@@ -229,6 +297,12 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
                 "groups": [self.translate_group.pk],
             },
         )
+        # check group name is included in change details
+        change = Project.objects.get(pk=self.project.pk).change_set.get(
+            action=ActionEvents.ADD_USER
+        )
+        self.assertIn(self.translate_group.name, change.get_details_display())
+
         self.assertFalse(
             User.objects.all_admins(self.project)
             .filter(username=self.second_user.username)
@@ -302,21 +376,21 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         self.project.access_control = Project.ACCESS_PROTECTED
         self.project.translation_review = True
         self.project.save()
-        self.assertEqual(10 + billing_group, self.project.defined_groups.count())
+        self.assertEqual(11 + billing_group, self.project.defined_groups.count())
         self.project.access_control = Project.ACCESS_PRIVATE
         self.project.translation_review = True
         self.project.save()
-        self.assertEqual(10 + billing_group, self.project.defined_groups.count())
+        self.assertEqual(11 + billing_group, self.project.defined_groups.count())
         self.project.access_control = Project.ACCESS_CUSTOM
         self.project.save()
-        self.assertEqual(10 + billing_group, self.project.defined_groups.count())
+        self.assertEqual(11 + billing_group, self.project.defined_groups.count())
         self.project.access_control = Project.ACCESS_CUSTOM
         self.project.save()
-        self.assertEqual(10 + billing_group, self.project.defined_groups.count())
+        self.assertEqual(11 + billing_group, self.project.defined_groups.count())
         self.project.defined_groups.all().delete()
         self.project.access_control = Project.ACCESS_PRIVATE
         self.project.save()
-        self.assertEqual(10 + billing_group, self.project.defined_groups.count())
+        self.assertEqual(11 + billing_group, self.project.defined_groups.count())
         self.project.delete()
 
     def test_restricted_component(self) -> None:
@@ -360,6 +434,7 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         )
         self.assertRedirects(response, self.access_url)
         self.assertEqual(self.project.userblock_set.count(), 1)
+        self.assertEqual(self.project.userblock_set.filter(note="").count(), 1)
 
         # Block user, for second time
         response = self.client.post(
@@ -377,6 +452,15 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         self.assertRedirects(response, self.access_url)
         self.assertEqual(self.project.userblock_set.count(), 0)
 
+        # Block user with a note
+        response = self.client.post(
+            reverse("block-user", kwargs=self.kw_project),
+            {"user": self.second_user.username, "note": "Spamming"},
+        )
+        self.assertRedirects(response, self.access_url)
+        self.assertEqual(self.project.userblock_set.count(), 1)
+        self.assertEqual(self.project.userblock_set.filter(note="Spamming").count(), 1)
+
     def test_delete_group(self) -> None:
         self.project.add_user(self.user, "Administration")
         group = self.project.defined_groups.get(name="Memory")
@@ -384,7 +468,7 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
             group.get_absolute_url(),
             {"delete": group.pk},
         )
-        self.assertRedirects(response, self.access_url + "#teams")
+        self.assertRedirects(response, f"{self.access_url}#teams")
         self.assertFalse(Group.objects.filter(pk=group.pk).exists())
 
     def create_test_group(self):
@@ -402,7 +486,7 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
                 ),
             },
         )
-        self.assertRedirects(response, self.access_url + "#teams")
+        self.assertRedirects(response, f"{self.access_url}#teams")
         return Group.objects.get(name="Czech team")
 
     def test_create_group(self) -> None:
@@ -429,7 +513,7 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
                 ),
             },
         )
-        self.assertRedirects(response, self.access_url + "#teams")
+        self.assertRedirects(response, f"{self.access_url}#teams")
         group = Group.objects.get(name="All team")
         self.assertEqual(group.defining_project, self.project)
         self.assertEqual(group.language_selection, 1)
@@ -465,3 +549,13 @@ class ACLTest(FixtureTestCase, RegistrationTestMixin):
         self.assertNotEqual(
             list(group.languages.values_list("code", flat=True)), ["cs"]
         )
+
+
+@enable_login_required_settings()
+class ACLLoginRequiredTestCase(ACLTest):
+    pass
+
+
+@modify_settings(SOCIAL_AUTH_PIPELINE={"append": "weblate.legal.pipeline.tos_confirm"})
+class ACLLegalTestCase(ACLLoginRequiredTestCase):
+    pass

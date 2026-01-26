@@ -20,8 +20,10 @@ from weblate.checks.chars import (
     EndSpaceCheck,
     EndStopCheck,
     EscapedNewlineCountingCheck,
+    KabyleCharactersCheck,
     KashidaCheck,
     MaxLengthCheck,
+    MultipleCapitalCheck,
     NewLineCountCheck,
     PunctuationSpacingCheck,
     ZeroWidthSpaceCheck,
@@ -147,6 +149,17 @@ class EndStopCheckTest(CheckTestCase):
         self.do_test(False, ("Text.", "Text။", ""), "my")
         self.do_test(False, ("Text?", "ပုံဖျက်မလး။", ""), "my")
         self.do_test(False, ("Te xt", "ပုံဖျက်မလး။", ""), "my")  # codespell:ignore
+
+    def test_french(self) -> None:
+        self.do_test(
+            False,
+            (
+                "To enable password-less login, the public SSH key can be copied to the remote host.",
+                "Pour activer l’authentification sans mot de passe, la clé publique SSH peut être copiée sur le serveur distant.",  # codespell:ignore
+                "",
+            ),
+            "fr",
+        )
 
 
 class EndColonCheckTest(CheckTestCase):
@@ -456,4 +469,78 @@ class PunctuationSpacingCheckTest(CheckTestCase):
                 "md-text",
             ),
             "fr",
+        )
+
+    def test_restructured_text(self) -> None:
+        self.do_test(
+            True,
+            (
+                ":ref:`document` here",
+                ":ref:`document` tam",
+                "",
+            ),
+            "fr",
+        )
+        self.do_test(
+            False,
+            (
+                ":ref:`document` here",
+                ":ref:`document` tam",
+                "rst-text",
+            ),
+            "fr",
+        )
+
+
+class KabyleCharactersCheckTest(CheckTestCase):
+    check = KabyleCharactersCheck()
+    default_lang = "kab"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.test_good_matching = ("string", "string", "")
+        self.test_failure_1 = ("string", "γ", "")
+        self.test_failure_2 = ("string", "Γ", "")
+        self.test_failure_3 = ("string", "ε", "")
+
+    def test_skip(self) -> None:
+        self.do_test(
+            False,
+            (
+                "string",
+                "γΓε",
+                "",
+            ),
+            "el",
+        )
+
+
+class MultipleCapitalCheckTest(CheckTestCase):
+    check = MultipleCapitalCheck()
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.test_good_matching = ("Hello", "Hello", "")
+        self.test_failure_1 = ("Hello", "HEllo", "")
+        self.test_failure_2 = ("camel case", "CAmelCase", "")
+        self.test_failure_3 = ("sigma", "ΣIGMA", "")
+
+    def test_acronyms(self) -> None:
+        self.do_test(
+            False,
+            (
+                "Welcome NATO",
+                "Bonjour OTAN",
+                "",
+            ),
+            "fr",
+        )
+        self.do_test(
+            False,
+            (
+                "Welcome NATO",
+                "Vítej NATO",
+                "",
+            ),
+            "cs",
         )

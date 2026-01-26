@@ -4,14 +4,26 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from functools import reduce
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from django.db.models import Count, Prefetch, Q, Value
 from django.db.models.functions import MD5, Lower
 from django.utils.translation import gettext, gettext_lazy, ngettext
 
 from weblate.checks.base import BatchCheckMixin, TargetCheck
+from weblate.trans.actions import ACTIONS_REVERTABLE, ActionEvents
+from weblate.trans.util import split_plural
+from weblate.utils.html import format_html_join_comma
 from weblate.utils.state import STATE_TRANSLATED
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from weblate.trans.models import Change, Component, Unit
+
+    from .base import FixupType
 
 
 class PluralsCheck(TargetCheck):
@@ -19,14 +31,14 @@ class PluralsCheck(TargetCheck):
 
     check_id = "plurals"
     name = gettext_lazy("Missing plurals")
-    description = gettext_lazy("Some plural forms are untranslated")
+    description = gettext_lazy("Some plural forms are untranslated.")
 
-    def should_skip(self, unit):
+    def should_skip(self, unit: Unit):
         if unit.translation.component.is_multivalue:
             return True
         return super().should_skip(unit)
 
-    def check_target_unit(self, sources, targets, unit):
+    def check_target_unit(self, sources: list[str], targets: list[str], unit: Unit):
         # Is this plural?
         if len(sources) == 1:
             return False
@@ -36,7 +48,7 @@ class PluralsCheck(TargetCheck):
         # Check for empty translation
         return "" in targets
 
-    def check_single(self, source, target, unit) -> bool:
+    def check_single(self, source: str, target: str, unit: Unit) -> bool:
         """Target strings are checked in check_target_unit."""
         return False
 
@@ -46,17 +58,17 @@ class SamePluralsCheck(TargetCheck):
 
     check_id = "same-plurals"
     name = gettext_lazy("Same plurals")
-    description = gettext_lazy("Some plural forms are translated in the same way")
+    description = gettext_lazy("Some plural forms are translated in the same way.")
 
-    def check_target_unit(self, sources, targets, unit):
+    def check_target_unit(self, sources: list[str], targets: list[str], unit: Unit):
         # Is this plural?
         if len(sources) == 1 or len(targets) == 1:
             return False
-        if not targets[0]:
+        if not targets or not targets[0]:
             return False
         return len(set(targets)) == 1
 
-    def check_single(self, source, target, unit) -> bool:
+    def check_single(self, source: str, target: str, unit: Unit) -> bool:
         """Target strings are checked in check_target_unit."""
         return False
 
@@ -71,17 +83,13 @@ class ConsistencyCheck(TargetCheck, BatchCheckMixin):
         "or is untranslated in some components."
     )
     ignore_untranslated = False
-    propagates = True
+    propagates = "source"
     batch_project_wide = True
     skip_suggestions = True
 
-    def get_propagated_value(self, unit):
-        return unit.target
-
-    def get_propagated_units(self, unit, target: str | None = None):
-        return unit.same_source_units
-
-    def check_target_unit(self, sources, targets, unit):
+    def check_target_unit(
+        self, sources: list[str], targets: list[str], unit: Unit
+    ) -> bool:
         component = unit.translation.component
         if not component.allow_translation_propagation:
             return False
@@ -90,18 +98,17 @@ class ConsistencyCheck(TargetCheck, BatchCheckMixin):
         if component.batch_checks:
             return self.handle_batch(unit, component)
 
-        for other in self.get_propagated_units(unit):
-            if unit.target == other.target:
-                continue
-            if unit.translated or other.translated:
-                return True
-        return False
+        others = unit.propagated_units.exclude(target=unit.target)
+        if not unit.translated:
+            # Look only for translated units
+            others = others.filter(state__gte=STATE_TRANSLATED)
+        return others.exists()
 
-    def check_single(self, source, target, unit) -> bool:
+    def check_single(self, source: str, target: str, unit: Unit) -> bool:
         """Target strings are checked in check_target_unit."""
         return False
 
-    def check_component(self, component):
+    def check_component(self, component: Component) -> Iterable[Unit]:
         from weblate.trans.models import Unit
 
         units = Unit.objects.filter(
@@ -112,7 +119,7 @@ class ConsistencyCheck(TargetCheck, BatchCheckMixin):
         # List strings with different targets
         # Limit this to 100 strings, otherwise the resulting query is way too complex
         matches = (
-            units.values("id_hash", "translation__language", "translation__plural")
+            units.values("id_hash", "translation__plural_id")
             .annotate(Count("target", distinct=True))
             .filter(target__count__gt=1)
             .order_by("id_hash")[:100]
@@ -127,8 +134,7 @@ class ConsistencyCheck(TargetCheck, BatchCheckMixin):
                     lambda x, y: x
                     | (
                         Q(id_hash=y["id_hash"])
-                        & Q(translation__language=y["translation__language"])
-                        & Q(translation__plural=y["translation__plural"])
+                        & Q(translation__plural_id=y["translation__plural_id"])
                     ),
                     matches,
                     Q(),
@@ -150,26 +156,18 @@ class ReusedCheck(TargetCheck, BatchCheckMixin):
     check_id = "reused"
     name = gettext_lazy("Reused translation")
     description = gettext_lazy("Different strings are translated the same.")
-    propagates = True
+    propagates = "target"
     batch_project_wide = True
     skip_suggestions = True
 
-    def get_propagated_value(self, unit):
-        return unit.source
-
-    def get_propagated_units(self, unit, target: str | None = None):
-        from weblate.trans.models import Unit
-
-        if target is None:
-            return unit.same_target_units
-        return Unit.objects.same_target(unit, target)
-
-    def should_skip(self, unit):
+    def should_skip(self, unit: Unit):
         if unit.translation.plural.number <= 1 or not any(unit.get_target_plurals()):
             return True
         return super().should_skip(unit)
 
-    def check_target_unit(self, sources, targets, unit):
+    def check_target_unit(self, sources: list[str], targets: list[str], unit: Unit):
+        from weblate.trans.models import Unit
+
         translation = unit.translation
         component = translation.component
 
@@ -177,24 +175,28 @@ class ReusedCheck(TargetCheck, BatchCheckMixin):
         if component.batch_checks:
             return self.handle_batch(unit, component)
 
-        return self.get_propagated_units(unit).exists()
+        return Unit.objects.same_target(unit).exists()
 
     def get_description(self, check_obj):
+        from weblate.trans.models import Unit
+
         other_sources = (
-            self.get_propagated_units(check_obj.unit)
+            Unit.objects.same_target(check_obj.unit)
             .values_list("source", flat=True)
             .distinct()
         )
 
         return ngettext(
             "Other source string: %s", "Other source strings: %s", len(other_sources)
-        ) % ", ".join(gettext("“%s”") % source for source in other_sources)
+        ) % format_html_join_comma(
+            "{}", ((gettext("“%s”") % source,) for source in other_sources)
+        )
 
-    def check_single(self, source, target, unit) -> bool:
+    def check_single(self, source: str, target: str, unit: Unit) -> bool:
         """Target strings are checked in check_target_unit."""
         return False
 
-    def check_component(self, component):
+    def check_component(self, component: Component) -> Iterable[Unit]:
         from weblate.trans.models import Unit
 
         units = Unit.objects.filter(
@@ -203,28 +205,29 @@ class ReusedCheck(TargetCheck, BatchCheckMixin):
             state__gte=STATE_TRANSLATED,
         )
         # Lower has no effect here, but we want to utilize index
-        units = units.exclude(target__lower__md5=MD5(Lower(Value(""))))
+        units = units.exclude(target__lower__md5=MD5(Value("")))
 
         # List strings with different sources
         # Limit this to 20 strings, otherwise the resulting query is too slow
+        # Use ordering to make the limit deterministic
         matches = (
-            units.values("target__md5", "translation__language", "translation__plural")
+            units.values("target", "translation__plural_id")
             .annotate(source__count=Count("source", distinct=True))
             .filter(source__count__gt=1)
-            .order_by("target__md5")[:20]
+            .order_by("target__lower__md5")[:20]
         )
 
         if not matches:
-            return []
+            return
 
-        return (
+        result = (
             units.filter(
                 reduce(
                     lambda x, y: x
                     | (
-                        Q(target__md5=y["target__md5"])
-                        & Q(translation__language=y["translation__language"])
-                        & Q(translation__plural=y["translation__plural"])
+                        Q(target__lower__md5=MD5(Lower(Value(y["target"]))))
+                        & Q(target=y["target"])
+                        & Q(translation__plural_id=y["translation__plural_id"])
                     ),
                     matches,
                     Q(),
@@ -234,15 +237,38 @@ class ReusedCheck(TargetCheck, BatchCheckMixin):
             .prefetch_bulk()
         )
 
+        # Filter out case differing source for case insensitive languages
+        found: dict[tuple[str, str], set[str]] = defaultdict(set)
+        remaining: list[tuple[str, Unit]] = []
+        for unit in result:
+            if not unit.translation.language.is_case_sensitive():
+                key = (unit.translation.language.code, unit.target)
+                lower_source = unit.source.lower()
+                found[key].add(lower_source)
+                remaining.append((key, unit))
+            else:
+                yield unit
+
+        for key, unit in remaining:
+            if len(found[key]) > 1:
+                yield unit
+
 
 class TranslatedCheck(TargetCheck, BatchCheckMixin):
     """Check for inconsistent translations."""
 
     check_id = "translated"
     name = gettext_lazy("Has been translated")
-    description = gettext_lazy("This string has been translated in the past")
+    description = gettext_lazy("This string has been translated in the past.")
     ignore_untranslated = False
     skip_suggestions = True
+
+    SOURCE_ACTIONS: ClassVar[set[ActionEvents]] = {
+        ActionEvents.SOURCE_CHANGE,
+        ActionEvents.MARKED_EDIT,
+    }
+
+    TRACK_ACTIONS: ClassVar[set[ActionEvents]] = ACTIONS_REVERTABLE | SOURCE_ACTIONS
 
     def get_description(self, check_obj):
         unit = check_obj.unit
@@ -251,35 +277,34 @@ class TranslatedCheck(TargetCheck, BatchCheckMixin):
             return super().get_description(check_obj)
         return gettext('Previous translation was "%s".') % target
 
-    def should_skip_change(self, change, unit):
-        from weblate.trans.models import Change
-
+    def should_skip_change(self, change: Change, unit: Unit):
         # Skip automatic translation entries adding needs editing string
         return (
-            change.action == Change.ACTION_AUTO
+            change.action == ActionEvents.AUTO
             and change.details.get("state", STATE_TRANSLATED) < STATE_TRANSLATED
         )
 
-    @staticmethod
-    def should_break_changes(change):
-        from weblate.trans.models import Change
-
+    def should_break_changes(self, change: Change):
         # Stop changes processing on source string change or on
         # intentional marking as needing edit
-        return change.action in {Change.ACTION_SOURCE_CHANGE, Change.ACTION_MARKED_EDIT}
+        return change.action in self.SOURCE_ACTIONS
 
-    def check_target_unit(self, sources, targets, unit):
+    def check_target_unit(  # type: ignore[override]
+        self, sources: list[str], targets: list[str], unit: Unit
+    ) -> Literal[False] | str:
+        # TODO: this is type annotation hack, instead the check should have a proper return type
         if unit.translated:
             return False
 
         component = unit.translation.component
 
         if component.batch_checks:
-            return self.handle_batch(unit, component)
+            if self.handle_batch(unit, component):
+                # This needs to be true-ish value
+                return "present"
+            return False
 
-        from weblate.trans.models import Change
-
-        changes = unit.change_set.filter(action__in=Change.ACTIONS_CONTENT).order()
+        changes = unit.change_set.filter(action__in=self.TRACK_ACTIONS).order()
 
         for change in changes:
             if self.should_break_changes(change):
@@ -291,30 +316,32 @@ class TranslatedCheck(TargetCheck, BatchCheckMixin):
 
         return False
 
-    def check_single(self, source, target, unit) -> bool:
+    def check_single(self, source: str, target: str, unit: Unit) -> bool:
         """Target strings are checked in check_target_unit."""
         return False
 
-    def get_fixup(self, unit):
-        target = self.check_target_unit(unit.source, unit.target, unit)
+    def get_fixup(self, unit: Unit) -> Iterable[FixupType] | None:
+        target = self.check_target_unit(
+            unit.get_source_plurals(), unit.get_target_plurals(), unit
+        )
         if not target:
             return None
-        return [(".*", target, "u")]
+        return [("plurals", split_plural(target))]
 
-    def check_component(self, component):
+    def check_component(self, component: Component) -> Iterable[Unit]:
         from weblate.trans.models import Change, Unit
 
         units = (
             Unit.objects.filter(
                 translation__component=component,
-                change__action__in=Change.ACTIONS_CONTENT,
+                change__action__in=self.TRACK_ACTIONS,
                 state__lt=STATE_TRANSLATED,
             )
             .prefetch_related(
                 Prefetch(
                     "change_set",
                     queryset=Change.objects.filter(
-                        action__in=Change.ACTIONS_CONTENT,
+                        action__in=self.TRACK_ACTIONS,
                     ).order(),
                     to_attr="recent_consistency_changes",
                 )

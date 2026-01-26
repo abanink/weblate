@@ -7,16 +7,20 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from base64 import b64encode
+from typing import TYPE_CHECKING
 
 from django.http.request import HttpRequest
 from django.urls import reverse
 
 from weblate.gitexport.models import get_export_url
 from weblate.gitexport.views import authenticate
-from weblate.trans.models import Component, Project
+from weblate.trans.models import Project
 from weblate.trans.tests.test_models import BaseLiveServerTestCase
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.tests.utils import RepoTestMixin, create_test_user
+
+if TYPE_CHECKING:
+    from weblate.trans.models import Component
 
 
 class GitExportTest(ViewTestCase):
@@ -27,7 +31,7 @@ class GitExportTest(ViewTestCase):
 
     def get_auth_string(self, code):
         encoded = b64encode(f"{self.user.username}:{code}".encode())
-        return "basic " + encoded.decode("ascii")
+        return f"basic {encoded.decode('ascii')}"
 
     def test_authenticate_invalid(self) -> None:
         request = HttpRequest()
@@ -84,7 +88,7 @@ class GitExportTest(ViewTestCase):
     def git_receive(self, **kwargs):
         return self.client.get(
             self.get_git_url(),
-            QUERY_STRING="?service=git-upload-pack",
+            {"service": "git-upload-pack"},
             CONTENT_TYPE="application/x-git-upload-pack-advertisement",
             **kwargs,
         )
@@ -93,13 +97,14 @@ class GitExportTest(ViewTestCase):
         linked = self.create_link_existing()
         response = self.client.get(
             self.get_git_url(component=linked),
-            QUERY_STRING="?service=git-upload-pack",
+            {"service": "git-upload-pack"},
             CONTENT_TYPE="application/x-git-upload-pack-advertisement",
         )
         self.assertRedirects(
             response,
-            "/git/test/test/info/refs??service=git-upload-pack",
+            "/git/test/test/info/refs?service=git-upload-pack",
             status_code=301,
+            fetch_redirect_response=False,
         )
 
     def test_reject_push(self) -> None:

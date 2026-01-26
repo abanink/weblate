@@ -1,15 +1,15 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 from __future__ import annotations
 
 import re
 import uuid
 from collections import defaultdict
+from contextvars import ContextVar
 from functools import cache as functools_cache
 from itertools import chain
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, TypedDict, cast
 
 import sentry_sdk
 from appconf import AppConf
@@ -17,6 +17,7 @@ from django.conf import settings
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import Group as DjangoGroup
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import Prefetch, Q, UniqueConstraint
 from django.db.models.functions import Upper
@@ -27,7 +28,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.translation import gettext, gettext_lazy, pgettext
-from social_core.backends.utils import load_backends
 
 from weblate.auth.data import (
     ACL_GROUPS,
@@ -58,9 +58,28 @@ from weblate.utils.search import parse_query
 from weblate.utils.validators import CRUD_RE, validate_fullname, validate_username
 
 if TYPE_CHECKING:
-    from weblate.auth.permissions import PermissionResult
+    from collections.abc import Iterable, Mapping
 
-    PermissionCacheType = dict[int, list[tuple[set[str] | None, set[Language] | None]]]
+    from django_otp.models import Device
+    from social_core.backends.base import BaseAuth
+
+    from weblate.accounts.models import Subscription
+    from weblate.accounts.strategy import WeblateStrategy
+    from weblate.auth.results import PermissionResult
+    from weblate.wladmin.models import SupportStatusDict
+
+    SimplePermissionList = list[tuple[set[str], set[int] | None]]
+
+    # This is SimplePermissionList with additional None instead of permissions
+    # to indicate user block
+    PermissionList = list[tuple[set[str] | None, set[int] | None]]
+
+    PermissionCacheType = dict[int, PermissionList]
+    SimplePermissionCacheType = dict[int, SimplePermissionList]
+
+    class PermissionsDictType(TypedDict):
+        projects: PermissionCacheType
+        components: SimplePermissionCacheType
 
 
 class Permission(models.Model):
@@ -173,6 +192,13 @@ class Group(models.Model):
         ),
         related_name="administered_group_set",
     )
+    enforced_2fa = models.BooleanField(
+        verbose_name=gettext_lazy("Enforced two-factor authentication"),
+        default=False,
+        help_text=gettext_lazy(
+            "Requires users to have two-factor authentication configured."
+        ),
+    )
 
     objects = GroupQuerySet.as_manager()
 
@@ -203,7 +229,7 @@ class Group(models.Model):
                 clear=True,
             )
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("team", kwargs={"pk": self.pk})
 
     def long_name(self):
@@ -212,11 +238,15 @@ class Group(models.Model):
         return str(self)
 
 
+bot_cache = ContextVar("bot_cache", default=dict)
+
+
 class UserManager(BaseUserManager["User"]):
     def _create_user(self, username, email, password, **extra_fields):
         """Create and save a User with the given fields."""
         if not username:
-            raise ValueError("The given username must be set")
+            msg = "The given username must be set"
+            raise ValueError(msg)
         email = self.normalize_email(email)
         username = self.model.normalize_username(username)
         user = self.model(username=username, email=email, **extra_fields)
@@ -232,25 +262,33 @@ class UserManager(BaseUserManager["User"]):
         extra_fields.setdefault("is_superuser", True)
 
         if extra_fields.get("is_superuser") is not True:
-            raise ValueError("Superuser must have is_superuser=True.")
+            msg = "Superuser must have is_superuser=True."
+            raise ValueError(msg)
 
         return self._create_user(username, email, password, **extra_fields)
 
-    def get_or_create_bot(self, scope: str, username: str, verbose: str):
-        return self.get_or_create(
-            username=f"{scope}:{username}",
-            defaults={
-                "is_bot": True,
-                "full_name": verbose,
-                "email": f"noreply-{scope}-{username}@weblate.org",
-                "is_active": False,
-                "password": make_password(None),
-            },
-        )[0]
+    def get_or_create_bot(self, *, scope: str, name: str, verbose: str) -> User:
+        cached = cast("dict[str, User]", bot_cache.get({}))
+        username = f"{scope}:{name}"
+        try:
+            return cached[username]
+        except KeyError:
+            user = self.get_or_create(
+                username=username,
+                defaults={
+                    "is_bot": True,
+                    "full_name": verbose,
+                    "email": f"noreply-{scope}-{name}@weblate.org",
+                    "is_active": False,
+                    "password": make_password(None),
+                },
+            )[0]
+            cached[username] = user
+            return user
 
 
 class UserQuerySet(models.QuerySet["User"]):
-    def having_perm(self, perm, project):
+    def having_perm(self, perm: str, project: Project) -> Self:
         """
         All users having explicit permission on a project.
 
@@ -261,22 +299,85 @@ class UserQuerySet(models.QuerySet["User"]):
             groups__roles__permissions__codename=perm, groups__projects=project
         ).distinct()
 
-    def all_admins(self, project):
+    def all_admins(self, project: Project) -> Self:
         """All admins in a project."""
         return self.having_perm("project.edit", project)
+
+    def all_reviewers(self, project: Project) -> UserQuerySet:
+        """All reviewers in a project."""
+        return self.having_perm("unit.review", project)
 
     def order(self):
         return self.order_by("username")
 
-    def search(self, query: str, parser: str = "user", **context):
+    def search(
+        self,
+        query: str,
+        parser: Literal["plain", "user", "superuser"] = "user",
+        **context,
+    ):
         """High level wrapper for searching."""
         if parser == "plain":
             result = self.filter(
                 Q(username__icontains=query) | Q(full_name__icontains=query)
             )
         else:
-            result = self.filter(parse_query(query, parser=parser, **context))
+            filters, annotations = parse_query(query, parser=parser, **context)
+            result = self.annotate(**annotations).filter(filters)
         return result.distinct()
+
+    def get_author_by_email(
+        self,
+        author_name: str | None,
+        author_email: str | None,
+        fallback: User | None,
+        request: AuthenticatedHttpRequest,
+    ) -> User | None:
+        from weblate.accounts.models import AuditLog
+
+        if author_email and (fallback is None or not fallback.has_email(author_email)):
+            author, created = User.objects.get_or_create(
+                email=author_email,
+                defaults={
+                    "username": author_email,
+                    "full_name": author_name or author_email,
+                },
+            )
+            if created:
+                AuditLog.objects.create(author, request, "autocreated")
+            if fallback is None and author.is_anonymous:
+                return author
+            if author.is_active and not author.is_bot and not author.is_anonymous:
+                return author
+        return fallback
+
+    def get_or_create(
+        self,
+        defaults: Mapping[str, Any] | None = None,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> tuple[User, bool]:
+        filtered: dict[str, Any] | None
+        extra: dict[str, Any]
+        if defaults is None:
+            filtered = None
+            extra = {}
+        else:
+            filtered = {
+                name: value
+                for name, value in defaults.items()
+                if name not in User.DUMMY_FIELDS
+            }
+            extra = {
+                name: value
+                for name, value in defaults.items()
+                if name in User.DUMMY_FIELDS
+            }
+
+        user, created = super().get_or_create(defaults=filtered, **kwargs)
+        if created:
+            user.extra_data = extra
+            user.save()
+        return user, created
 
 
 @functools_cache
@@ -319,8 +420,10 @@ def wrap_group_list(func):
 class GroupManyToManyField(models.ManyToManyField):
     """Customized field to accept Django Groups objects as well."""
 
-    def contribute_to_class(self, cls, name, **kwargs) -> None:
-        super().contribute_to_class(cls, name, **kwargs)
+    def contribute_to_class(
+        self, cls: type[models.Model], name: str, private_only: bool = False, **kwargs
+    ) -> None:
+        super().contribute_to_class(cls, name, private_only=private_only, **kwargs)
 
         # Get related descriptor
         descriptor = getattr(cls, self.name)
@@ -382,7 +485,12 @@ class User(AbstractBaseUser):
         db_index=True,
     )
     date_expires = models.DateTimeField(
-        gettext_lazy("Expires"), null=True, blank=True, default=None
+        gettext_lazy("Expires"),
+        null=True,
+        blank=True,
+        default=None,
+        validators=[MinValueValidator(timezone.now)],
+        help_text=gettext_lazy("The account will be disabled after the expiry."),
     )
     date_joined = models.DateTimeField(
         gettext_lazy("Date joined"), default=timezone.now
@@ -392,22 +500,24 @@ class User(AbstractBaseUser):
         verbose_name=gettext_lazy("Teams"),
         blank=True,
         help_text=gettext_lazy(
-            "The user is granted all permissions included in "
-            "membership of these teams."
+            "The user is granted all permissions included in membership of these teams."
         ),
     )
 
     objects = UserManager.from_queryset(UserQuerySet)()
 
+    # django_otp integration (via OTPMiddleware)
+    otp_device: Device
+
     EMAIL_FIELD = "email"
     USERNAME_FIELD = "username"
-    REQUIRED_FIELDS = ["email", "full_name"]
+    REQUIRED_FIELDS = ["email", "full_name"]  # noqa: RUF012
     DUMMY_FIELDS = ("first_name", "last_name", "is_staff")
 
     class Meta:
         verbose_name = "User"
         verbose_name_plural = "Users"
-        constraints = [
+        constraints = [  # noqa: RUF012
             UniqueConstraint(Upper("username"), name="weblate_auth_user_username_ci"),
             UniqueConstraint(Upper("email"), name="weblate_auth_user_email_ci"),
         ]
@@ -427,13 +537,17 @@ class User(AbstractBaseUser):
         # This is needed with LDAP authentication when the
         # server does not contain full name
         if "first_name" in self.extra_data and "last_name" in self.extra_data:
-            self.full_name = "{first_name} {last_name}".format(**self.extra_data)
+            self.full_name = (
+                f"{self.extra_data['first_name']} {self.extra_data['last_name']}"
+            )
         elif "first_name" in self.extra_data:
             self.full_name = self.extra_data["first_name"]
         elif "last_name" in self.extra_data:
             self.full_name = self.extra_data["last_name"]
         if not self.email:
             self.email = None
+        if not self.is_active:
+            self.date_expires = None
         super().save(*args, **kwargs)
         self.clear_cache()
         if (
@@ -442,22 +556,22 @@ class User(AbstractBaseUser):
             and self.full_name != "Deleted User"
             and not self.is_anonymous
         ):
-            AuditLog.objects.create(
-                user=self,
-                request=None,
-                activity="enabled" if self.is_active else "disabled",
-            )
+            activity: str
+            if original.date_expires and not self.is_active:
+                activity = "disabled-expiry"
+            elif self.is_active:
+                activity = "enabled"
+            else:
+                activity = "disabled"
+            AuditLog.objects.create(user=self, request=None, activity=activity)
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("user_page", kwargs={"user": self.username})
 
     def __init__(self, *args, **kwargs) -> None:
-        self.extra_data = {}
-        self.cla_cache = {}
-        self._permissions: dict[
-            Literal["projects", "components"], PermissionCacheType
-        ] = {}
-        self.current_subscription = None
+        self.extra_data: dict[str, str] = {}
+        self.cla_cache: dict[tuple[int, int], bool] = {}
+        self.current_subscription: Subscription | None = None
         for name in self.DUMMY_FIELDS:
             if name in kwargs:
                 self.extra_data[name] = kwargs.pop(name)
@@ -465,16 +579,15 @@ class User(AbstractBaseUser):
 
     def clear_cache(self) -> None:
         self.cla_cache = {}
-        self._permissions = {}
         perm_caches = (
-            "project_permissions",
-            "component_permissions",
+            "_permissions",
             "allowed_projects",
             "needs_component_restrictions_filter",
             "needs_project_filter",
             "watched_projects",
             "owned_projects",
             "managed_projects",
+            "cached_groups",
         )
         for name in perm_caches:
             if name in self.__dict__:
@@ -487,6 +600,10 @@ class User(AbstractBaseUser):
     @cached_property
     def is_anonymous(self):
         return self.username == settings.ANONYMOUS_USER_NAME
+
+    def is_verified(self) -> bool:
+        # django_otp overrides this method in OTPMiddleware
+        return False
 
     @cached_property
     def is_authenticated(self) -> bool:  # type: ignore[override]
@@ -544,7 +661,8 @@ class User(AbstractBaseUser):
 
         # Validate perms
         if perm not in SPECIALS and perm not in PERMISSION_NAMES:
-            raise ValueError(f"Invalid permission: {perm}")
+            msg = f"Invalid permission: {perm}"
+            raise ValueError(msg)
 
         # Special permission functions
         if perm in SPECIALS:
@@ -557,27 +675,34 @@ class User(AbstractBaseUser):
         """Check access to given project."""
         if self.is_superuser:
             return True
-        return self.get_project_permissions(project) != []
+        return bool(self.get_project_permissions(project))
 
-    def get_project_permissions(self, project):
+    def get_project_permissions(self, project: Project) -> SimplePermissionList:
         # Build a fresh list as we need to merge them
-        result = []
+        result: SimplePermissionList = []
         # This relies on project_permission being defaultdict(list)
-        result.extend(self.project_permissions[project.pk])
+        result.extend(self.project_permissions[project.pk])  # type: ignore[arg-type]
         # Apply blocking
         if result == [(None, None)]:
             return []
         if project.access_control == Project.ACCESS_PUBLIC:
-            result.extend(self.project_permissions[-SELECTION_ALL_PUBLIC])
+            result.extend(
+                self.project_permissions[-SELECTION_ALL_PUBLIC]  # type: ignore[arg-type]
+            )
         elif project.access_control == Project.ACCESS_PROTECTED:
-            result.extend(self.project_permissions[-SELECTION_ALL_PROTECTED])
-        result.extend(self.project_permissions[-SELECTION_ALL])
+            result.extend(
+                self.project_permissions[-SELECTION_ALL_PROTECTED]  # type: ignore[arg-type]
+            )
+        result.extend(
+            self.project_permissions[-SELECTION_ALL]  # type: ignore[arg-type]
+        )
         return result
 
     def check_access(self, project) -> None:
         """Raise an error if user is not allowed to access this project."""
         if not self.can_access_project(project):
-            raise Http404("Access denied")
+            msg = "Access denied"
+            raise Http404(msg)
 
     def can_access_component(self, component):
         """Check access to given component."""
@@ -590,7 +715,8 @@ class User(AbstractBaseUser):
     def check_access_component(self, component) -> None:
         """Raise an error if user is not allowed to access this component."""
         if not self.can_access_component(component):
-            raise Http404("Access denied")
+            msg = "Access denied"
+            raise Http404(msg)
 
     @cached_property
     def allowed_projects(self):
@@ -646,26 +772,43 @@ class User(AbstractBaseUser):
     def administered_group_ids(self):
         return set(self.administered_group_set.values_list("id", flat=True))
 
-    def _fetch_permissions(self) -> None:
+    @cached_property
+    def cached_groups(self) -> Iterable[Group]:
+        return self.groups.prefetch_related(
+            "roles__permissions",
+            Prefetch(
+                "componentlists__components",
+                queryset=Component.objects.only("id", "project_id"),
+            ),
+            # The name and slug are used when rendering the groups
+            Prefetch(
+                "components",
+                queryset=Component.objects.all().only(
+                    "id", "project_id", "name", "slug"
+                ),
+            ),
+            # The name and slug are used when rendering the groups
+            Prefetch(
+                "projects",
+                queryset=Project.objects.only("id", "name", "slug"),
+            ),
+            # The name and code are used when rendering the groups
+            Prefetch("languages", queryset=Language.objects.only("id", "name", "code")),
+        )
+
+    def group_enforces_2fa(self) -> bool:
+        return any(group.enforced_2fa for group in self.cached_groups)
+
+    @cached_property
+    def _permissions(self) -> PermissionsDictType:
         """Fetch all user permissions into a dictionary."""
         projects: PermissionCacheType = defaultdict(list)
-        components: PermissionCacheType = defaultdict(list)
-        with sentry_sdk.start_span(op="permissions", description=self.username):
-            for group in self.groups.prefetch_related(
-                "roles__permissions",
-                Prefetch(
-                    "componentlists__components",
-                    queryset=Component.objects.only("id", "project_id"),
-                ),
-                Prefetch(
-                    "components",
-                    queryset=Component.objects.all().only("id", "project_id"),
-                ),
-                Prefetch(
-                    "projects", queryset=Project.objects.only("id", "access_control")
-                ),
-                Prefetch("languages", queryset=Language.objects.only("id")),
-            ):
+        components: SimplePermissionCacheType = defaultdict(list)
+        with sentry_sdk.start_span(op="auth.permissions", name=self.username):
+            for group in self.cached_groups:
+                # Skip permissions for not verified users
+                if group.enforced_2fa and not self.profile.has_2fa:
+                    continue
                 if group.language_selection == SELECTION_ALL:
                     languages = None
                 else:
@@ -712,8 +855,8 @@ class User(AbstractBaseUser):
                     projects[-group.project_selection].append((permissions, languages))
                 else:
                     # Project specific permissions
-                    for project in group.projects.all():
-                        projects[project.id].append((permissions, languages))
+                    for project_obj in group.projects.all():
+                        projects[project_obj.id].append((permissions, languages))
         # Apply blocking
         now = timezone.now()
         for block in self.userblock_set.all():
@@ -724,20 +867,16 @@ class User(AbstractBaseUser):
                 # Remove all permissions for blocked user
                 projects[block.project_id] = [(None, None)]
 
-        self._permissions = {"projects": projects, "components": components}
+        return {"projects": projects, "components": components}
 
-    @cached_property
+    @property
     def project_permissions(self) -> PermissionCacheType:
         """List all project permissions."""
-        if not self._permissions:
-            self._fetch_permissions()
         return self._permissions["projects"]
 
-    @cached_property
-    def component_permissions(self) -> PermissionCacheType:
+    @property
+    def component_permissions(self) -> SimplePermissionCacheType:
         """List all project permissions."""
-        if not self._permissions:
-            self._fetch_permissions()
         return self._permissions["components"]
 
     @cached_property
@@ -762,7 +901,7 @@ class User(AbstractBaseUser):
                 (None, -SELECTION_ALL),
             ):
                 if any(
-                    perm in permissions
+                    perm in cast("set[str]", permissions)
                     for permissions, _langs in self.project_permissions[selection]
                 ):
                     if access is None:
@@ -783,17 +922,30 @@ class User(AbstractBaseUser):
             self.get_visible_name(), address or self.profile.get_commit_email()
         )
 
-    def add_team(self, request: AuthenticatedHttpRequest | None, team: Group) -> None:
+    def add_team(
+        self,
+        request: AuthenticatedHttpRequest | None,
+        team: Group,
+        *,
+        user: User | None = None,
+    ) -> None:
         from weblate.accounts.models import AuditLog
 
         self.groups.add(team)
+
+        username: str | None
+        if user is not None:
+            username = user.username
+        elif request is not None:
+            username = request.user.username
+        else:
+            username = None
+
         AuditLog.objects.create(
             user=self,
             request=request if request is not None and request.user == self else None,
             activity="team-add",
-            username=request.user.username
-            if request is not None and request.user
-            else None,
+            username=username,
             team=team.name,
         )
 
@@ -811,6 +963,14 @@ class User(AbstractBaseUser):
             if request is not None and request.user
             else None,
             team=team.name,
+        )
+
+    def has_email(self, email: str) -> bool:
+        return (
+            email == self.email
+            or User.objects.filter(
+                pk=self.pk, social_auth__verifiedemail__email=email
+            ).exists()
         )
 
 
@@ -848,11 +1008,20 @@ class UserBlock(models.Model):
         Project, verbose_name=gettext_lazy("Project"), on_delete=models.deletion.CASCADE
     )
     expiry = models.DateTimeField(gettext_lazy("Block expiry"), null=True)
+    note = models.TextField(
+        verbose_name=gettext_lazy("Block note"),
+        blank=True,
+        help_text=gettext_lazy(
+            "Internal notes regarding blocking the user that are not visible to the user."
+        ),
+    )
 
     class Meta:
         verbose_name = "Blocked user"
         verbose_name_plural = "Blocked users"
-        unique_together = [("user", "project")]
+        unique_together = [  # noqa: RUF012
+            ("user", "project"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.user} blocked for {self.project}"
@@ -887,7 +1056,7 @@ def sync_create_groups(sender, **kwargs) -> None:
     create_groups(False)
 
 
-def auto_assign_group(user) -> None:
+def auto_assign_group(user: User) -> None:
     """Automatic group assignment based on user e-mail address."""
     if user.username == settings.ANONYMOUS_USER_NAME:
         return
@@ -912,6 +1081,7 @@ def change_componentlist(sender, instance, action, **kwargs) -> None:
 
 
 @receiver(m2m_changed, sender=User.groups.through)
+# pylint: disable=redefined-outer-name
 def remove_group_admin(sender, instance, action, pk_set, reverse, **kwargs) -> None:
     if action != "post_remove":
         return
@@ -946,15 +1116,24 @@ def setup_project_groups(
     old_access_control = instance.old_access_control
     instance.old_access_control = instance.access_control
 
+    changed_review = (
+        instance.old_translation_review != instance.translation_review
+        or instance.old_source_review != instance.source_review
+    )
     # Handle no groups as newly created project
     if not created and not instance.defined_groups.exists():
         created = True
 
     # No changes needed
-    if old_access_control == instance.access_control and not created and not new_roles:
+    if (
+        old_access_control == instance.access_control
+        and not changed_review
+        and not created
+        and not new_roles
+    ):
         return
 
-    # Do not pefrom anything with custom ACL
+    # Do not perform anything with custom ACL
     if instance.access_control == Project.ACCESS_CUSTOM:
         return
 
@@ -977,9 +1156,13 @@ def setup_project_groups(
         groups = {group for group in groups if ACL_GROUPS[group] in new_roles}
 
     # Access control changed
-    elif not created and (
-        instance.access_control == Project.ACCESS_PUBLIC
-        or old_access_control in {Project.ACCESS_PROTECTED, Project.ACCESS_PRIVATE}
+    elif (
+        not created
+        and (
+            instance.access_control == Project.ACCESS_PUBLIC
+            or old_access_control in {Project.ACCESS_PROTECTED, Project.ACCESS_PRIVATE}
+        )
+        and not changed_review
     ):
         # Avoid changing groups on some access control changes:
         # - Public groups are always present, so skip change on changing to public
@@ -1044,8 +1227,7 @@ class Invitation(models.Model):
         Group,
         verbose_name=gettext_lazy("Team"),
         help_text=gettext_lazy(
-            "The user is granted all permissions included in "
-            "membership of these teams."
+            "The user is granted all permissions included in membership of these teams."
         ),
         on_delete=models.deletion.CASCADE,
     )
@@ -1062,25 +1244,35 @@ class Invitation(models.Model):
     def __str__(self) -> str:
         return f"invitation {self.uuid} for {self.user or self.email} to {self.group}"
 
-    def get_absolute_url(self):
+    def get_absolute_url(self) -> str:
         return reverse("invitation", kwargs={"pk": self.uuid})
 
     def send_email(self) -> None:
         from weblate.accounts.notifications import send_notification_email
 
+        email: str
+        if self.email:
+            email = self.email
+        elif self.user is not None:
+            email = self.user.email
+        else:
+            msg = "Intiviation without an e-mail!"
+            raise ValueError(msg)
+
         send_notification_email(
             None,
-            [self.email] if self.email else [self.user.email],
+            [email],
             "invite",
             info=f"{self}",
             context={"invitation": self, "validity": settings.AUTH_TOKEN_VALID // 3600},
         )
 
-    def accept(self, request, user: User) -> None:
+    def accept(self, request: AuthenticatedHttpRequest, user: User) -> None:
         from weblate.accounts.models import AuditLog
 
         if self.user and self.user != user:
-            raise ValueError("User mismatch on accept!")
+            msg = "User mismatch on accept!"
+            raise ValueError(msg)
 
         if self.is_superuser:
             user.is_superuser = True
@@ -1093,7 +1285,7 @@ class Invitation(models.Model):
             username=self.author.username,
         )
 
-        user.add_team(request, self.group)
+        user.add_team(request, self.group, user=self.author)
 
         self.delete()
 
@@ -1101,11 +1293,13 @@ class Invitation(models.Model):
 class WeblateAuthConf(AppConf):
     """Authentication settings."""
 
-    AUTH_RESTRICT_ADMINS = {}
+    AUTH_RESTRICT_ADMINS: ClassVar[dict] = {}
 
     # Anonymous user name
     ANONYMOUS_USER_NAME = "anonymous"
+
     SESSION_COOKIE_AGE_AUTHENTICATED = 1209600
+    SESSION_COOKIE_AGE_2FA = 180
 
     class Meta:
         prefix = ""
@@ -1130,3 +1324,21 @@ class AuthenticatedHttpRequest(HttpRequest):
     user: User
     # Added by weblate.accounts.AuthenticationMiddleware
     accepted_language: Language
+
+    # type hint for social_auth
+    social_strategy: WeblateStrategy
+
+    # type hint for auth
+    backend: BaseAuth | None
+
+    # type hint for accounts middleware
+    weblate_cached_user: User
+
+    # type hint for wladmin
+    weblate_support_status: SupportStatusDict
+
+    # type hint for configuration module
+    weblate_custom_css: str
+
+    # Overrides django.http.request URL generating
+    _current_scheme_host: str

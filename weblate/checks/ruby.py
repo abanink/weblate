@@ -52,8 +52,8 @@ class RubyFormatCheck(BaseFormatCheck):
 
     check_id = "ruby_format"
     name = gettext_lazy("Ruby format")
-    description = gettext_lazy("Ruby format string does not match source")
+    description = gettext_lazy("Ruby format string does not match source.")
     regexp = RUBY_FORMAT_MATCH
 
-    def is_position_based(self, string):
+    def is_position_based(self, string: str):
         return string != "%" and not re.search(r"[$<{]", string)

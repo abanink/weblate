@@ -1,23 +1,30 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, ClassVar
 
 from requests.exceptions import RequestException
 
-from .base import DownloadTranslations, MachineTranslation, MachineTranslationError
+from .base import MachineTranslation, MachineTranslationError
 from .forms import KeyMachineryForm
+
+if TYPE_CHECKING:
+    from .base import DownloadTranslations
 
 GOOGLE_API_ROOT = "https://translation.googleapis.com/language/translate/v2/"
 
 
 class GoogleBaseTranslation(MachineTranslation):
     # Map codes used by Google to the ones used by Weblate
-    language_map = {
+    language_map: ClassVar[dict[str, str]] = {
         "nb": "no",
         "nb_NO": "no",
         "fil": "tl",
         "zh_Hant": "zh-TW",
         "zh_Hans": "zh-CN",
+        "ber-Latn": "kab",  # Adding Kabyle language by mapping Tamazight latin
     }
     language_aliases = ({"zh-CN", "zh"},)
 
@@ -25,10 +32,10 @@ class GoogleBaseTranslation(MachineTranslation):
         """Convert language to service specific code."""
         return super().map_language_code(code).replace("_", "-").split("@")[0]
 
-    def is_supported(self, source, language):
+    def is_supported(self, source_language, target_language):
         # Avoid translation between aliases
-        return super().is_supported(source, language) and not any(
-            {source, language} == item for item in self.language_aliases
+        return super().is_supported(source_language, target_language) and not any(
+            {source_language, target_language} == item for item in self.language_aliases
         )
 
 
@@ -53,7 +60,7 @@ class GoogleTranslation(GoogleBaseTranslation):
     def download_languages(self):
         """List of supported languages."""
         response = self.request(
-            "get", GOOGLE_API_ROOT + "languages", params={"key": self.settings["key"]}
+            "get", f"{GOOGLE_API_ROOT}languages", params={"key": self.settings["key"]}
         )
         payload = response.json()
 
@@ -61,8 +68,8 @@ class GoogleTranslation(GoogleBaseTranslation):
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
         unit,
         user,
@@ -75,8 +82,8 @@ class GoogleTranslation(GoogleBaseTranslation):
             params={
                 "key": self.settings["key"],
                 "q": text,
-                "source": source,
-                "target": language,
+                "source": source_language,
+                "target": target_language,
                 "format": "text",
             },
         )

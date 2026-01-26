@@ -27,7 +27,7 @@ Per-project customization can be done on each language page of the project.
 
 All workflow settings can be overridden, the only limitation is that
 :ref:`project-translation_review` needs to be turned on and can only be
-disabled in customization.
+disabled in the per-language customization.
 
 The first existing setting applies:
 
@@ -63,10 +63,10 @@ Each translated string can be in one of the following states:
 Untranslated
     Translation is empty, it might or not be stored in the file, depending
     on the file format.
-Needs editing
+Needs editing / Needs rewriting / Needs checking
     Translation needs editing, this is usually the result of a source string change, fuzzy matching or translator action.
-    The translation is stored in the file, depending on the file format it might
-    be marked as needing edit (for example as it gets a ``fuzzy`` flag in the gettext file).
+    The translation is stored in the file if the :ref:`project-commit_policy` allows it.
+    Depending on the file format it might be marked as needing edit (for example as it gets a ``fuzzy`` flag in the gettext file).
 Waiting for review
     Translation is made, but not reviewed. It is stored in the file as a valid
     translation.
@@ -76,6 +76,10 @@ Approved
     it.
 
     This state is only available when reviews are enabled.
+Read-only
+    String is read-only as a result of having ``read-only`` :ref:`flag
+    <custom-checks>`, being a non-editable source string, or marked such in the
+    translation file.
 Suggestions
     Suggestions are stored in Weblate only and not in the translation file.
 
@@ -89,8 +93,8 @@ The states are represented in the translation files when possible.
 
 .. seealso::
 
-   :ref:`fmt_capabs`,
-   :ref:`workflows`
+   * :ref:`fmt_capabs`
+   * :ref:`workflows`
 
 
 Direct translation
@@ -103,7 +107,7 @@ This is also the default setup in Weblate.
   sure about the change.
 
 +----------------------------------+-------------+------------------------------------+
-| Setting                          |   Value     |   Note                             |
+| Setting                          | Value       | Note                               |
 +==================================+=============+====================================+
 | Enable reviews                   | off         | Configured at project level.       |
 +----------------------------------+-------------+------------------------------------+
@@ -128,22 +132,22 @@ Peer review
 -----------
 
 With this workflow, anybody can add a suggestion, which needs approval
-from additional member(s) before it is accepted as a translation.
+from additional members before it is accepted as a translation.
 
 * *Any user* can add suggestions.
 * *Any user* can vote for suggestions.
 * Suggestions become translations when given a predetermined number of votes.
 
 +---------------------------------+-------------+------------------------------------+
-| Setting                         |   Value     |   Note                             |
+| Setting                         | Value       | Note                               |
 +=================================+=============+====================================+
 | Enable reviews                  | off         | Configured at project level.       |
 +---------------------------------+-------------+------------------------------------+
 | Enable suggestions              | on          |                                    |
 +---------------------------------+-------------+------------------------------------+
-| Suggestion voting               | off         |                                    |
+| Suggestion voting               | on          |                                    |
 +---------------------------------+-------------+------------------------------------+
-| Automatically accept suggestions| 1           | You can set higher value to        |
+| Automatically accept suggestions| 2           | You can set higher value to        |
 |                                 |             | require more peer reviews.         |
 +---------------------------------+-------------+------------------------------------+
 | Translators group               | `Users`     | Or `Translate` with                |
@@ -168,11 +172,11 @@ consistent and that the quality is good.
 * Suggestions can also be used to suggest changes for approved strings.
 
 +---------------------------------+-------------+------------------------------------+
-| Setting                         |   Value     |   Note                             |
+| Setting                         | Value       | Note                               |
 +=================================+=============+====================================+
 | Enable reviews                  | on          | Configured at project level.       |
 +---------------------------------+-------------+------------------------------------+
-| Enable suggestions              | off         | Useful for users to be able        |
+| Enable suggestions              | on          | Useful for users to be able        |
 |                                 |             | to suggest when they are not sure. |
 +---------------------------------+-------------+------------------------------------+
 | Suggestion voting               | off         |                                    |
@@ -193,7 +197,7 @@ Turning on reviews
 
 Reviews can be turned on in the project configuration, from the
 :guilabel:`Workflow` subpage of project settings (to be found in the
-:guilabel:`Manage` → :guilabel:`Settings` menu):
+:guilabel:`Operations` → :guilabel:`Settings` menu):
 
 .. image:: /screenshots/project-workflow.webp
 
@@ -202,16 +206,19 @@ Reviews can be turned on in the project configuration, from the
 Quality gateway for the source strings
 --------------------------------------
 
-In many cases the original source language strings are coming from developers,
-because they write the code and provide initial strings. However developers are
-often not native speakers in the source language and do not provide desired
-quality of the source strings. The intermediate translation can help you address this - there is an additional quality gateway for the strings between
+The original source language strings usually come from developers, since they
+write the code and provide the initial strings. However, developers are often
+not native speakers of the source language and do not provide the desired
+quality of the source strings. The intermediate translation can help you
+address this - there is an additional quality gateway for the strings between
 developers and translators.
 
-By setting :ref:`component-intermediate`, this file is used for translating strings
-to the source language by translators/editors. Once this stage is done,
-strings are available for translations to target languages,
-based on what is now a polished source language.
+By setting the :ref:`component-intermediate`, this file is used for translating
+strings to the source language by translators/editors while it is owned by the
+developers (often using arbitrary languages such as ``en_devel``). Once this
+stage is done, strings are available for translations to target languages,
+based on what is now a polished source language stored in the
+:ref:`component-template`.
 
 .. graphviz::
 
@@ -252,9 +259,25 @@ based on what is now a polished source language.
 
 .. seealso::
 
-   :ref:`component-intermediate`,
-   :ref:`component-template`,
-   :ref:`bimono`
+   * :ref:`component-intermediate`
+   * :ref:`component-template`
+   * :ref:`bimono`
+
+.. _secondary-language-workflow:
+
+String consolidation using secondary language
+---------------------------------------------
+
+When :ref:`component-intermediate` cannot be used to consolidate the strings,
+you can choose one of the translations to act as a secondary language. The
+language can be configured in a project (:ref:`project-secondary_language`) or in a
+component (:ref:`component-secondary_language`). It is then shown to the
+translators while translating (see :ref:`secondary-languages`) and can be
+optionally used as a source for machine translations (see
+:ref:`mt-sources`).
+
+This setup can be useful with mixed language source strings and consolidating
+them into a single translation, which is then used as a baseline for other work.
 
 .. _source-reviews:
 
@@ -266,8 +289,8 @@ source strings. Once enabled, users can report issues with source strings.
 The actual process depends on whether bilingual or monolingual formats are in use.
 
 For monolingual formats, source string review functions similarly to
-:ref:`reviews` — once an issue with a source string is reported, it is marked as
-:guilabel:`Needs editing`.
+:ref:`reviews` — once an issue with a source string is reported, the source
+string is marked as :guilabel:`Needs editing`.
 
 Bilingual formats do not allow direct editing of source strings (these
 are typically extracted directly from the source code). In this case, a
@@ -277,7 +300,7 @@ code, or remove the label.
 
 .. seealso::
 
-   :ref:`bimono`,
-   :ref:`reviews`,
-   :ref:`labels`,
-   :ref:`user-comments`
+   * :ref:`bimono`
+   * :ref:`reviews`
+   * :ref:`labels`
+   * :ref:`user-comments`

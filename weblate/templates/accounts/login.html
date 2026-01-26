@@ -1,78 +1,92 @@
 {% extends "base.html" %}
-{% load i18n %}
-{% load translations %}
-{% load authnames %}
-{% load crispy_forms_tags %}
+
+{% load authnames crispy_forms_tags i18n translations %}
 
 {% block breadcrumbs %}
-<li><a href="{% url 'login' %}">{% trans "Sign in" %}</a></li>
-{% endblock %}
+  <li class="breadcrumb-item">
+    <a href="{% url 'login' %}">{% translate "Sign in" %}</a>
+  </li>
+{% endblock breadcrumbs %}
 
 {% block content %}
 
-<div class="container">
+  <div class="container">
 
-{% if form.errors %}
-{% trans "This username/password combination was not found. Please try again." as msg %}
-{% show_message "error" msg %}
-{% endif %}
+    {% if form.errors %}
+      {% translate "This username/password combination was not found. Please try again." as msg %}
+      {% show_message "error" msg %}
+    {% endif %}
 
-<h2>{{ site_title }}</h2>
-<div class="row">
+    <h2>{% include "accounts/snippets/login-title.html" %}</h2>
+    <div class="row">
 
-<div class="col-sm-7">
-{% include "snippets/login-info.html" %}
-</div>
 
-<div class="col-sm-5">
+      <div class="col-sm-6 order-sm-2">
 
-<h4>{% trans "Sign in" %}</h4>
-<div class="panel panel-default">
-  <div class="panel-body">
-<form method="post" action="{% url 'login' %}">
+        <h4>
+          {% format_site_title as formatted_site_title %}
+          {% blocktranslate %}Sign in to {{ formatted_site_title }}{% endblocktranslate %}
+        </h4>
+        <div class="card">
+          <div class="card-body">
+            {% if show_login_form %}
+              <form method="post" action="{% url 'login' %}">
+                {% csrf_token %}
+                {{ form|crispy }}
 
-{% csrf_token %}
-{{ form|crispy }}
+                <input type="hidden" name="next" value="{{ next }}" />
 
-<input type="hidden" name="next" value="{{ next }}" />
+                <input type="submit"
+                       value="{% translate "Sign in" %}"
+                       class="btn btn-primary btn-full" />
+              </form>
+            {% endif %}
 
-<input type="submit" value="{% trans "Sign in" %}" class="btn btn-primary btn-full" />
-</form>
+            {% if login_backends %}
 
-{% if login_backends %}
+              <h5 class="login-label">{% translate "Sign in with:" %}</h5>
+              <div class="container-fluid">
+                <div class="row row-cols-md-2 row-cols-1">
+                  {% for name in login_backends %}
+                    <div class="col btn-auth">
+                      <a href=""
+                         class="btn btn-outline-primary link-post"
+                         data-href="{% url 'social:begin' name %}"
+                         {% if next %}data-params='{"next": "{{ next|escapejs }}"}'{% endif %}>{% auth_name name " " %}</a>
+                    </div>
+                  {% endfor %}
+                </div>
+              </div>
 
-<h5 class="login-label">{% trans "Sign in with:" %}</h5>
+            {% endif %}
 
-{% for name in login_backends %}
-  <div class="col-sm-6 col-xs-12 btn-auth">
-    <a href="" class="btn btn-default link-post" data-href="{% url 'social:begin' name %}" {% if next %}data-params='{"next": "{{ next|escapejs }}"}'{% endif %}>{% auth_name name " " %}</a>
+            {% if can_reset or registration_open %}
+              <div class="clearfix"></div>
+              <ul class="login-links">
+                {% if can_reset %}
+                  <li>
+                    <a href="{% url 'password_reset' %}">{% translate "Forgot your password?" %}</a>
+                  </li>
+                {% endif %}
+
+                {% if registration_open %}
+                  <li>
+                    <a href="{% url 'register' %}">{% translate "Register new account" %}</a>
+                  </li>
+                {% endif %}
+              </ul>
+            {% endif %}
+
+
+
+          </div>
+        </div>
+
+      </div>
+
+      <div class="col-sm-6 order-sm-1">{% include "accounts/snippets/login-info.html" %}</div>
+
+    </div>
   </div>
-{% endfor %}
 
-{% endif %}
-
-{% if can_reset or registration_open %}
-<div class="clearfix"></div>
-<ul class="login-links">
-{% if can_reset %}
-{% url 'password_reset' as reset_url %}
-<li><a href="{{ reset_url }}">{% trans "Forgot your password?" %}</a></li>
-{% endif %}
-
-{% if registration_open %}
-{% url 'register' as register_url %}
-<li><a href="{{ register_url }}">{% trans "Register new account" %}</a></li>
-{% endif %}
-</ul>
-{% endif %}
-
-
-
-</div>
-</div>
-
-</div>
-</div>
-</div>
-
-{% endblock %}
+{% endblock content %}

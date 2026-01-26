@@ -1,6 +1,9 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
@@ -14,23 +17,26 @@ from weblate.trans.models import Label, Project
 from weblate.trans.util import render
 from weblate.utils.views import parse_path
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
+
 
 @login_required
 @never_cache
-def project_labels(request, project):
+def project_labels(request: AuthenticatedHttpRequest, project):
     obj = parse_path(request, [project], (Project,))
 
     if not request.user.has_perm("project.edit", obj):
         raise PermissionDenied
 
     if request.method == "POST":
-        form = LabelForm(request.POST)
+        form = LabelForm(project=obj, data=request.POST)
         if form.is_valid():
             form.instance.project = obj
             form.save()
             return redirect("labels", project=project)
     else:
-        form = LabelForm()
+        form = LabelForm(project=obj)
 
     return render(
         request,
@@ -46,7 +52,7 @@ def project_labels(request, project):
 
 @login_required
 @never_cache
-def label_edit(request, project, pk):
+def label_edit(request: AuthenticatedHttpRequest, project, pk):
     obj = parse_path(request, [project], (Project,))
 
     if not request.user.has_perm("project.edit", obj):
@@ -55,12 +61,12 @@ def label_edit(request, project, pk):
     label = get_object_or_404(Label, pk=pk, project=obj)
 
     if request.method == "POST":
-        form = LabelForm(request.POST, instance=label)
+        form = LabelForm(project=label.project, data=request.POST, instance=label)
         if form.is_valid():
             form.save()
             return redirect("labels", project=project)
     else:
-        form = LabelForm(instance=label)
+        form = LabelForm(project=label.project, instance=label)
 
     return render(
         request,
@@ -72,7 +78,7 @@ def label_edit(request, project, pk):
 @login_required
 @never_cache
 @require_POST
-def label_delete(request, project, pk):
+def label_delete(request: AuthenticatedHttpRequest, project, pk):
     obj = parse_path(request, [project], (Project,))
 
     if not request.user.has_perm("project.edit", obj):

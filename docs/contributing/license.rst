@@ -1,8 +1,16 @@
-License
--------
+Weblate license
+---------------
 
-More detailed licensing information is available in the Weblate source code and
-follows `REUSE 3.0 specification <https://reuse.software/>`_.
+Machine-readable licensing information
+++++++++++++++++++++++++++++++++++++++
+
+Weblate comes with `REUSE 3.3 <https://reuse.software/>`_ compliant license
+specification in the source code.
+
+To review licensing of Weblate dependencies please see :ref:`sbom`.
+
+License terms
++++++++++++++
 
 Copyright © Michal Čihař michal@weblate.org
 
@@ -17,3 +25,9 @@ PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with
 this program. If not, see <https://www.gnu.org/licenses/>.
+
+Weblate modules license
++++++++++++++++++++++++
+
+Some Weblate modules use MIT or ISC licenses. Please check the
+respective repositories for the actual license.

@@ -1,23 +1,32 @@
 {% load i18n %}
+
 <table>
   <tr>
-    <td>{% trans "IP address" %}</td>
+    <td>{% translate "IP address" %}</td>
     <td>{{ address }}</td>
   </tr>
   <tr>
-    <td>{% trans "User agent" %}</td>
+    <td>{% translate "User agent" %}</td>
     <td>{{ user_agent }}</td>
   </tr>
   <tr>
     <td>{{ site_title }}</td>
-    <td><a href="{{ current_site_url }}">{{ current_site_url }}</a></td>
+    <td>
+      <a href="{{ current_site_url }}">{{ current_site_url }}</a>
+    </td>
   </tr>
 </table>
 
 <p>
-  {% blocktrans %}If you didn’t initiate this, please report it to the server administrators by clicking the button below.{% endblocktrans %}
+  {% blocktranslate %}Sign in to see the full audit log, including the IP address.{% endblocktranslate %}
+  {% if contact_form != "disabled" %}
+    {% blocktranslate %}If you didn't initiate this, please report it to the server administrators by clicking the button below.{% endblocktranslate %}
+  {% endif %}
 </p>
 
 <div class="line buttons">
-  <a class="button" href="{% url 'contact' %}?t=account">{% trans "Report" %}</a>
-</p>
+  <a class="button" href="{% url 'profile' %}#audit">{% translate "View audit log" %}</a>
+  {% if contact_form != "disabled" %}
+    <a class="button" href="{% url 'contact' %}?t=account">{% translate "Report" %}</a>
+  {% endif %}
+</div>

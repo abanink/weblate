@@ -4,24 +4,29 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from datetime import timedelta
+from typing import TYPE_CHECKING, ClassVar
 
 from django.utils import timezone
 
 from weblate.glossary.models import get_glossary_terms
 
 from .base import (
-    DownloadTranslations,
     MachineTranslation,
     MachineTranslationError,
-    SettingsDict,
     XMLMachineTranslationMixin,
 )
 from .forms import MicrosoftMachineryForm
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from weblate.trans.models import Unit
+
+    from .base import (
+        DownloadTranslations,
+        SettingsDict,
+    )
 
 TOKEN_URL = "https://{0}{1}/sts/v1.0/issueToken?Subscription-Key={2}"  # noqa: S105
 TOKEN_EXPIRY = timedelta(minutes=9)
@@ -33,20 +38,19 @@ class MicrosoftCognitiveTranslation(XMLMachineTranslationMixin, MachineTranslati
     name = "Azure AI Translator"
     max_score = 90
     settings_form = MicrosoftMachineryForm
+    glossary_support = True
 
-    language_map = {
-        "zh-hant": "zh-Hant",
-        "zh-hans": "zh-Hans",
-        "zh-tw": "zh-Hant",
-        "zh-cn": "zh-Hans",
+    language_map: ClassVar[dict[str, str]] = {
+        "zh_TW": "zh-Hant",
+        "zh_CN": "zh-Hans",
+        "yue_Hant": "yue",
         "tlh": "tlh-Latn",
-        "tlh-qaak": "tlh-Piqd",
-        "nb": "no",
-        "bs-latn": "bs-Latn",
-        "sr": "sr-Latn",
-        "sr-latn": "sr-Latn",
-        "sr-cyrl": "sr-Cyrl",
-        "mn": "mn-Mong",
+        "tlh_Qaak": "tlh-Piqd",
+        "lg": "lug",
+        "mn": "mn-Cyrl",
+        "pt_BR": "pt",
+        "rn": "run",
+        "sr": "sr-Cyrl",
     }
 
     @classmethod
@@ -56,8 +60,8 @@ class MicrosoftCognitiveTranslation(XMLMachineTranslationMixin, MachineTranslati
     def __init__(self, settings: SettingsDict) -> None:
         """Check configuration."""
         super().__init__(settings)
-        self._access_token: None | str = None
-        self._token_expiry: None | datetime = None
+        self._access_token: str | None = None
+        self._token_expiry: datetime | None = None
 
         # check settings for Microsoft region prefix
         region = "" if not self.settings["region"] else f"{self.settings['region']}."
@@ -92,7 +96,13 @@ class MicrosoftCognitiveTranslation(XMLMachineTranslationMixin, MachineTranslati
 
     def map_language_code(self, code):
         """Convert language to service specific code."""
-        return super().map_language_code(code).replace("_", "-")
+        code = super().map_language_code(code).replace("_", "-")
+        if "-" in code:
+            lang, country = code.split("-", 1)
+            if len(country) == 2:
+                country = country.lower()
+            code = f"{lang}-{country}"
+        return code
 
     def check_failure(self, response) -> None:
         # Microsoft tends to use utf-8-sig instead of plain utf-8
@@ -132,8 +142,8 @@ class MicrosoftCognitiveTranslation(XMLMachineTranslationMixin, MachineTranslati
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
         unit,
         user,
@@ -142,8 +152,8 @@ class MicrosoftCognitiveTranslation(XMLMachineTranslationMixin, MachineTranslati
         """Download list of possible translations from a service."""
         args = {
             "api-version": "3.0",
-            "from": source,
-            "to": language,
+            "from": source_language,
+            "to": target_language,
             "category": self.settings.get("category", "general"),
             "textType": "html",
         }
@@ -161,7 +171,7 @@ class MicrosoftCognitiveTranslation(XMLMachineTranslationMixin, MachineTranslati
         }
 
     def format_replacement(
-        self, h_start: int, h_end: int, h_text: str, h_kind: None | Unit
+        self, h_start: int, h_end: int, h_text: str, h_kind: Unit | None
     ):
         """Generate a single replacement."""
         if h_kind is None:
@@ -178,7 +188,7 @@ class MicrosoftCognitiveTranslation(XMLMachineTranslationMixin, MachineTranslati
     def get_highlights(self, text, unit):
         result = list(super().get_highlights(text, unit))
 
-        for term in get_glossary_terms(unit):
+        for term in get_glossary_terms(unit, include_variants=False):
             for start, end in term.glossary_positions:
                 glossary_highlight = (start, end, text[start:end], term)
                 handled = False

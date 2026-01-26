@@ -7,7 +7,6 @@ name: Rundev
 on:
   push:
     branches-ignore:
-    - deepsource-fix-**
     - renovate/**
     - weblate
   pull_request:
@@ -20,16 +19,29 @@ permissions:
 
 jobs:
   rundev:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     name: Test development Docker
     env:
       PYTHONUNBUFFERED: 1
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+      with:
+        path: /tmp/cache/tesseract
+        key: tesseract-data
+    - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+      with:
+        enable-cache: false
+        version: 0.9.26
     - run: ./rundev.sh build
     - run: ./rundev.sh start
     - run: ./rundev.sh wait
     - run: ./rundev.sh check
-    - run: ./rundev.sh test --failfast weblate.vcs
+    - run: ./rundev.sh compilemessages
+    - run: ./rundev.sh test --exitfirst
+    - run: ./rundev.sh test weblate/checks/tests/test_chars_checks.py
     - run: ./rundev.sh logs
+      if: always()
     - run: ./rundev.sh stop

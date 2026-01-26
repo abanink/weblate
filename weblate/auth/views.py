@@ -1,29 +1,45 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from django.contrib.auth.decorators import login_not_required
 from django.core.exceptions import PermissionDenied
 from django.forms import inlineformset_factory
 from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import redirect
 from django.urls import reverse
+from django.utils.decorators import method_decorator
 from django.utils.translation import gettext
 from django.views.generic import DetailView, UpdateView
 
 from weblate.auth.forms import ProjectTeamForm, SitewideTeamForm
-from weblate.auth.models import AutoGroup, Group, Invitation, User
+from weblate.auth.models import (
+    AutoGroup,
+    Group,
+    Invitation,
+)
 from weblate.trans.forms import UserAddTeamForm, UserManageForm
-from weblate.trans.util import redirect_next
+from weblate.trans.util import redirect_next, redirect_param
 from weblate.utils import messages
 from weblate.utils.views import get_paginator, show_form_errors
 from weblate.wladmin.forms import ChangedCharField
+
+if TYPE_CHECKING:
+    from django.http import HttpResponse
+
+    from weblate.auth.models import (
+        AuthenticatedHttpRequest,
+        User,
+    )
 
 
 class TeamUpdateView(UpdateView):
     model = Group
     template_name = "auth/team.html"
+    request: AuthenticatedHttpRequest
 
     auto_formset = inlineformset_factory(
         Group,
@@ -78,7 +94,7 @@ class TeamUpdateView(UpdateView):
 
         return result
 
-    def handle_add_user(self, request):
+    def handle_add_user(self, request: AuthenticatedHttpRequest):
         form = UserAddTeamForm(request.POST)
         if form.is_valid():
             if form.cleaned_data["make_admin"]:
@@ -90,7 +106,7 @@ class TeamUpdateView(UpdateView):
             show_form_errors(request, form)
         return HttpResponseRedirect(self.get_success_url())
 
-    def handle_remove_user(self, request):
+    def handle_remove_user(self, request: AuthenticatedHttpRequest):
         form = UserManageForm(request.POST)
         if form.is_valid():
             form.cleaned_data["user"].remove_team(request, self.object)
@@ -98,26 +114,21 @@ class TeamUpdateView(UpdateView):
             show_form_errors(request, form)
         return HttpResponseRedirect(self.get_success_url())
 
-    def handle_delete(self, request):
+    def handle_delete(self, request: AuthenticatedHttpRequest):
         if self.object.defining_project:
-            fallback = (
-                reverse(
-                    "manage-access",
-                    kwargs={"project": self.object.defining_project.slug},
-                )
-                + "#teams"
-            )
+            fallback = f"{reverse('manage-access', kwargs={'project': self.object.defining_project.slug})}#teams"
         elif request.user.is_superuser:
             fallback = reverse("manage-teams")
         else:
-            fallback = reverse("manage_access") + "#teams"
+            fallback = f"{reverse('manage_access')}#teams"
         if self.object.internal and not self.object.defining_project:
             messages.error(request, gettext("Cannot remove built-in team!"))
         else:
             self.object.delete()
         return redirect_next(request.POST.get("next"), fallback)
 
-    def post(self, request, **kwargs):
+    # pylint: disable=arguments-differ
+    def post(self, request: AuthenticatedHttpRequest, **kwargs):
         self.object = self.get_object()
         if self.request.user.has_perm("meta:team.users", self.object):
             if "add_user" in request.POST:
@@ -127,7 +138,7 @@ class TeamUpdateView(UpdateView):
 
         form = self.get_form()
         if form is None:
-            return self.form_invalid(form, None)
+            raise PermissionDenied
 
         if "delete" in request.POST:
             return self.handle_delete(request)
@@ -138,6 +149,7 @@ class TeamUpdateView(UpdateView):
             return self.form_valid(form)
         return self.form_invalid(form, formset)
 
+    # pylint: disable=arguments-differ
     def form_invalid(self, form, formset):
         """If the form is invalid, render the invalid form."""
         return self.render_to_response(
@@ -145,19 +157,37 @@ class TeamUpdateView(UpdateView):
         )
 
 
+@method_decorator(login_not_required, name="dispatch")
 class InvitationView(DetailView):
     model = Invitation
 
-    def get(self, request, *args, **kwargs):
-        self.object = self.get_object()
+    def validate_invitation(
+        self, request: AuthenticatedHttpRequest
+    ) -> HttpResponse | None:
+        if request.user.is_authenticated and self.object.user != request.user:
+            # Invitation not for this user (either is for email and user is None or different user)
+            messages.error(
+                request,
+                gettext(
+                    "This invitation can be accepted only by the e-mail address chosen by the inviter; it can't be used by your account."
+                ),
+            )
+            return redirect_param("profile", "#account")
         if not self.object.user:
             # When inviting new user go through registration
             request.session["invitation_link"] = str(self.object.pk)
             return redirect("register")
+        return None
+
+    def get(self, request: AuthenticatedHttpRequest, *args, **kwargs) -> HttpResponse:
+        self.object = self.get_object()
+        validation_result = self.validate_invitation(request)
+        if validation_result is not None:
+            return validation_result
         context = self.get_context_data(object=self.object)
         return self.render_to_response(context)
 
-    def post(self, request, **kwargs):
+    def post(self, request: AuthenticatedHttpRequest, **kwargs) -> HttpResponse:
         self.object = invitation = self.get_object()
         user = request.user
 
@@ -193,6 +223,11 @@ class InvitationView(DetailView):
         if invitation.user != user:
             raise Http404
 
+        # Check if this is for us
+        validation_result = self.validate_invitation(request)
+        if validation_result is not None:
+            return validation_result
+
         # Accept invitation
         invitation.accept(request, user)
 
@@ -201,7 +236,9 @@ class InvitationView(DetailView):
         return redirect("home")
 
 
-def accept_invitation(request, invitation: Invitation, user: User | None) -> None:
+def accept_invitation(
+    request: AuthenticatedHttpRequest, invitation: Invitation, user: User | None
+) -> None:
     if user is None:
         user = invitation.user
     if user is None:

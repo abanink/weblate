@@ -48,6 +48,20 @@ class SameCheckTest(CheckTestCase):
             )
         )
 
+    def test_same_asciidoc_block(self) -> None:
+        self.assertTrue(
+            self.check.check_single(
+                "some text is here", "some text is here", MockUnit(code="de")
+            )
+        )
+        self.assertFalse(
+            self.check.check_single(
+                "some text is here",
+                "some text is here",
+                MockUnit(code="de", note="type: delimited block -"),
+            )
+        )
+
     def test_same_numbers(self) -> None:
         self.do_test(False, ("1:4", "1:4", ""))
         self.do_test(False, ("1, 3, 10", "1, 3, 10", ""))
@@ -154,6 +168,14 @@ class SameCheckTest(CheckTestCase):
                 "",
             ),
         )
+        self.do_test(
+            False,
+            (
+                "https://<FQDN_MLM>/rhn/manager/sso/sls",
+                "https://<FQDN_MLM>/rhn/manager/sso/sls",
+                "",
+            ),
+        )
 
     def test_same_channel(self) -> None:
         self.do_test(False, ("#weblate", "#weblate", ""))
@@ -196,12 +218,8 @@ class SameCheckTest(CheckTestCase):
         self.do_test(
             False,
             (
-                "!\"#$%%&amp;'()*+,-./0123456789:;&lt;=&gt;?@"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
-                "abcdefghijklmnopqrstuvwxyz{|}~",
-                "!\"#$%%&amp;'()*+,-./0123456789:;&lt;=&gt;?@"
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
-                "abcdefghijklmnopqrstuvwxyz{|}~",
+                "!\"#$%%&amp;'()*+,-./0123456789:;&lt;=&gt;?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+                "!\"#$%%&amp;'()*+,-./0123456789:;&lt;=&gt;?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
                 "",
             ),
         )
@@ -257,7 +275,9 @@ class GlossarySameCheckTest(ViewTestCase):
         )
 
     def add_glossary(self, source: str, flags: str) -> None:
-        self.glossary.add_unit(None, context="", source=source, extra_flags=flags)
+        self.glossary.add_unit(
+            None, context="", source=source, extra_flags=flags, author=self.user
+        )
 
     def add_glossary_words(self, flags: str = "terminology,read-only") -> None:
         self.add_glossary("hello", flags)

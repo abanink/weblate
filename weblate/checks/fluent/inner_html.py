@@ -19,11 +19,13 @@ from weblate.checks.fluent.utils import (
     translation_from_check,
     variant_name,
 )
+from weblate.utils.html import format_html_join_comma, list_to_tuples
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
     from django.utils.safestring import SafeString
+    from django_stubs_ext import StrOrPromise
     from translate.storage.fluent import FluentSelectorBranch
 
     from weblate.checks.fluent.utils import CheckModel, HighlightsType, TransUnitModel
@@ -98,7 +100,7 @@ class _HTMLNode:
 
         serialized, end = self.tags()
         if end:
-            serialized += "…" + end
+            serialized += f"…{end}"
 
         node = self.parent
         while node and node.parent:
@@ -539,7 +541,7 @@ class _FluentInnerHTMLCheck:
     # "-".
     _TAG_FIRST_CHAR = r"[a-zA-Z]"
     _TAG_FIRST_CHAR_REGEX = re.compile(_TAG_FIRST_CHAR)
-    _TAG_PATTERN = _TAG_FIRST_CHAR + r"[a-zA-Z0-9-]*"
+    _TAG_PATTERN = f"{_TAG_FIRST_CHAR}[a-zA-Z0-9-]*"
 
     # Only allow a limited set of "blank" characters within a tag.
     _BLANK_CHAR = r"[ \t\n]"
@@ -557,7 +559,7 @@ class _FluentInnerHTMLCheck:
         + r")"
     )
     _START_TAG_REGEX = re.compile(
-        r"(?P<tag>" + _TAG_PATTERN + r")" + _CLOSE_BLANK_OR_END_PATTERN
+        rf"(?P<tag>{_TAG_PATTERN}){_CLOSE_BLANK_OR_END_PATTERN}"
     )
     # Only allow a limited set of characters for attribute names, which should
     # cover HTML attributes and "data-" attributes.
@@ -573,7 +575,7 @@ class _FluentInnerHTMLCheck:
         # Followed by a blank or the closing character.
         + _CLOSE_BLANK_OR_END_PATTERN
     )
-    _END_TAG_REGEX = re.compile(r"(?P<tag>" + _TAG_PATTERN + r")" + _BLANK_CHAR + r"*>")
+    _END_TAG_REGEX = re.compile(rf"(?P<tag>{_TAG_PATTERN}){_BLANK_CHAR}*>")
 
     # Pattern used to pull text within a suspected tag up until the next
     # attribute or the tag closes.
@@ -636,7 +638,8 @@ class _FluentInnerHTMLCheck:
             #
             # Some parsing errors, like eof-before-tag-name, will not lead to a
             # loss of content, but aren't allowed here for consistency.
-            raise _HTMLInvalidEndTagError("</" + cls._non_blank_or_close(source))
+            msg = f"</{cls._non_blank_or_close(source)}"
+            raise _HTMLInvalidEndTagError(msg)
 
         tag = end_tag_match.group("tag")
 
@@ -661,7 +664,8 @@ class _FluentInnerHTMLCheck:
             non_blank = cls._non_blank_or_close(source)
             if "=" not in non_blank:
                 # Doesn't look like an attribute with a value.
-                raise _HTMLUnexpectedAttributeError("<" + node.tag, non_blank)
+                msg = f"<{node.tag}"
+                raise _HTMLUnexpectedAttributeError(msg, non_blank)
             raise _HTMLInvalidAttributeNameError(
                 node.tag,
                 non_blank[: non_blank.index("=")],
@@ -712,11 +716,13 @@ class _FluentInnerHTMLCheck:
             # still cause problems when it is expanded with the value. E.g. if
             # the value closes the quotes and injects parts, but we are not
             # trying to protect against this.
-            raise _HTMLFluentReferenceTagError("<" + source.get(cls._FLUENT_REF_REGEX))
+            msg = f"<{source.get(cls._FLUENT_REF_REGEX)}"
+            raise _HTMLFluentReferenceTagError(msg)
 
         tag_not_allowed_match = source.match(cls._TAG_NOT_ALLOWED_FIRST_CHAR_REGEX)
         if tag_not_allowed_match:
-            raise _HTMLTagTypeNotAllowedError("<" + tag_not_allowed_match.group())
+            msg = f"<{tag_not_allowed_match.group()}"
+            raise _HTMLTagTypeNotAllowedError(msg)
 
         if not source.peak_matches(cls._TAG_FIRST_CHAR_REGEX):
             # Corresponds to the HTML parsing errors
@@ -728,7 +734,8 @@ class _FluentInnerHTMLCheck:
 
         tag_match = source.match(cls._START_TAG_REGEX)
         if not tag_match:
-            raise _HTMLInvalidStartTagNameError("<" + cls._non_blank_or_close(source))
+            msg = f"<{cls._non_blank_or_close(source)}"
+            raise _HTMLInvalidStartTagNameError(msg)
 
         tag = tag_match.group("tag")
 
@@ -751,7 +758,8 @@ class _FluentInnerHTMLCheck:
                 # Corresponds to HTML parsing error eof-in-tag.
                 # We have some blank, but then reach the end of the string
                 # before the tag is closed.
-                raise _HTMLStartTagNotClosedError("<" + tag)
+                msg = f"<{tag}"
+                raise _HTMLStartTagNotClosedError(msg)
 
             end_match = cls._parse_attribute(source, node)
 
@@ -940,23 +948,23 @@ class FluentSourceInnerHTMLCheck(_FluentInnerHTMLCheck, SourceCheck):
 
     check_id = "fluent-source-inner-html"
     name = gettext_lazy("Fluent source inner HTML")
-    description = gettext_lazy("Fluent source should be valid inner HTML")
+    description = gettext_lazy("Fluent source should be valid inner HTML.")
     default_disabled = True
 
-    def check_source_unit(self, source: str, unit: TransUnitModel) -> bool:
+    def check_source_unit(self, sources: list[str], unit: TransUnitModel) -> bool:
         try:
-            self.get_fluent_inner_html(unit, source[0])
+            self.get_fluent_inner_html(unit, sources[0])
         except _HTMLParseError:
             return True
         return False
 
-    def get_description(self, check_model: CheckModel) -> str:
-        unit, source, _target = translation_from_check(check_model)
+    def get_description(self, check_obj: CheckModel) -> StrOrPromise:
+        unit, source, _target = translation_from_check(check_obj)
         try:
             self.get_fluent_inner_html(unit, source)
         except _HTMLParseError as err:
             return err.description()
-        return super().get_description(check_model)
+        return super().get_description(check_obj)
 
 
 class _VariantNodesDifference:
@@ -1048,7 +1056,9 @@ class _VariantNodesDifference:
     ) -> str:
         if not variant_list:
             return ""
-        return ", ".join(variant.name() for variant in variant_list)
+        return format_html_join_comma(
+            "{}", list_to_tuples(variant.name() for variant in variant_list)
+        )
 
     def _unique_target_nodes(self) -> Iterator[_HTMLNode]:
         unique_nodes: list[_HTMLNode] = []
@@ -1216,7 +1226,7 @@ class FluentTargetInnerHTMLCheck(_FluentInnerHTMLCheck, TargetCheck):
 
     check_id = "fluent-target-inner-html"
     name = gettext_lazy("Fluent translation inner HTML")
-    description = gettext_lazy("Fluent target should be valid inner HTML that matches")
+    description = gettext_lazy("Fluent target should be valid inner HTML that matches.")
     default_disabled = True
 
     @classmethod
@@ -1262,15 +1272,15 @@ class FluentTargetInnerHTMLCheck(_FluentInnerHTMLCheck, TargetCheck):
             return True
         return bool(difference)
 
-    def get_description(self, check_model: CheckModel) -> str:
-        unit, source, target = translation_from_check(check_model)
+    def get_description(self, check_obj: CheckModel) -> StrOrPromise:
+        unit, source, target = translation_from_check(check_obj)
         try:
             difference = self._compare_inner_html(unit, source, target)
         except _HTMLParseError as err:
             return err.description()
 
         if not difference:
-            return super().get_description(check_model)
+            return super().get_description(check_obj)
 
         return difference.description()
 

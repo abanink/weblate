@@ -1,6 +1,8 @@
 Managing translations
 =====================
 
+.. _adding-strings:
+
 Adding new strings
 ------------------
 
@@ -8,6 +10,17 @@ New strings can be made available for translation when they appear in the base f
 called :ref:`component-new_base` (see :ref:`component`).
 If your file format doesn't require such a file, as is the case with most monolingual
 translation flows, you can start with empty files.
+
+Weblate can add new strings to existing files for most of the file formats. You
+can also specify :guilabel:`Context` for bilingual formats to distinguish same
+strings used in different context. :guilabel:`Auto-adjust context when an
+identical string already exists.` can be used to automatically adjust
+:guilabel:`Context` by adding a numeric suffix in case such a string already
+exist in the translation.
+
+.. seealso::
+
+   :ref:`format-context`
 
 .. _adding-translation:
 
@@ -22,7 +35,7 @@ Some formats expect to start with an empty file and only translated strings to
 be included (for example :ref:`aresource`), while others expect to have all
 keys present (for example :ref:`gettext`). The document-based formats (for
 example :ref:`odf`) start with a copy of the source document and all strings
-marked as needing editing.  In some situations this really doesn't depend on
+marked as needing editing. In some situations this really doesn't depend on
 the format, but rather on the framework you use to handle the translation (for
 example with :ref:`json`).
 
@@ -40,12 +53,12 @@ used in generated filenames. Additionally, any mappings defined in
 
 .. seealso::
 
-   :ref:`component-new_lang`,
-   :ref:`component-new_base`,
-   :ref:`component-language_code_style`,
-   :ref:`language-code`,
-   :ref:`project-language_aliases`,
-   :ref:`language-parsing-codes`
+   * :ref:`component-new_lang`
+   * :ref:`component-new_base`
+   * :ref:`component-language_code_style`
+   * :ref:`language-code`
+   * :ref:`project-language_aliases`
+   * :ref:`language-parsing-codes`
 
 .. note::
 
@@ -60,7 +73,7 @@ Removing existing translations
 ------------------------------
 
 Languages, components, or the projects they are in, can be removed (deleted from Weblate
-and remote repository if used) from the menu :guilabel:`Manage` ↓ :guilabel:`Removal`
+and remote repository if used) from the menu :guilabel:`Operations` ↓ :guilabel:`Removal`
 of each project, component, or language.
 
 Initiating the :guilabel:`Removal` action shows the list of components to be removed.
@@ -74,7 +87,7 @@ If you want to remove just some specific strings, there are following ways:
 
 .. versionadded:: 4.5
 
-- In Weblate’s UI via button :guilabel:`Tools` ↓ :guilabel:`Remove` while editing the string.
+- In Weblate’s UI via button :guilabel:`Operations` ↓ :guilabel:`Remove` while editing the string.
   This has differences between file formats, see: :ref:`component-manage_units`
 
 .. note::
@@ -142,8 +155,8 @@ The additional variant for a string can also be added using the :guilabel:`Tools
 
 .. seealso::
 
-   :ref:`custom-checks`,
-   :ref:`glossary-variants`
+   * :ref:`custom-checks`
+   * :ref:`glossary-variants`
 
 Variants while translating
 ++++++++++++++++++++++++++

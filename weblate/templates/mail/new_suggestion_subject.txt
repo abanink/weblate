@@ -1,4 +1,6 @@
 {% load i18n %}
+
 {% autoescape off %}
-{% blocktrans %}New suggestion in {{ translation }}{% endblocktrans %}
+  {# Translators: e-mail subject #}
+  {% blocktranslate %}New suggestion in {{ translation }}{% endblocktranslate %}
 {% endautoescape %}

@@ -41,10 +41,10 @@ You may use your administration interface, or this button (it will bring you to 
 
 .. image:: /images/install-with-yunohost.png
    :alt: Install Weblate with YunoHost
-   :target: https://install-app.yunohost.org/?app=weblate
+   :target: https://apps.yunohost.org/app/weblate
 
 It also is possible to use the command-line interface:
 
 .. code-block:: sh
 
-    yunohost app install https://github.com/YunoHost-Apps/weblate_ynh
+    yunohost app install weblate

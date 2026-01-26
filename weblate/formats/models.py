@@ -7,10 +7,12 @@ from django.utils.functional import cached_property
 
 from weblate.utils.classloader import ClassLoader
 
+from .base import BaseExporter, TranslationFormat
+
 
 class ExporterLoader(ClassLoader):
     def __init__(self) -> None:
-        super().__init__("WEBLATE_EXPORTERS", False)
+        super().__init__("WEBLATE_EXPORTERS", construct=False, base_class=BaseExporter)
 
     def list_exporters(self, translation):
         return [
@@ -32,7 +34,9 @@ EXPORTERS = ExporterLoader()
 
 class FileFormatLoader(ClassLoader):
     def __init__(self) -> None:
-        super().__init__("WEBLATE_FORMATS", False)
+        super().__init__(
+            "WEBLATE_FORMATS", construct=False, base_class=TranslationFormat
+        )
         self.errors = {}
 
     @cached_property
@@ -63,6 +67,7 @@ class FormatsConf(AppConf):
         "weblate.formats.exporters.TMXExporter",
         "weblate.formats.exporters.MoExporter",
         "weblate.formats.exporters.CSVExporter",
+        "weblate.formats.exporters.MultiCSVExporter",
         "weblate.formats.exporters.XlsxExporter",
         "weblate.formats.exporters.JSONExporter",
         "weblate.formats.exporters.JSONNestedExporter",
@@ -76,6 +81,8 @@ class FormatsConf(AppConf):
         "weblate.formats.ttkit.TSFormat",
         "weblate.formats.ttkit.XliffFormat",
         "weblate.formats.ttkit.RichXliffFormat",
+        "weblate.formats.ttkit.Xliff2Format",
+        "weblate.formats.ttkit.RichXliff2Format",
         "weblate.formats.ttkit.PoXliffFormat",
         "weblate.formats.ttkit.StringsFormat",
         "weblate.formats.ttkit.StringsUtf8Format",
@@ -90,10 +97,12 @@ class FormatsConf(AppConf):
         "weblate.formats.ttkit.RESXFormat",
         "weblate.formats.ttkit.AndroidFormat",
         "weblate.formats.ttkit.MOKOFormat",
+        "weblate.formats.ttkit.CMPFormat",
         "weblate.formats.ttkit.JSONFormat",
         "weblate.formats.ttkit.JSONNestedFormat",
         "weblate.formats.ttkit.WebExtensionJSONFormat",
         "weblate.formats.ttkit.I18NextFormat",
+        "weblate.formats.ttkit.CatkeysFormat",
         "weblate.formats.ttkit.I18NextV4Format",
         "weblate.formats.ttkit.GoI18JSONFormat",
         "weblate.formats.ttkit.GoI18V2JSONFormat",
@@ -133,6 +142,10 @@ class FormatsConf(AppConf):
         "weblate.formats.ttkit.TBXFormat",
         "weblate.formats.ttkit.StringsdictFormat",
         "weblate.formats.ttkit.FluentFormat",
+        "weblate.formats.ttkit.GoI18nTOMLFormat",
+        "weblate.formats.ttkit.TOMLFormat",
+        "weblate.formats.ttkit.RESJSONFormat",
+        "weblate.formats.ttkit.NextcloudJSONFormat",
         "weblate.formats.multi.MultiCSVUtf8Format",
     )
 

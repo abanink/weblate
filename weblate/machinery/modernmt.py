@@ -1,29 +1,51 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
+import csv
 import json
+import os
+import tempfile
+from typing import TYPE_CHECKING, ClassVar
+
+from dateutil.parser import isoparse
+from requests.exceptions import HTTPError
 
 import weblate.utils.version
 
-from .base import DownloadTranslations, MachineTranslation, MachineTranslationError
+from .base import (
+    GlossaryDoesNotExistError,
+    GlossaryMachineTranslationMixin,
+    MachineTranslationError,
+)
 from .forms import ModernMTMachineryForm
 
+if TYPE_CHECKING:
+    from .base import (
+        DownloadTranslations,
+    )
 
-class ModernMTTranslation(MachineTranslation):
+
+class ModernMTTranslation(GlossaryMachineTranslationMixin):
     """ModernMT machine translation support."""
 
     name = "ModernMT"
     max_score = 90
     settings_form = ModernMTMachineryForm
 
-    language_map = {
+    language_map: ClassVar[dict[str, str]] = {
         "fa": "pes",
         "pt": "pt-PT",
         "sr": "sr-Cyrl",
         "zh_Hant": "zh-TW",
         "zh_Hans": "zh-CN",
     }
+    # Supported language variants not visible in the API
+    language_variants: ClassVar[dict[str, list[str]]] = {
+        "sr": ["sr-Cyrl", "sr-Latn"],
+    }
+    glossary_count_limit = 1000
 
     def map_language_code(self, code):
         """Convert language to service specific code."""
@@ -37,10 +59,6 @@ class ModernMTTranslation(MachineTranslation):
             "MMT-PlatformVersion": weblate.utils.version.VERSION,
         }
 
-    def is_supported(self, source, language):
-        """Check whether given language combination is supported."""
-        return (source, language) in self.supported_languages
-
     def check_failure(self, response) -> None:
         super().check_failure(response)
         payload = response.json()
@@ -50,26 +68,40 @@ class ModernMTTranslation(MachineTranslation):
 
     def download_languages(self):
         """List of supported languages."""
-        response = self.request("get", self.get_api_url("languages"))
+        response = self.request("get", self.get_api_url("translate", "languages"))
         payload = response.json()
 
-        for source, targets in payload["data"].items():
-            yield from ((source, target) for target in targets)
+        for language in payload["data"]:
+            if language in self.language_variants:
+                yield from self.language_variants[language]
+            else:
+                yield language
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
         unit,
         user,
         threshold: int = 75,
     ) -> DownloadTranslations:
         """Download list of possible translations from a service."""
+        params = {"q": text, "source": source_language, "target": target_language}
+        glossary_id: str | None = self.get_glossary_id(
+            source_language, target_language, unit
+        )
+
+        if glossary_id:
+            params["glossaries"] = glossary_id
+
+        if context_vector := self.settings.get("context_vector"):
+            params["context_vector"] = context_vector
+
         response = self.request(
             "get",
             self.get_api_url("translate"),
-            params={"q": text, "source": source, "target": language},
+            params=params,
         )
         payload = response.json()
 
@@ -94,3 +126,80 @@ class ModernMTTranslation(MachineTranslation):
                 pass
 
         return super().get_error_message(exc)
+
+    def is_glossary_supported(self, source_language: str, target_language: str) -> bool:
+        """Check whether given languages pair is supported by service glossaries."""
+        return self.is_supported(source_language, target_language)
+
+    def list_glossaries(self) -> dict[str, str]:
+        """List all glossaries from service."""
+        response = self.request("get", self.get_api_url("memories"))
+        return {
+            glossary["name"]: glossary["id"]
+            for glossary in response.json()["data"]
+            if self.match_name_format(glossary["name"])
+        }
+
+    def delete_glossary(self, glossary_id: str) -> None:
+        """Delete single glossary."""
+        try:
+            self.request("delete", self.get_api_url("memories", str(glossary_id)))
+        except HTTPError as error:
+            if error.response.status_code == 404:
+                raise GlossaryDoesNotExistError from error
+
+    def delete_oldest_glossary(self) -> None:
+        """Delete oldest glossary if any."""
+        response = self.request("get", self.get_api_url("memories"))
+        glossaries: list[dict] = sorted(
+            [
+                glossary
+                for glossary in response.json()["data"]
+                if self.match_name_format(glossary["name"])
+            ],
+            key=lambda glossary: isoparse(glossary["creationDate"]),
+        )
+        if glossaries:
+            self.delete_glossary(glossaries[0]["id"])
+
+    def create_glossary(
+        self, source_language: str, target_language: str, name: str, tsv: str
+    ) -> None:
+        """
+        Create glossary in service.
+
+        Create a memory with the given name and the populate with tsv content.
+        """
+        # ModernMT gracefully handles glossaries with duplicate name by updating the existing one
+        response = self.request(
+            "post",
+            self.get_api_url("memories"),
+            data={"name": name},
+        )
+        glossary_id: int = response.json()["data"]["id"]
+
+        temp_filename = ""
+        with tempfile.NamedTemporaryFile(
+            suffix=".csv", mode="w", encoding="utf-8", delete=False
+        ) as file_content:
+            reader = csv.reader(tsv.splitlines(), delimiter="\t")
+            writer = csv.writer(file_content)
+            writer.writerow([source_language, target_language])  # mandatory header
+            writer.writerows(reader)
+            temp_filename = file_content.name
+
+        try:
+            with open(temp_filename, "rb") as file_content:
+                self.request(
+                    "post",
+                    self.get_api_url("memories", str(glossary_id), "glossary"),
+                    data={
+                        "type": "unidirectional",
+                    },
+                    files={
+                        "csv": file_content,
+                    },
+                )
+        finally:
+            if os.path.exists(temp_filename):
+                os.unlink(temp_filename)

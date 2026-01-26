@@ -3,7 +3,7 @@ Installing using Docker
 
 With dockerized Weblate deployment you can get your personal Weblate instance
 up and running in seconds. All of Weblate's dependencies are already included.
-PostgreSQL is set up as the default database and Redis as a caching backend.
+PostgreSQL is set up as the default database and Valkey as a caching backend.
 
 .. include:: steps/hw.rst
 
@@ -20,7 +20,7 @@ Installation
 
 This creates a Weblate deployment server via HTTP, so you should place it
 behind HTTPS terminating proxy. You can also deploy with a HTTPS proxy, see
-:ref:`docker-https-portal`.  For larger setups, please see
+:ref:`docker-https-portal`. For larger setups, please see
 :ref:`docker-scaling`.
 
 1. Clone the weblate-docker repo:
@@ -33,22 +33,8 @@ behind HTTPS terminating proxy. You can also deploy with a HTTPS proxy, see
 2. Create a :file:`docker-compose.override.yml` file with your settings.
    See :ref:`docker-environment` for full list of environment variables.
 
-   .. code-block:: yaml
-
-        version: '3'
-        services:
-          weblate:
-            ports:
-              - 80:8080
-            environment:
-              WEBLATE_EMAIL_HOST: smtp.example.com
-              WEBLATE_EMAIL_HOST_USER: user
-              WEBLATE_EMAIL_HOST_PASSWORD: pass
-              WEBLATE_SERVER_EMAIL: weblate@example.com
-              WEBLATE_DEFAULT_FROM_EMAIL: weblate@example.com
-              WEBLATE_SITE_DOMAIN: weblate.example.com
-              WEBLATE_ADMIN_PASSWORD: password for the admin user
-              WEBLATE_ADMIN_EMAIL: weblate.admin@example.com
+   .. literalinclude:: ../../../weblate/examples/docker-compose.yml
+      :language: yaml
 
    .. note::
 
@@ -66,7 +52,9 @@ behind HTTPS terminating proxy. You can also deploy with a HTTPS proxy, see
 
 Enjoy your Weblate deployment, it's accessible on port 80 of the ``weblate`` container.
 
-.. seealso:: :ref:`invoke-manage`
+.. seealso::
+
+   :ref:`invoke-manage`
 
 Choosing Docker image registry
 ------------------------------
@@ -119,6 +107,36 @@ Docker container with HTTPS support
 
 Please see :ref:`docker-deploy` for generic deployment instructions, this
 section only mentions differences compared to it.
+
+
+.. _docker-ssl-proxy:
+
+SSL terminating proxy
++++++++++++++++++++++
+
+SSL can be terminated outside Weblate container. To make this work well
+together, several headers need to be passed to the container so that it is
+aware of its actual environment. In more detail, these headers are described in
+:ref:`reverse-proxy`.
+
+.. code-block:: nginx
+   :caption: Example nginx reverse proxy configuration for a Docker container.
+
+   location / {
+       proxy_pass http://127.0.0.1:8080;
+       proxy_read_timeout 3600s;
+       proxy_set_header Host $host;
+       proxy_set_header X-Forwarded-Proto https;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Host $server_name;
+   }
+
+.. code-block:: sh
+   :caption: Docker container environment for external SSL termination.
+
+   WEBLATE_ENABLE_HTTPS=1
+   WEBLATE_IP_PROXY_HEADER=HTTP_X_FORWARDED_FOR
 
 Using own SSL certificates
 ++++++++++++++++++++++++++
@@ -177,7 +195,7 @@ In case you want to use `Let’s Encrypt <https://letsencrypt.org/>`_
 automatically generated SSL certificates on public installation, you need to
 add a reverse HTTPS proxy an additional Docker container, `https-portal
 <https://hub.docker.com/r/steveltn/https-portal/>`_ will be used for that.
-This is made use of in the :file:`docker-compose-https.yml` file.  Then create
+This is made use of in the :file:`docker-compose-https.yml` file. Then create
 a :file:`docker-compose-https.override.yml` file with your settings:
 
 .. code-block:: yaml
@@ -336,14 +354,14 @@ To reset `admin` password, restart the container with
 
 .. seealso::
 
-        :envvar:`WEBLATE_ADMIN_PASSWORD`,
-        :envvar:`WEBLATE_ADMIN_NAME`,
-        :envvar:`WEBLATE_ADMIN_EMAIL`
+   * :envvar:`WEBLATE_ADMIN_PASSWORD`
+   * :envvar:`WEBLATE_ADMIN_NAME`
+   * :envvar:`WEBLATE_ADMIN_EMAIL`
 
 Number of processes and memory consumption
 ------------------------------------------
 
-The number of worker processes for both uWSGI and Celery is determined
+The number of worker processes for both WSGI and Celery is determined
 automatically based on number of CPUs. This works well for most cloud virtual
 machines as these typically have few CPUs and good amount of memory.
 
@@ -365,16 +383,24 @@ You can also fine-tune individual worker categories:
       CELERY_NOTIFY_OPTIONS: --concurrency 1
       CELERY_TRANSLATE_OPTIONS: --concurrency 1
 
+Memory usage can be further reduced by running only a single Celery process:
+
+.. code-block:: yaml
+
+    environment:
+      CELERY_SINGLE_PROCESS: 1
+
 .. seealso::
 
-   :envvar:`WEBLATE_WORKERS`
-   :envvar:`CELERY_MAIN_OPTIONS`,
-   :envvar:`CELERY_NOTIFY_OPTIONS`,
-   :envvar:`CELERY_MEMORY_OPTIONS`,
-   :envvar:`CELERY_TRANSLATE_OPTIONS`,
-   :envvar:`CELERY_BACKUP_OPTIONS`,
-   :envvar:`CELERY_BEAT_OPTIONS`,
-   :envvar:`WEB_WORKERS`
+   * :envvar:`WEBLATE_WORKERS`
+   * :envvar:`CELERY_MAIN_OPTIONS`
+   * :envvar:`CELERY_NOTIFY_OPTIONS`
+   * :envvar:`CELERY_MEMORY_OPTIONS`
+   * :envvar:`CELERY_TRANSLATE_OPTIONS`
+   * :envvar:`CELERY_BACKUP_OPTIONS`
+   * :envvar:`CELERY_BEAT_OPTIONS`
+   * :envvar:`CELERY_SINGLE_PROCESS`
+   * :envvar:`WEB_WORKERS`
 
 .. _docker-scaling:
 
@@ -390,7 +416,7 @@ volume should be separate for each container.
 
 Each Weblate container has defined role using :envvar:`WEBLATE_SERVICE`
 environment variable. Please follow carefully the documentation as some of the
-services should be running just once in the cluster and the ordering of the
+services should be running just once in the cluster, and the order of the
 services matters as well.
 
 You can find example setup in the ``docker-compose`` repo as
@@ -441,7 +467,7 @@ Related :file:`docker-compose.yml` might look like:
 
 .. seealso::
 
-   `How to use secrets in Docker Compose <https://docs.docker.com/compose/use-secrets/>`_
+   `How to use secrets in Docker Compose <https://docs.docker.com/compose/how-tos/use-secrets/>`_
 
 Generic settings
 ++++++++++++++++
@@ -473,18 +499,39 @@ Generic settings
 
     Configures the logging of the database queries verbosity.
 
+.. envvar:: WEBLATE_LOG_GELF_HOST
+
+   .. versionadded:: 5.9
+
+   Configures remote logging using GELF TCP connection. Can be used to integrate with Graylog.
+
+.. envvar:: WEBLATE_LOG_GELF_PORT
+
+   .. versionadded:: 5.9
+
+   Use custom port for :envvar:`WEBLATE_LOG_GELF_HOST`, defaults to 12201.
+
 .. envvar:: WEBLATE_SITE_TITLE
 
     Changes the site-title shown in the header of all pages.
 
 .. envvar:: WEBLATE_SITE_DOMAIN
 
-    Configures the site domain. This parameter is required.
+   Configures the site domain. This parameter is required.
 
-    .. seealso::
+   Include port if using a non-standard one.
 
-        :ref:`production-site`,
-        :setting:`SITE_DOMAIN`
+   **Example:**
+
+   .. code-block:: yaml
+
+      environment:
+        WEBLATE_SITE_DOMAIN: example.com:8080
+
+   .. seealso::
+
+      * :ref:`production-site`
+      * :setting:`SITE_DOMAIN`
 
 .. envvar:: WEBLATE_ADMIN_NAME
 .. envvar:: WEBLATE_ADMIN_EMAIL
@@ -503,9 +550,9 @@ Generic settings
 
     .. seealso::
 
-            :ref:`docker-admin-login`,
-            :ref:`production-admins`,
-            :setting:`ADMINS`
+       * :ref:`docker-admin-login`
+       * :ref:`production-admins`
+       * :setting:`ADMINS`
 
 .. envvar:: WEBLATE_ADMIN_PASSWORD
 
@@ -527,11 +574,23 @@ Generic settings
 
     .. seealso::
 
-            :ref:`docker-admin-login`,
-            :ref:`docker-secrets`,
-            :envvar:`WEBLATE_ADMIN_PASSWORD`,
-            :envvar:`WEBLATE_ADMIN_NAME`,
-            :envvar:`WEBLATE_ADMIN_EMAIL`
+        * :ref:`docker-admin-login`
+        * :ref:`docker-secrets`
+        * :envvar:`WEBLATE_ADMIN_PASSWORD`
+        * :envvar:`WEBLATE_ADMIN_NAME`
+        * :envvar:`WEBLATE_ADMIN_EMAIL`
+
+.. envvar:: WEBLATE_ADMIN_NOTIFY_ERROR
+
+   Whether to sent e-mail to admins upon server error. Turned on by default.
+
+   You might want to use other error collection like Sentry or Rollbar and turn this off.
+
+   .. seealso::
+
+      * :ref:`django:logging-security-implications`
+      * :envvar:`ROLLBAR_KEY`
+      * :envvar:`SENTRY_DSN`
 
 .. envvar:: WEBLATE_SERVER_EMAIL
 
@@ -539,8 +598,8 @@ Generic settings
 
     .. seealso::
 
-        :std:setting:`django:SERVER_EMAIL`,
-        :ref:`production-email`
+       * :std:setting:`django:SERVER_EMAIL`
+       * :ref:`production-email`
 
 .. envvar:: WEBLATE_DEFAULT_FROM_EMAIL
 
@@ -548,8 +607,8 @@ Generic settings
 
     .. seealso::
 
-        :std:setting:`django:DEFAULT_FROM_EMAIL`,
-        :ref:`production-email`
+       * :std:setting:`django:DEFAULT_FROM_EMAIL`
+       * :ref:`production-email`
 
 .. envvar:: WEBLATE_ADMINS_CONTACT
 
@@ -574,9 +633,9 @@ Generic settings
 
     .. seealso::
 
-        :setting:`ALLOWED_HOSTS`,
-        :ref:`production-hosts`,
-        :ref:`production-site`
+        * :setting:`ALLOWED_HOSTS`
+        * :ref:`production-hosts`
+        * :ref:`production-site`
 
 .. envvar:: WEBLATE_REGISTRATION_OPEN
 
@@ -588,6 +647,19 @@ Generic settings
 
         environment:
           WEBLATE_REGISTRATION_OPEN: 0
+
+.. envvar:: WEBLATE_REGISTRATION_CAPTCHA
+
+   .. versionadded:: 5.10
+
+   Configures whether captcha is used for registration and other unauthenticated actions, see :std:setting:`REGISTRATION_CAPTCHA`.
+
+   **Example:**
+
+   .. code-block:: yaml
+
+      environment:
+        WEBLATE_REGISTRATION_CAPTCHA: 0
 
 .. envvar:: WEBLATE_REGISTRATION_ALLOW_BACKENDS
 
@@ -648,20 +720,9 @@ Generic settings
 
     .. seealso::
 
-      :setting:`ENABLE_HTTPS`
-      :ref:`production-site`,
-      :envvar:`WEBLATE_SECURE_PROXY_SSL_HEADER`
-
-.. envvar:: WEBLATE_INTERLEDGER_PAYMENT_POINTERS
-
-    .. versionadded:: 4.12.1
-
-    Lets Weblate set the `meta[name=monetization]` field in the head of the
-    document. If multiple are specified, chooses one randomly.
-
-    .. seealso::
-
-        :setting:`INTERLEDGER_PAYMENT_POINTERS`
+       * :setting:`ENABLE_HTTPS`
+       * :ref:`production-site`
+       * :envvar:`WEBLATE_SECURE_PROXY_SSL_HEADER`
 
 .. envvar:: WEBLATE_IP_PROXY_HEADER
 
@@ -724,7 +785,8 @@ Generic settings
 
     .. seealso::
 
-        :setting:`django:SECURE_PROXY_SSL_HEADER`
+       * :ref:`reverse-proxy`
+       * :setting:`django:SECURE_PROXY_SSL_HEADER`
 
 .. envvar:: WEBLATE_REQUIRE_LOGIN
 
@@ -737,22 +799,6 @@ Generic settings
         environment:
           WEBLATE_REQUIRE_LOGIN: 1
 
-.. envvar:: WEBLATE_LOGIN_REQUIRED_URLS_EXCEPTIONS
-.. envvar:: WEBLATE_ADD_LOGIN_REQUIRED_URLS_EXCEPTIONS
-.. envvar:: WEBLATE_REMOVE_LOGIN_REQUIRED_URLS_EXCEPTIONS
-
-    Adds URL exceptions for authentication required for the whole Weblate
-    installation using :setting:`LOGIN_REQUIRED_URLS_EXCEPTIONS`.
-
-    You can either replace whole settings, or modify default value using ``ADD`` and ``REMOVE`` variables.
-
-    To enforce authentication for the contact form, do:
-
-    .. code-block:: yaml
-
-       environment:
-         WEBLATE_REMOVE_LOGIN_REQUIRED_URLS_EXCEPTIONS: /contact/$
-
 .. envvar:: WEBLATE_GOOGLE_ANALYTICS_ID
 
     Configures ID for Google Analytics by changing :setting:`GOOGLE_ANALYTICS_ID`.
@@ -760,7 +806,7 @@ Generic settings
 .. envvar:: WEBLATE_DEFAULT_PULL_MESSAGE
 
     Configures the default title and message for pull requests via API by changing
-    :setting:`DEFAULT_PULL_MESSAGE`
+    :setting:`DEFAULT_PULL_MESSAGE`.
 
     .. seealso::
 
@@ -769,6 +815,10 @@ Generic settings
 .. envvar:: WEBLATE_SIMPLIFY_LANGUAGES
 
     Configures the language simplification policy, see :setting:`SIMPLIFY_LANGUAGES`.
+
+.. envvar:: WEBLATE_HIDE_SHARED_GLOSSARY_COMPONENTS
+
+    Hides glossary components when shared to other projects, see :setting:`HIDE_SHARED_GLOSSARY_COMPONENTS`.
 
 .. envvar:: WEBLATE_DEFAULT_ACCESS_CONTROL
 
@@ -790,13 +840,13 @@ Generic settings
 
     Configures :setting:`DEFAULT_COMMITER_NAME`.
 
-.. envvar::  WEBLATE_DEFAULT_SHARED_TM
+.. envvar:: WEBLATE_DEFAULT_SHARED_TM
 
    Configures :setting:`DEFAULT_SHARED_TM`.
 
-.. envvar:: WEBLATE_AKISMET_API_KEY
+.. envvar:: WEBLATE_DEFAULT_AUTOCLEAN_TM
 
-    Configures the Akismet API key, see :setting:`AKISMET_API_KEY`.
+   Configures :setting:`DEFAULT_AUTOCLEAN_TM`.
 
 .. envvar:: WEBLATE_GPG_IDENTITY
 
@@ -810,6 +860,10 @@ Generic settings
 
    Configures URL prefix where Weblate is running, see :setting:`URL_PREFIX`.
 
+.. envvar:: WEBLATE_STATIC_URL
+
+   Configures URL prefix for static files server from :setting:`CACHE_DIR`.
+
 .. envvar:: WEBLATE_SILENCED_SYSTEM_CHECKS
 
    Configures checks which you do not want to be displayed, see
@@ -820,17 +874,19 @@ Generic settings
 .. envvar:: WEBLATE_CSP_CONNECT_SRC
 .. envvar:: WEBLATE_CSP_STYLE_SRC
 .. envvar:: WEBLATE_CSP_FONT_SRC
+.. envvar:: WEBLATE_CSP_FORM_SRC
 
-    Allows to customize ``Content-Security-Policy`` HTTP header.
+    Allows to customize :http:header:`Content-Security-Policy` HTTP header.
 
     .. seealso::
 
-        :ref:`csp`,
-        :setting:`CSP_SCRIPT_SRC`,
-        :setting:`CSP_IMG_SRC`,
-        :setting:`CSP_CONNECT_SRC`,
-        :setting:`CSP_STYLE_SRC`,
-        :setting:`CSP_FONT_SRC`
+       * :ref:`csp`
+       * :setting:`CSP_SCRIPT_SRC`
+       * :setting:`CSP_IMG_SRC`
+       * :setting:`CSP_CONNECT_SRC`
+       * :setting:`CSP_STYLE_SRC`
+       * :setting:`CSP_FONT_SRC`
+       * :setting:`CSP_FORM_SRC`
 
 .. envvar:: WEBLATE_LICENSE_FILTER
 
@@ -838,11 +894,11 @@ Generic settings
 
 .. envvar:: WEBLATE_LICENSE_REQUIRED
 
-   Configures :setting:`LICENSE_REQUIRED`
+   Configures :setting:`LICENSE_REQUIRED`.
 
 .. envvar:: WEBLATE_WEBSITE_REQUIRED
 
-   Configures :setting:`WEBSITE_REQUIRED`
+   Configures :setting:`WEBSITE_REQUIRED`.
 
 .. envvar:: WEBLATE_HIDE_VERSION
 
@@ -871,10 +927,10 @@ Generic settings
 
    .. seealso::
 
-      :ref:`rate-limit`,
-      :setting:`RATELIMIT_ATTEMPTS`,
-      :setting:`RATELIMIT_WINDOW`,
-      :setting:`RATELIMIT_LOCKOUT`
+      * :ref:`rate-limit`
+      * :setting:`RATELIMIT_ATTEMPTS`
+      * :setting:`RATELIMIT_WINDOW`
+      * :setting:`RATELIMIT_LOCKOUT`
 
 
 .. envvar:: WEBLATE_API_RATELIMIT_ANON
@@ -968,11 +1024,47 @@ Generic settings
 
    Configures :setting:`UNUSED_ALERT_DAYS`.
 
+.. envvar:: WEBLATE_UPDATE_LANGUAGES
+
+   .. versionadded:: 4.3.2
+
+   Configures :setting:`UPDATE_LANGUAGES`.
+
+.. envvar:: WEBLATE_VCS_ALLOW_HOSTS
+
+   .. versionadded:: 5.15
+
+   Configures :setting:`VCS_ALLOW_HOSTS`.
+
+.. envvar:: WEBLATE_VCS_ALLOW_SCHEMES
+
+   .. versionadded:: 5.15
+
+   Configures :setting:`VCS_ALLOW_SCHEMES`.
+
+.. envvar:: WEBLATE_VCS_CLONE_DEPTH
+
+   .. versionadded:: 5.4
+
+   Configures :setting:`VCS_CLONE_DEPTH`.
+
+.. envvar:: WEBLATE_VCS_API_DELAY
+
+   .. versionadded:: 5.4
+
+   Configures :setting:`VCS_API_DELAY`.
+
+.. envvar:: WEBLATE_VCS_API_TIMEOUT
+
+   .. versionadded:: 5.15
+
+   Configures :setting:`VCS_API_TIMEOUT`.
+
 .. envvar:: WEBLATE_CORS_ALLOWED_ORIGINS
 
    .. versionadded:: 4.16
 
-   Allow CORS requests from given origins.
+   Allow CORS requests to API from given origins.
 
    **Example:**
 
@@ -980,6 +1072,12 @@ Generic settings
 
         environment:
           WEBLATE_CORS_ALLOWED_ORIGINS: https://example.com,https://weblate.org
+
+.. envvar:: WEBLATE_CORS_ALLOW_ALL_ORIGINS
+
+   .. versionadded:: 5.6.1
+
+      Allows CORS requests to API from all origins.
 
 
 .. envvar:: CLIENT_MAX_BODY_SIZE
@@ -1005,11 +1103,17 @@ Code hosting sites credentials
 ++++++++++++++++++++++++++++++
 
 In the Docker container, the code hosting credentials can be configured either
-in separate variables or using a Python dictionary to set them at once.  The
+in separate variables or using a Python dictionary to set them at once. The
 following examples are for :ref:`vcs-github`, but applies to all :ref:`vcs`
 with appropriately changed variable names.
 
-An example configuration for GitHub might look like:
+.. important::
+
+   All environment variable names must include the ``WEBLATE_`` prefix. For example,
+   to configure GitHub credentials, use ``WEBLATE_GITHUB_USERNAME``, not ``GITHUB_USERNAME``.
+   This applies whether you're configuring for pull requests or any other VCS integration.
+
+An example configuration for GitHub pull requests might look like:
 
 .. code-block:: shell
 
@@ -1048,7 +1152,9 @@ Or the path to a file containing the Python dictionary:
 
     Configures :ref:`vcs-github` by changing :setting:`GITHUB_CREDENTIALS`.
 
-    .. seealso:: :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
+    .. seealso::
+
+       :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
 
 .. envvar:: WEBLATE_GITLAB_USERNAME
 .. envvar:: WEBLATE_GITLAB_TOKEN
@@ -1057,7 +1163,9 @@ Or the path to a file containing the Python dictionary:
 
     Configures :ref:`vcs-gitlab` by changing :setting:`GITLAB_CREDENTIALS`.
 
-    .. seealso:: :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
+    .. seealso::
+
+       :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
 
 .. envvar:: WEBLATE_GITEA_USERNAME
 .. envvar:: WEBLATE_GITEA_TOKEN
@@ -1066,7 +1174,9 @@ Or the path to a file containing the Python dictionary:
 
     Configures :ref:`vcs-gitea` by changing :setting:`GITEA_CREDENTIALS`.
 
-    .. seealso:: :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
+    .. seealso::
+
+       :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
 
 .. envvar:: WEBLATE_PAGURE_USERNAME
 .. envvar:: WEBLATE_PAGURE_TOKEN
@@ -1075,16 +1185,28 @@ Or the path to a file containing the Python dictionary:
 
     Configures :ref:`vcs-pagure` by changing :setting:`PAGURE_CREDENTIALS`.
 
-    .. seealso:: :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
+    .. seealso::
+
+       :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
 
 .. envvar:: WEBLATE_BITBUCKETSERVER_USERNAME
 .. envvar:: WEBLATE_BITBUCKETSERVER_TOKEN
 .. envvar:: WEBLATE_BITBUCKETSERVER_HOST
 .. envvar:: WEBLATE_BITBUCKETSERVER_CREDENTIALS
 
-    Configures :ref:`vcs-bitbucket-server` by changing :setting:`BITBUCKETSERVER_CREDENTIALS`.
+    Configures :ref:`vcs-bitbucket-data-center` by changing :setting:`BITBUCKETSERVER_CREDENTIALS`.
 
-    .. seealso:: :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
+.. envvar:: WEBLATE_BITBUCKETCLOUD_USERNAME
+.. envvar:: WEBLATE_BITBUCKETCLOUD_WORKSPACE
+.. envvar:: WEBLATE_BITBUCKETCLOUD_TOKEN
+.. envvar:: WEBLATE_BITBUCKETCLOUD_HOST
+.. envvar:: WEBLATE_BITBUCKETCLOUD_CREDENTIALS
+
+    Configures :ref:`vcs-bitbucket-cloud` by changing :setting:`BITBUCKETCLOUD_CREDENTIALS`.
+
+    .. seealso::
+
+       :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
 
 .. envvar:: WEBLATE_AZURE_DEVOPS_USERNAME
 .. envvar:: WEBLATE_AZURE_DEVOPS_ORGANIZATION
@@ -1094,7 +1216,9 @@ Or the path to a file containing the Python dictionary:
 
     Configures :ref:`vcs-azure-devops` by changing :setting:`AZURE_DEVOPS_CREDENTIALS`.
 
-    .. seealso:: :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
+    .. seealso::
+
+       :ref:`Configuring code hosting credentials in Docker <docker-vcs-config>`
 
 .. _docker-machine:
 
@@ -1113,6 +1237,10 @@ Automatic suggestion settings
 
 Authentication settings
 +++++++++++++++++++++++
+
+.. hint::
+
+   The e-mail based authentication is turned on unless disabled by :envvar:`WEBLATE_NO_EMAIL_AUTH`.
 
 LDAP
 ~~~~
@@ -1180,8 +1308,8 @@ LDAP
 
     .. seealso::
 
-         :ref:`docker-secrets`,
-         :ref:`ldap-auth`
+       * :ref:`docker-secrets`
+       * :ref:`ldap-auth`
 
 GitHub
 ~~~~~~
@@ -1213,8 +1341,6 @@ Bitbucket
 
 .. envvar:: WEBLATE_SOCIAL_AUTH_BITBUCKET_OAUTH2_KEY
 .. envvar:: WEBLATE_SOCIAL_AUTH_BITBUCKET_OAUTH2_SECRET
-.. envvar:: WEBLATE_SOCIAL_AUTH_BITBUCKET_KEY
-.. envvar:: WEBLATE_SOCIAL_AUTH_BITBUCKET_SECRET
 
     Enables :ref:`bitbucket_auth`.
 
@@ -1284,8 +1410,20 @@ Keycloak
 .. envvar:: WEBLATE_SOCIAL_AUTH_KEYCLOAK_TITLE
 .. envvar:: WEBLATE_SOCIAL_AUTH_KEYCLOAK_IMAGE
 
-    Enables Keycloak authentication, see
-    `documentation <https://github.com/python-social-auth/social-core/blob/master/social_core/backends/keycloak.py>`_.
+    Enables Keycloak authentication, see :doc:`psa:backends/keycloak`.
+
+    .. hint::
+
+       When Keycloak is configured to abstract third-party IDP, you will need
+       to configure :envvar:`WEBLATE_CSP_FORM_SRC` for the third-party IDP domain.
+
+       .. code-block:: yaml
+          :caption: Example when Keycloak is passing authentication to Microsoft.
+
+          environment:
+            WEBLATE_CSP_FORM_SRC: login.microsoftonline.com
+
+
 
 Linux vendors
 ~~~~~~~~~~~~~
@@ -1316,12 +1454,28 @@ OpenID Connect
 .. envvar:: WEBLATE_SOCIAL_AUTH_OIDC_KEY
 .. envvar:: WEBLATE_SOCIAL_AUTH_OIDC_SECRET
 .. envvar:: WEBLATE_SOCIAL_AUTH_OIDC_USERNAME_KEY
+.. envvar:: WEBLATE_SOCIAL_AUTH_OIDC_TITLE
+.. envvar:: WEBLATE_SOCIAL_AUTH_OIDC_IMAGE
 
    Configures generic OpenID Connect integration.
 
    .. seealso::
 
       :doc:`psa:backends/oidc`
+
+Fedora OpenID Connect
+~~~~~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 5.15
+
+.. envvar:: WEBLATE_SOCIAL_AUTH_FEDORA_OIDC_KEY
+.. envvar:: WEBLATE_SOCIAL_AUTH_FEDORA_OIDC_SECRET
+
+   Configures Fedora OpenID Connect integration.
+
+   .. seealso::
+
+      :doc:`psa:backends/fedora`
 
 .. _docker-saml:
 
@@ -1340,7 +1494,9 @@ In case you want to use own keys, place the certificate and private key in
 
     SAML Identity Provider settings, see :ref:`saml-auth`.
 
-.. envvar:: WEBLATE_SAML_ID_ATTR_NAME
+.. envvar:: WEBLATE_SAML_ID_ATTR_FULL_NAME
+.. envvar:: WEBLATE_SAML_ID_ATTR_FIRST_NAME
+.. envvar:: WEBLATE_SAML_ID_ATTR_LAST_NAME
 .. envvar:: WEBLATE_SAML_ID_ATTR_USERNAME
 .. envvar:: WEBLATE_SAML_ID_ATTR_EMAIL
 .. envvar:: WEBLATE_SAML_ID_ATTR_USER_PERMANENT_ID
@@ -1362,8 +1518,13 @@ Other authentication settings
 .. envvar:: WEBLATE_MIN_PASSWORD_SCORE
 
    Minimal password score as evaluated by the `zxcvbn
-   <https://github.com/dropbox/zxcvbn>`_ password strength estimator.
+   <https://github.com/dwolfhub/zxcvbn-python>`_ password strength estimator.
    Defaults to 3, set to 0 to disable strength checking.
+
+   .. seealso::
+
+      * :ref:`password-authentication`
+      * :setting:`PASSWORD_MINIMAL_STRENGTH`
 
 
 PostgreSQL database setup
@@ -1372,7 +1533,9 @@ PostgreSQL database setup
 The database is created by :file:`docker-compose.yml`, so these settings affect
 both Weblate and PostgreSQL containers.
 
-.. seealso:: :ref:`database-setup`
+.. seealso::
+
+   :ref:`database-setup`
 
 .. envvar:: POSTGRES_PASSWORD
 
@@ -1401,11 +1564,13 @@ both Weblate and PostgreSQL containers.
 .. envvar:: POSTGRES_SSL_MODE
 
    Configure how PostgreSQL handles SSL in connection to the server, for possible choices see
-   `SSL Mode Descriptions <https://www.postgresql.org/docs/11/libpq-ssl.html#LIBPQ-SSL-SSLMODE-STATEMENTS>`_
+   `SSL Mode Descriptions <https://www.postgresql.org/docs/11/libpq-ssl.html#LIBPQ-SSL-SSLMODE-STATEMENTS>`_.
 
 .. envvar:: POSTGRES_ALTER_ROLE
 
-    Configures name of role to alter during migrations, see :ref:`config-postgresql`.
+    Configures name of the PostgreSQL role to alter during the database migration, see :ref:`config-postgresql`.
+
+    Defaults to :envvar:`POSTGRES_USER`.
 
 .. envvar:: POSTGRES_CONN_MAX_AGE
 
@@ -1430,7 +1595,8 @@ both Weblate and PostgreSQL containers.
 
    .. seealso::
 
-      :setting:`django:CONN_MAX_AGE`, :ref:`django:persistent-database-connections`
+      * :setting:`django:CONN_MAX_AGE`
+      * :ref:`django:persistent-database-connections`
 
 .. envvar:: POSTGRES_DISABLE_SERVER_SIDE_CURSORS
 
@@ -1448,8 +1614,8 @@ both Weblate and PostgreSQL containers.
 
    .. seealso::
 
-      :setting:`DISABLE_SERVER_SIDE_CURSORS <django:DATABASE-DISABLE_SERVER_SIDE_CURSORS>`,
-      :ref:`django:transaction-pooling-server-side-cursors`
+      * :setting:`DISABLE_SERVER_SIDE_CURSORS <django:DATABASE-DISABLE_SERVER_SIDE_CURSORS>`
+      * :ref:`django:transaction-pooling-server-side-cursors`
 
 .. envvar:: WEBLATE_DATABASES
 
@@ -1477,29 +1643,37 @@ Database backup settings
     Configures the daily database dump using :setting:`DATABASE_BACKUP`. Defaults to ``plain``.
 
 
-Caching server setup
-++++++++++++++++++++
+Datastore server setup
+++++++++++++++++++++++
 
-Using Redis is strongly recommended by Weblate and you have to provide a Redis
-instance when running Weblate in Docker.
+Using Valkey or Redis is required by the Weblate container and you have to
+provide a connection parameters when running Weblate in Docker.
 
-.. seealso:: :ref:`production-cache`
+.. seealso::
+
+   :ref:`production-cache`
 
 .. envvar:: REDIS_HOST
 
-   The Redis server hostname or IP address. Defaults to ``cache``.
+   The datastore server hostname or IP address. Defaults to ``cache``.
 
 .. envvar:: REDIS_PORT
 
-    The Redis server port. Defaults to ``6379``.
+    The datastore server port. Defaults to ``6379``.
 
 .. envvar:: REDIS_DB
 
-    The Redis database number, defaults to ``1``.
+    The datastore database number, defaults to ``1``.
+
+.. envvar:: REDIS_USER
+
+   .. versionadded:: 5.13
+
+    The datastore database user, not used by default.
 
 .. envvar:: REDIS_PASSWORD
 
-    The Redis server password, not used by default.
+    The datastore server password, not used by default.
 
     .. seealso::
 
@@ -1507,11 +1681,11 @@ instance when running Weblate in Docker.
 
 .. envvar:: REDIS_TLS
 
-    Enables using SSL for Redis connection.
+    Enables using SSL for the datastore connection.
 
 .. envvar:: REDIS_VERIFY_SSL
 
-    Can be used to disable SSL certificate verification for Redis connection.
+    Can be used to disable SSL certificate verification for the datastore connection.
 
 .. _docker-mail:
 
@@ -1542,7 +1716,9 @@ Example SSL configuration:
         WEBLATE_EMAIL_USE_SSL: 1
 
 
-.. seealso:: :ref:`out-mail`
+.. seealso::
+
+   :ref:`out-mail`
 
 .. envvar:: WEBLATE_EMAIL_HOST
 
@@ -1550,22 +1726,26 @@ Example SSL configuration:
 
     .. seealso::
 
-        :envvar:`WEBLATE_EMAIL_PORT`,
-        :envvar:`WEBLATE_EMAIL_USE_SSL`,
-        :envvar:`WEBLATE_EMAIL_USE_TLS`,
-        :setting:`django:EMAIL_HOST`
+       * :envvar:`WEBLATE_EMAIL_PORT`
+       * :envvar:`WEBLATE_EMAIL_USE_SSL`
+       * :envvar:`WEBLATE_EMAIL_USE_TLS`
+       * :setting:`django:EMAIL_HOST`
 
 .. envvar:: WEBLATE_EMAIL_PORT
 
     Mail server port, defaults to 25.
 
-    .. seealso:: :setting:`django:EMAIL_PORT`
+    .. seealso::
+
+       :setting:`django:EMAIL_PORT`
 
 .. envvar:: WEBLATE_EMAIL_HOST_USER
 
     E-mail authentication user.
 
-    .. seealso:: :setting:`django:EMAIL_HOST_USER`
+    .. seealso::
+
+       :setting:`django:EMAIL_HOST_USER`
 
 .. envvar:: WEBLATE_EMAIL_HOST_PASSWORD
 
@@ -1573,8 +1753,8 @@ Example SSL configuration:
 
     .. seealso::
 
-         :ref:`docker-secrets`,
-         :setting:`django:EMAIL_HOST_PASSWORD`
+       * :ref:`docker-secrets`
+       * :setting:`django:EMAIL_HOST_PASSWORD`
 
 .. envvar:: WEBLATE_EMAIL_USE_SSL
 
@@ -1590,9 +1770,9 @@ Example SSL configuration:
 
     .. seealso::
 
-        :envvar:`WEBLATE_EMAIL_PORT`,
-        :envvar:`WEBLATE_EMAIL_USE_TLS`,
-        :setting:`django:EMAIL_USE_SSL`
+       * :envvar:`WEBLATE_EMAIL_PORT`
+       * :envvar:`WEBLATE_EMAIL_USE_TLS`
+       * :setting:`django:EMAIL_USE_SSL`
 
 .. envvar:: WEBLATE_EMAIL_USE_TLS
 
@@ -1608,9 +1788,9 @@ Example SSL configuration:
 
     .. seealso::
 
-        :envvar:`WEBLATE_EMAIL_PORT`,
-        :envvar:`WEBLATE_EMAIL_USE_SSL`,
-        :setting:`django:EMAIL_USE_TLS`
+       * :envvar:`WEBLATE_EMAIL_PORT`
+       * :envvar:`WEBLATE_EMAIL_USE_SSL`
+       * :setting:`django:EMAIL_USE_TLS`
 
 .. envvar:: WEBLATE_EMAIL_BACKEND
 
@@ -1619,8 +1799,8 @@ Example SSL configuration:
 
     .. seealso::
 
-        :ref:`production-email`,
-        :setting:`django:EMAIL_BACKEND`
+       * :ref:`production-email`
+       * :setting:`django:EMAIL_BACKEND`
 
 .. envvar:: WEBLATE_AUTO_UPDATE
 
@@ -1677,9 +1857,13 @@ To enable support for Sentry, set following:
 
     Your Sentry Environment (optional), defaults to :envvar:`WEBLATE_SITE_DOMAIN`.
 
+.. envvar:: SENTRY_MONITOR_BEAT_TASKS
+
+    Whether to monitor Celery Beat tasks with Sentry, defaults to ``True``.
+
 .. envvar:: SENTRY_TRACES_SAMPLE_RATE
 
-   Configure sampling rate for performance monitoring. Set to 1 to trace all events, 0 (the default) disables tracing.
+   Configures :setting:`SENTRY_TRACES_SAMPLE_RATE`.
 
    **Example:**
 
@@ -1688,13 +1872,9 @@ To enable support for Sentry, set following:
        environment:
          SENTRY_TRACES_SAMPLE_RATE: 0.5
 
-   .. seealso::
-
-      `Sentry Performance Monitoring <https://docs.sentry.io/product/performance/>`_,
-
 .. envvar:: SENTRY_PROFILES_SAMPLE_RATE
 
-   Configure sampling rate for profiling monitoring. Set to 1 to trace all events, 0 (the default) disables tracing.
+   Configures :setting:`SENTRY_PROFILES_SAMPLE_RATE`.
 
    **Example:**
 
@@ -1702,10 +1882,6 @@ To enable support for Sentry, set following:
 
        environment:
          SENTRY_PROFILES_SAMPLE_RATE: 0.5
-
-   .. seealso::
-
-      `Sentry Profiling <https://docs.sentry.io/product/profiling/>`_
 
 .. envvar:: SENTRY_SEND_PII
 
@@ -1739,13 +1915,13 @@ Localization CDN
 
     .. seealso::
 
-        :ref:`weblate-cdn`,
-        :setting:`LOCALIZE_CDN_URL`,
-        :setting:`LOCALIZE_CDN_PATH`
+       * :ref:`weblate-cdn`
+       * :setting:`LOCALIZE_CDN_URL`
+       * :setting:`LOCALIZE_CDN_PATH`
 
 
-Changing enabled apps, checks, add-ons or autofixes
-+++++++++++++++++++++++++++++++++++++++++++++++++++
+Changing enabled apps, checks, add-ons, machine translation or autofixes
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 The built-in configuration of enabled checks, add-ons or autofixes can be
 adjusted by the following variables:
@@ -1758,6 +1934,13 @@ adjusted by the following variables:
 .. envvar:: WEBLATE_REMOVE_AUTOFIX
 .. envvar:: WEBLATE_ADD_ADDONS
 .. envvar:: WEBLATE_REMOVE_ADDONS
+.. envvar:: WEBLATE_ADD_MACHINERY
+
+   .. versionadded:: 5.6.1
+
+.. envvar:: WEBLATE_REMOVE_MACHINERY
+
+   .. versionadded:: 5.6.1
 
 **Example:**
 
@@ -1769,10 +1952,11 @@ adjusted by the following variables:
 
 .. seealso::
 
-   :setting:`CHECK_LIST`,
-   :setting:`AUTOFIX_LIST`,
-   :setting:`WEBLATE_ADDONS`,
-   :setting:`django:INSTALLED_APPS`
+   * :setting:`CHECK_LIST`
+   * :setting:`AUTOFIX_LIST`
+   * :setting:`WEBLATE_ADDONS`
+   * :setting:`django:INSTALLED_APPS`
+   * :setting:`WEBLATE_MACHINERY`
 
 Container settings
 ++++++++++++++++++
@@ -1813,21 +1997,40 @@ Container settings
 
     .. seealso::
 
-        :doc:`Celery worker options <celery:reference/celery.bin.worker>`,
-        :ref:`celery`
+       * :doc:`Celery worker options <celery:reference/celery.bin.worker>`
+       * :ref:`celery`
+
+.. envvar:: CELERY_SINGLE_PROCESS
+
+   .. versionadded:: 5.7.1
+
+    This variable can be set to ``1`` to run only one celery process. This reduces memory usage but may impact Weblate performance.
+
+    .. code-block:: yaml
+
+        environment:
+          CELERY_SINGLE_PROCESS: 1
+
+    .. seealso::
+
+        :ref:`minimal-celery`
 
 .. envvar:: WEB_WORKERS
 
-    Configure how many uWSGI workers should be executed.
+    Configure how many WSGI workers should be executed.
 
-    It defaults to :envvar:`WEBLATE_WORKERS`.
+    It defaults to half of :envvar:`WEBLATE_WORKERS`, but is always at least 2.
 
     **Example:**
 
     .. code-block:: yaml
 
         environment:
-          WEB_WORKERS: 32
+          WEB_WORKERS: 4
+
+   .. versionchanged:: 5.13
+
+      :envvar:`WEB_WORKERS` configures how many worker processes will used by :program:`granian`.
 
 .. envvar:: WEBLATE_SERVICE
 
@@ -1852,35 +2055,78 @@ Container settings
    ``web``
       Web server.
 
+   .. seealso::
+
+      :ref:`background-tasks-internals`
+
+.. envvar:: WEBLATE_ANUBIS_URL
+
+   .. versionadded:: 5.11.4
+
+   URL of `Anubis`_ server to handle subrequest authentication. This can be
+   useful to filter incoming HTTP requests using proof-of-work to stop AI
+   crawlers. You need to configure `Anubis for Subrequest Authentication`_ to
+   make it work.
+
+   .. seealso::
+
+      * :ref:`docker-anubis`
+      * `Anubis`_
+
+.. _Anubis: https://anubis.techaro.lol/
+.. _Anubis for Subrequest Authentication: https://anubis.techaro.lol/docs/admin/configuration/subrequest-auth
 
 .. _docker-volume:
 
 Docker container volumes
 ------------------------
 
-There are two volumes (data and cache) exported by the Weblate container. The
-other service containers (PostgreSQL or Redis) have their data volumes as well,
-but those are not covered by this document.
+There are two volumes (:file:`data` and :file:`cache`) exported by the Weblate
+container.
 
-The data volume is used to store Weblate persistent data such as cloned
-repositories or to customize Weblate installation.
+.. note::
+
+   The other service containers (such as PostgreSQL or Valkey) have their data
+   volumes as well and are required to maintain Weblate persistence.
+
+   The PostgreSQL container stores the database in the
+   :file:`/var/lib/postgresql` volume and Valkey in the :file:`/data` volume.
+   Valkey container does not save the data by default and needs additional
+   configuration to enable persistence.
+
+   Base your configuration on Weblate-provided examples or consult their
+   documentation for more information.
+
+The :file:`data` volume is mounted as :file:`/app/data` and is used to store
+Weblate persistent data such as cloned repositories or to customize Weblate
+installation. :setting:`DATA_DIR` describes in more detail what is stored here.
+
+The :file:`data` volume is also place to store Weblate customization such as
+:ref:`docker-settings-override`, :ref:`docker-static-override` or
+:ref:`docker-python-override`.
 
 The placement of the Docker volume on host system depends on your Docker
 configuration, but usually it is stored in
 :file:`/var/lib/docker/volumes/weblate-docker_weblate-data/_data/` (the path
 consist of name of your docker-compose directory, container, and volume names).
-In the container it is mounted as :file:`/app/data`.
 
-The cache volume is mounted as :file:`/app/cache` and is used to store static
+The :file:`cache` volume is mounted as :file:`/app/cache` and is used to store static
 files and :setting:`CACHE_DIR`. Its content is recreated on container startup
 and the volume can be mounted using ephemeral filesystem such as `tmpfs`.
 
 When creating the volumes manually, the directories should be owned by UID 1000
 as that is user used inside the container.
 
+Weblate container can also be executed with a read-only root file system. In
+this case, two additional ``tmpfs`` volumes should be mounted: :file:`/tmp` and
+:file:`/run`.
+
+
 .. seealso::
 
-   `Docker volumes documentation <https://docs.docker.com/storage/volumes/>`_
+   * `Docker volumes documentation <https://docs.docker.com/engine/storage/volumes/>`_
+   * :setting:`DATA_DIR`
+   * :setting:`CACHE_DIR`
 
 Read-only root filesystem
 +++++++++++++++++++++++++
@@ -1930,72 +2176,74 @@ Overriding settings by extending the Docker image
 
 To override settings at the Docker image level instead of from the data volume:
 
-#.  :ref:`Create a custom Python package <custom-module>`.
+#. :ref:`Create a custom Python package <custom-module>`.
 
-#.  Add a module to your package that imports all settings from
-    ``weblate.settings_docker``.
+#. Add a module to your package that imports all settings from
+   ``weblate.settings_docker``.
 
-    For example, within the example package structure defined at
-    :ref:`custom-module`, you could create a file at
-    ``weblate_customization/weblate_customization/settings.py`` with the
-    following initial code:
+   For example, within the example package structure defined at
+   :ref:`custom-module`, you could create a file at
+   ``weblate_customization/weblate_customization/settings.py`` with the
+   following initial code:
 
-    .. code-block:: python
+   .. code-block:: python
 
-        from weblate.settings_docker import *
+       from weblate.settings_docker import *
 
-#.  Create a custom ``Dockerfile`` that inherits from the official Weblate
-    Docker image, and then installs your package and points the
-    ``DJANGO_SETTINGS_MODULE`` environment variable to your settings module:
+#. Create a custom ``Dockerfile`` that inherits from the official Weblate
+   Docker image, and then installs your package and points the
+   ``DJANGO_SETTINGS_MODULE`` environment variable to your settings module:
 
-    .. code-block:: docker
+   .. code-block:: docker
 
-        FROM weblate/weblate
+       FROM weblate/weblate
 
-        USER root
+       USER root
 
-        COPY weblate_customization /usr/src/weblate_customization
-        RUN pip install --no-cache-dir /usr/src/weblate_customization
-        ENV DJANGO_SETTINGS_MODULE=weblate_customization.settings
+       COPY weblate_customization /usr/src/weblate_customization
+       RUN source /app/venv/bin/activate && uv pip install --no-cache-dir /usr/src/weblate_customization
+       ENV DJANGO_SETTINGS_MODULE=weblate_customization.settings
 
-        USER 1000
+       USER 1000
 
-#.  Instead of using the official Weblate Docker image, build a custom image
-    from this ``Dockerfile`` file.
+#. Instead of using the official Weblate Docker image, build a custom image
+   from this ``Dockerfile`` file.
 
-    There is `no clean way <https://github.com/docker/compose/issues/7231>`__
-    to do this with ``docker-compose.override.yml``. You *could* add
-    ``build: .`` to the ``weblate`` node in that file, but then your custom
-    image will be tagged as ``weblate/weblate`` in your system, which could be
-    problematic.
+   There is `no clean way <https://github.com/docker/compose/issues/7231>`__
+   to do this with ``docker-compose.override.yml``. You *could* add
+   ``build: .`` to the ``weblate`` node in that file, but then your custom
+   image will be tagged as ``weblate/weblate`` in your system, which could be
+   problematic.
 
-    So, instead of using the ``docker-compose.yml`` straight from the `official
-    repository <https://github.com/WeblateOrg/docker-compose>`__, unmodified,
-    and extending it through ``docker-compose.override.yml``, you may want to
-    make a copy of the official ``docker-compose.yml`` file, and edit your copy
-    to replace ``image: weblate/weblate`` with ``build: .``.
+   So, instead of using the ``docker-compose.yml`` straight from the `official
+   repository <https://github.com/WeblateOrg/docker-compose>`__, unmodified,
+   and extending it through ``docker-compose.override.yml``, you may want to
+   make a copy of the official ``docker-compose.yml`` file, and edit your copy
+   to replace ``image: weblate/weblate`` with ``build: .``.
 
-    See the `Compose file build reference`_ for details on building images from
-    source when using ``docker-compose``.
+   See the `Compose file build reference`_ for details on building images from
+   source when using ``docker-compose``.
 
-    .. _Compose file build reference: https://docs.docker.com/compose/compose-file/build/
+   .. _Compose file build reference: https://docs.docker.com/reference/compose-file/build/
 
-#.  Extend your custom settings module to define or redefine settings.
+#. Extend your custom settings module to define or redefine settings.
 
-    You can define settings before or after the import statement above to
-    determine which settings take precedence. Settings defined before the
-    import statement can be overridden by environment variables and setting
-    overrides defined in the data volume. Setting defined after the import
-    statement cannot be overridden.
+   You can define settings before or after the import statement above to
+   determine which settings take precedence. Settings defined before the
+   import statement can be overridden by environment variables and setting
+   overrides defined in the data volume. Setting defined after the import
+   statement cannot be overridden.
 
-    You can also go further. For example, you can reproduce some of the things
-    that ``weblate.docker_settings`` `does
-    <https://github.com/WeblateOrg/weblate/blob/main/weblate/settings_docker.py>`__,
-    such as exposing settings as environment variables, or allow overriding
-    settings from Python files in the data volume.
+   You can also go further. For example, you can reproduce some of the things
+   that ``weblate.docker_settings`` `does
+   <https://github.com/WeblateOrg/weblate/blob/main/weblate/settings_docker.py>`__,
+   such as exposing settings as environment variables, or allow overriding
+   settings from Python files in the data volume.
+
+.. _docker-static-override:
 
 Replacing logo and other static files
--------------------------------------
++++++++++++++++++++++++++++++++++++++
 
 The static files coming with Weblate can be overridden by placing into
 :file:`/app/data/python/customize/static` (see :ref:`docker-volume`). For
@@ -2022,6 +2270,202 @@ it as separate volume to the Docker container, for example:
       - ./weblate_customization/weblate_customization:/app/data/python/weblate_customization
     environment:
       WEBLATE_ADD_APPS: weblate_customization
+
+.. _docker-python-override:
+
+Customizing code
+++++++++++++++++
+
+.. note::
+
+   The internal Weblate API may vary significantly between releases and is not
+   meant to be stable. Please review your custom code interacting with Weblate
+   internals on each upgrade.
+
+You can place additional Python code into :file:`/app/data/python/customize`
+(see :ref:`docker-volume`). It is already installed as a Django application
+inside Weblate (this is used for customizing templates and static files as
+described above).
+
+This can be used to place any code (for example :ref:`own-checks`) or to add
+custom maintenance tasks to the Celery task scheduler.
+
+.. literalinclude:: ../../../weblate/examples/custom_tasks.py
+   :language: python
+   :caption: An example of custom scheduled tasks in :file:`/app/data/python/customize/tasks.py`.
+
+Integrating third-party containers
+----------------------------------
+
+The Weblate Docker setup can be extended with additional containers to provide
+complementary services such as machine translation, spell checking, or other
+tools that enhance the translation workflow. These services can be integrated
+into your Docker Compose configuration and work alongside Weblate.
+
+When adding third-party containers, consider the following:
+
+* **Network connectivity**: Ensure containers can communicate with each other by placing them on the same Docker network
+* **Data persistence**: Use volumes for services that need to persist data
+* **Security**: Configure appropriate access controls and avoid exposing unnecessary ports
+
+.. _docker-libretranslate:
+
+LibreTranslate Docker container integration
++++++++++++++++++++++++++++++++++++++++++++
+
+`LibreTranslate <https://libretranslate.com/>`_ is a free and open-source machine
+translation service that can be self-hosted. Integrating it with Weblate provides
+offline machine translation capabilities without relying on external services.
+
+You can incorporate the LibreTranslate service into your Weblate deployment by including it in a :file:`docker-compose.override.yml` file. Since it runs within the Docker network, it's only accessible to Weblate and not exposed to the public internet.
+
+Basic setup using :file:`docker-compose.override.yml`:
+
+.. code-block:: yaml
+
+   services:
+     libretranslate:
+       image: libretranslate/libretranslate:latest
+       command: --disable-web-ui
+       restart: unless-stopped
+       environment:
+         LT_UPDATE_MODELS: true
+       volumes:
+         - libretranslate_models:/home/libretranslate/.local:rw
+       healthcheck:
+         test: ['CMD-SHELL', './venv/bin/python scripts/healthcheck.py']
+         interval: 10s
+         timeout: 4s
+         retries: 4
+         start_period: 5s
+
+   volumes:
+     libretranslate_models:
+
+For GPU-accelerated translation (if you have NVIDIA GPU available):
+
+.. code-block:: yaml
+
+   services:
+     libretranslate:
+       image: libretranslate/libretranslate:latest-cuda
+       command: --disable-web-ui
+       restart: unless-stopped
+       environment:
+         LT_UPDATE_MODELS: true
+         PUID: root
+       volumes:
+         - libretranslate_models:/home/libretranslate/.local:rw
+       healthcheck:
+         test: ['CMD-SHELL', './venv/bin/python scripts/healthcheck.py']
+         interval: 10s
+         timeout: 4s
+         retries: 4
+         start_period: 5s
+       deploy:
+         resources:
+           reservations:
+             devices:
+               - driver: nvidia
+                 count: 1
+                 capabilities: [gpu]
+
+   volumes:
+     libretranslate_models:
+
+After starting the services with ``docker compose down && docker compose up -d``,
+configure LibreTranslate in Weblate:
+
+1. Access the Weblate admin interface
+2. Navigate to :guilabel:`Machine translation` → :guilabel:`Automatic suggestions`
+3. Add a new LibreTranslate service with:
+
+   :Service: LibreTranslate
+   :API URL: ``http://libretranslate:5000``
+   :API key: Leave empty
+
+LibreTranslate is now configured and available for machine translation in Weblate.
+
+.. note::
+
+   * The LibreTranslate service runs without the web UI (``--disable-web-ui``) and is only accessible via the API within the Docker network.
+   * Models are automatically updated when the container starts. (``LT_UPDATE_MODELS: true``)
+   * Data is persisted using Docker volumes for optimal performance and data safety.
+   * Health checks ensure that the Docker engine properly observes the state of the service.
+   * For GPU acceleration, use the CUDA image variant and ensure your system has NVIDIA Docker support. This container runs as a privileged user to be able to use the GPU.
+   * No external ports are exposed, making the setup secure by default.
+
+.. seealso::
+
+   * :ref:`mt-libretranslate`
+   * `LibreTranslate Docker documentation`_
+   * :ref:`machine-translation-setup`
+
+.. _LibreTranslate Docker documentation: https://docs.libretranslate.com/guides/installation/#with-docker
+
+.. _docker-anubis:
+
+Anubis Docker container integration
++++++++++++++++++++++++++++++++++++
+
+`Anubis`_ is a web AI firewall utility to block AI scrapers and other disruptive
+traffic on the server. It is typically needed for publicly open Weblate
+installations to avoid excessive load caused by scraping.
+
+Anubis can be deployed using Docker Compose:
+
+.. code-block:: yaml
+
+   anubis:
+      image: ghcr.io/techarohq/anubis:latest
+      environment:
+         BIND: ":8923"
+         DIFFICULTY: "4"
+         METRICS_BIND: ":9090"
+         SERVE_ROBOTS_TXT: "false"
+         OG_PASSTHROUGH: "false"
+         # The single space in TARGET enables subrequest authentication
+         TARGET: " "
+         # The redirect domain has to match WEBLATE_SITE_DOMAIN
+         REDIRECT_DOMAINS: weblate.example.com
+         # Generate a random private key using: openssl rand -hex 32
+         ED25519_PRIVATE_KEY_HEX: "..."
+         # Customize your Anubis policy
+         POLICY_FNAME: /data/botPolicies.yaml
+      healthcheck:
+         test: ["CMD", "anubis", "--healthcheck"]
+         interval: 5s
+         timeout: 30s
+         retries: 5
+         start_period: 500ms
+      volumes:
+         - anubis-data:/data
+
+   volumes:
+      anubis-data:
+
+.. note::
+
+   The ``anubis-data`` volume in the above configuration is expected to contain
+   :file:`botPolicies.yaml` with a bot policy configured to your needs.
+
+   At minimum, you need to adjust status codes as described in
+   https://anubis.techaro.lol/docs/admin/configuration/subrequest-auth.
+
+   It is also recommended to configure persistent storage backend as described in
+   https://anubis.techaro.lol/docs/admin/policies/#storage-backends.
+
+
+You can then turn on the Anubis usage in Weblate using:
+
+.. code-block:: yaml
+
+   environment:
+      WEBLATE_ANUBIS_URL: http://anubis:8923
+
+.. seealso::
+
+   :envvar:`WEBLATE_ANUBIS_URL`
 
 Configuring PostgreSQL server
 -----------------------------

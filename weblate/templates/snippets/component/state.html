@@ -1,8 +1,7 @@
-{% load translations %}
-{% load i18n %}
+{% load i18n translations %}
 
 {% if object.locked %}
-{% include "snippets/component/lock.html" %}
+  {% include "snippets/component/lock.html" %}
 {% endif %}
 
 {% show_contributor_agreement object %}

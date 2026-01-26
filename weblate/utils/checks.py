@@ -4,11 +4,26 @@
 
 from __future__ import annotations
 
-from django.core.checks import CheckMessage, Critical
+from typing import TYPE_CHECKING
+
+from django.core.checks import (
+    Critical,
+)
 
 from weblate.utils.docs import get_doc_url
 
-DOC_LINKS = {
+if TYPE_CHECKING:
+    from django.core.checks import (
+        CheckMessage,
+        Debug,
+        Error,
+        Info,
+    )
+    from django.core.checks import (
+        Warning as DjangoWarning,
+    )
+
+DOC_LINKS: dict[str, str | tuple[str] | tuple[str, str]] = {
     "security.W001": ("admin/upgdade", "up-3-1"),
     "security.W002": ("admin/upgdade", "up-3-1"),
     "security.W003": ("admin/upgdade", "up-3-1"),
@@ -48,12 +63,13 @@ DOC_LINKS = {
     "weblate.W025": ("admin/install", "optional-deps"),
     "weblate.E026": ("admin/install", "celery"),
     "weblate.E027": ("admin/install", "file-permissions"),
+    "weblate.E028": ("admin/config",),
     "weblate.I028": ("admin/backup",),
     "weblate.C029": ("admin/backup",),
     "weblate.C030": ("admin/install", "celery"),
     "weblate.I031": ("admin/upgrade",),
     "weblate.C031": ("admin/upgrade",),
-    "weblate.C032": ("admin/install",),
+    "weblate.C032": ("admin/install", "hardware"),
     "weblate.W033": ("vcs",),
     "weblate.E034": ("admin/install", "celery"),
     "weblate.C035": ("vcs",),
@@ -62,6 +78,9 @@ DOC_LINKS = {
     "weblate.C038": ("admin/install", "production-database"),
     "weblate.W039": ("admin/machine",),
     "weblate.C040": ("vcs",),
+    "weblate.C041": "https://weblate.org/user/",
+    "weblate.C042": ("admin/config", "std-setting-REGISTRATION_ALLOW_BACKENDS"),
+    "weblate.E043": ("admin/install", "hardware"),
 }
 
 
@@ -69,13 +88,20 @@ def check_doc_link(docid: str, strict: bool = False) -> str | None:
     while docid.count(".") > 1:
         docid = docid.rsplit(".", 1)[0]
     try:
-        return get_doc_url(*DOC_LINKS[docid])
+        doc_link = DOC_LINKS[docid]
     except KeyError:
         if strict:
             raise
         return None
+    if isinstance(doc_link, str):
+        return doc_link
+    return get_doc_url(*doc_link)
 
 
-def weblate_check(check_id, message, cls=Critical) -> CheckMessage:
+def weblate_check(
+    check_id: str,
+    message: str,
+    cls: type[Critical | Debug | Error | Info | DjangoWarning] = Critical,
+) -> CheckMessage:
     """Return Django check instance."""
     return cls(message, hint=check_doc_link(check_id), id=check_id)

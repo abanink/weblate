@@ -15,15 +15,23 @@ Installation
 
 1. Add ``weblate.gitexport`` to installed apps in :file:`settings.py`:
 
-.. code-block:: python
+   .. code-block:: python
 
-    INSTALLED_APPS += ("weblate.gitexport",)
+       INSTALLED_APPS += ("weblate.gitexport",)
 
 2. Export existing repositories by migrating your database after installation:
 
-.. code-block:: sh
+   .. code-block:: sh
 
-    weblate migrate
+       weblate migrate
+
+.. hint::
+
+   Git exporter is turned on in our official Docker image. To turn it of, use:
+
+   .. code-block:: sh
+
+      WEBLATE_REMOVE_APPS=weblate.gitexport
 
 Usage
 +++++
@@ -79,6 +87,17 @@ Installation
 
     weblate migrate
 
+Billing plan creation and assignment
+++++++++++++++++++++++++++++++++++++
+
+You first need to create a billing plan to activate billing. Navigate to the `Administration` section (represented by the wrench icon) and open the `Tools` screen. From there, proceed to the `Django admin interface`.
+
+In the Django admin interface, locate the `BILLING` section and add a billing plan. For instance, you can add a `Free` plan with no cost.
+
+If you wish to assign a billing plan to an existing project, this can also be done within the `Django admin interface` using the `Customer billings` option.
+
+Lastly, the `Django admin interface` provides an `Invoice` option for logging your customer payments.
+
 Usage
 +++++
 
@@ -102,8 +121,8 @@ for the project in case he has access to more of them.
 
 .. _legal:
 
-Legal
------
+Legal module
+------------
 
 This is used on `Hosted Weblate <https://weblate.org/hosting/>`_ to provide required
 legal documents. It comes provided with blank documents, and you are expected to fill out the
@@ -177,38 +196,9 @@ Weblate currently supports:
 
 .. seealso::
 
-   :ref:`production-cache-avatar`,
-   :setting:`AVATAR_URL_PREFIX`,
-   :setting:`ENABLE_AVATARS`
-
-.. _spam-protection:
-
-Spam protection
----------------
-
-You can protect against spamming by users by using the `Akismet
-<https://akismet.com/>`_ service.
-
-1. Install the `akismet` Python module (this is already included in the official Docker image).
-2. Obtain the Akismet API key.
-3. Store it as :setting:`AKISMET_API_KEY` or :envvar:`WEBLATE_AKISMET_API_KEY` in Docker.
-
-Following content is sent to Akismet for checking:
-
-* Suggestions from unauthenticated users
-* Project and component descriptions and links
-
-.. note::
-
-   This (among other things) relies on IP address of the client, please see
-   :ref:`reverse-proxy` for properly configuring that.
-
-.. seealso::
-
-    :ref:`reverse-proxy`,
-    :setting:`AKISMET_API_KEY`,
-    :envvar:`WEBLATE_AKISMET_API_KEY`
-
+   * :ref:`production-cache-avatar`
+   * :setting:`AVATAR_URL_PREFIX`
+   * :setting:`ENABLE_AVATARS`
 
 .. _gpg-sign:
 
@@ -217,18 +207,18 @@ Signing Git commits with GnuPG
 
 All commits can be signed by the GnuPG key of the Weblate instance.
 
-1. Turn on :setting:`WEBLATE_GPG_IDENTITY`. (Weblate will generate a GnuPG
-key when needed and will use it to sign all translation commits.)
+* Turn on :setting:`WEBLATE_GPG_IDENTITY`. (Weblate will generate a GnuPG
+  key when needed and will use it to sign all translation commits.)
 
-This feature needs GnuPG 2.1 or newer installed.
+  This feature needs GnuPG 2.1 or newer installed.
 
-You can find the key in the :setting:`DATA_DIR` and the public key is shown on
-the "About" page:
+  You can find the key in the :setting:`DATA_DIR` and the public key is shown
+  on the "About" page:
 
-.. image:: /screenshots/about-gpg.webp
+  .. image:: /screenshots/about-gpg.webp
 
-2. Alternatively you can also import existing keys into Weblate, just set
-``HOME=$DATA_DIR/home`` when invoking gpg.
+* Alternatively you can also import existing keys into Weblate, just set
+  ``HOME=$DATA_DIR/home`` when invoking gpg.
 
 .. hint::
 
@@ -254,7 +244,7 @@ Rate limiting
 
 .. versionchanged:: 4.6
 
-      The rate limiting no longer applies to superusers.
+      The rate limiting no longer applies to signed in superusers.
 
 Several operations in Weblate are rate limited. At most
 :setting:`RATELIMIT_ATTEMPTS` attempts are allowed within :setting:`RATELIMIT_WINDOW` seconds.
@@ -265,23 +255,27 @@ The following operations are subject to rate limiting:
 +-----------------------------------+--------------------+------------------+------------------+----------------+
 | Name                              | Scope              | Allowed attempts | Ratelimit window | Lockout period |
 +===================================+====================+==================+==================+================+
-| Registration                      | ``REGISTRATION``   |                5 |              300 |            600 |
+| Registration                      | ``REGISTRATION``   | 5                | 300              | 600            |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
-| Sending message to admins         | ``MESSAGE``        |                2 |              300 |            600 |
+| Sending message to admins         | ``MESSAGE``        | 2                | 300              | 600            |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
-| Password authentication on sign in| ``LOGIN``          |                5 |              300 |            600 |
+| Password authentication on sign-in| ``LOGIN``          | 5                | 300              | 600            |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
-| Sitewide search                   | ``SEARCH``         |                6 |               60 |             60 |
+| Second-factor authentication      | ``SECOND_FACTOR``  | 5                | 300              | 600            |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
-| Translating                       | ``TRANSLATE``      |               30 |               60 |            600 |
+| Sitewide search                   | ``SEARCH``         | 6                | 60               | 60             |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
-| Adding to glossary                | ``GLOSSARY``       |               30 |               60 |            600 |
+| Translating                       | ``TRANSLATE``      | 30               | 60               | 600            |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
-| Starting translation into a new   | ``LANGUAGE``       |                2 |              300 |            600 |
+| Adding to glossary                | ``GLOSSARY``       | 30               | 60               | 600            |
++-----------------------------------+--------------------+------------------+------------------+----------------+
+| Starting translation into a new   | ``LANGUAGE``       | 2                | 300              | 600            |
 | language                          |                    |                  |                  |                |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
-| Creating new project              | ``PROJECT``        |                5 |              600 |            600 |
+| Creating new project              | ``PROJECT``        | 5                | 600              | 600            |
 +-----------------------------------+--------------------+------------------+------------------+----------------+
+
+The rate limiting is based on sessions when user is signed in and on IP address if not.
 
 If a user fails to sign in :setting:`AUTH_LOCK_ATTEMPTS` times, password authentication will be turned off on the account until having gone through the process of having its password reset.
 
@@ -291,16 +285,6 @@ The API has separate rate limiting settings, see :ref:`api-rate`.
 
 .. seealso::
 
-   :ref:`user-rate`,
-   :ref:`reverse-proxy`,
-   :ref:`api-rate`
-
-Fedora Messaging integration
-----------------------------
-
-Fedora Messaging is AMQP-based publisher for all changes happening in Weblate.
-You can hook additional services on changes happening in Weblate using this.
-
-The Fedora Messaging integration is available as a separate Python module
-``weblate-fedora-messaging``. Please see
-<https://github.com/WeblateOrg/fedora_messaging/> for setup instructions.
+   * :ref:`user-rate`
+   * :ref:`reverse-proxy`
+   * :ref:`api-rate`

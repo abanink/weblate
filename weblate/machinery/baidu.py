@@ -2,15 +2,21 @@
 # Copyright © Sun Zhigang <hzsunzhigang@corp.netease.com>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
+from typing import TYPE_CHECKING, ClassVar
 
 from .base import (
-    DownloadTranslations,
     MachineryRateLimitError,
     MachineTranslation,
     MachineTranslationError,
 )
 from .forms import KeySecretMachineryForm
+
+if TYPE_CHECKING:
+    from .base import (
+        DownloadTranslations,
+    )
 
 BAIDU_API = "http://api.fanyi.baidu.com/api/trans/vip/translate"
 
@@ -22,7 +28,7 @@ class BaiduTranslation(MachineTranslation):
     max_score = 90
 
     # Map codes used by Baidu to codes used by Weblate
-    language_map = {
+    language_map: ClassVar[dict[str, str]] = {
         "zh_Hans": "zh",
         "ja": "jp",
         "ko": "kor",
@@ -86,15 +92,14 @@ class BaiduTranslation(MachineTranslation):
             else:
                 if error_code == 54003:
                     raise MachineryRateLimitError(payload["error_msg"])
-            raise MachineTranslationError(
-                "Error {error_code}: {error_msg}".format(**payload)
-            )
+            msg = f"Error {payload['error_code']}: {payload['error_msg']}"
+            raise MachineTranslationError(msg)
         super().check_failure(response)
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
         unit,
         user,
@@ -106,8 +111,8 @@ class BaiduTranslation(MachineTranslation):
         )
         args = {
             "q": text,
-            "from": source,
-            "to": language,
+            "from": source_language,
+            "to": target_language,
             "appid": self.settings["key"],
             "salt": salt,
             "sign": sign,

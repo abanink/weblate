@@ -1,6 +1,7 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
 
 
 class WeblateError(Exception):
@@ -21,10 +22,13 @@ class PluralFormsMismatchError(WeblateError):
 class InvalidTemplateError(WeblateError):
     """Template file can not be parsed."""
 
-    def __init__(self, nested, message=None) -> None:
-        super().__init__(message or f"Template file can not be parsed: {nested}")
-        self.nested = nested
+    def __init__(self, message: str | None = None, info: str = "") -> None:
+        super().__init__(message or f"Template file can not be parsed: {info}")
 
 
 class FailedCommitError(WeblateError):
     """Could not commit file."""
+
+
+class SuggestionSimilarToTranslationError(WeblateError):
+    """Target of the Suggestion is similar to source."""

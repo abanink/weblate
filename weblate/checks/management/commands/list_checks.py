@@ -2,12 +2,22 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from weblate.checks.format import BaseFormatCheck
 from weblate.checks.models import CHECKS
+from weblate.formats.models import FILE_FORMATS
 from weblate.utils.management.base import BaseCommand
 
+if TYPE_CHECKING:
+    from django_stubs_ext import StrOrPromise
 
-def sorter(check):
+    from weblate.checks.base import BaseCheck
+
+
+def sorter(check: BaseCheck):
     if isinstance(check, BaseFormatCheck):
         pos = 1
     elif check.name < "Formatted strings":
@@ -17,29 +27,31 @@ def sorter(check):
     return (check.source, pos, check.name.lower())
 
 
-def escape(text):
+def escape(text: StrOrPromise):
     return text.replace("\\", "\\\\")
 
 
 class Command(BaseCommand):
     help = "List installed checks"
 
-    def flush_lines(self, lines) -> None:
-        self.stdout.writelines(lines)
+    def flush_lines(self, lines: list[str]) -> None:
+        self.stdout.write("\n".join(lines))
         lines.clear()
 
     def handle(self, *args, **options) -> None:
         """List installed checks."""
-        ignores = []
-        enables = []
-        lines = []
+        self.stdout.write("""..
+   Partly generated using ./manage.py list_checks
+""")
+        ignores: list[str] = []
+        enables: list[str] = []
+        lines: list[str] = []
         for check in sorted(CHECKS.values(), key=sorter):
             check_class = check.__class__
             is_format = isinstance(check, BaseFormatCheck)
-            # Output immediately
-            self.stdout.write(f".. _{check.doc_id}:\n")
             if not lines:
                 lines.append("\n")
+            lines.append(f".. _{check.doc_id}:\n")
             name = escape(check.name)
             lines.append(name)
             if is_format:
@@ -47,12 +59,14 @@ class Command(BaseCommand):
             else:
                 lines.append("~" * len(name))
             lines.extend(("\n", f":Summary: {escape(check.description)}"))
-            if check.target:
+            if check.glossary:
+                lines.append(":Scope: glossary strings")
+            elif check.target:
                 if check.ignore_untranslated:
                     lines.append(":Scope: translated strings")
                 else:
                     lines.append(":Scope: all strings")
-            if check.source:
+            elif check.source:
                 lines.append(":Scope: source strings")
             lines.extend(
                 (
@@ -61,7 +75,27 @@ class Command(BaseCommand):
                 )
             )
             if check.default_disabled:
-                lines.append(f":Flag to enable: ``{check.enable_string}``")
+                enable_flags: list[str] = {
+                    check.enable_string,
+                    *check.extra_enable_strings,
+                }
+                flags = ", ".join(f"``{flag}``" for flag in sorted(enable_flags))
+                lines.append(":Trigger: This check needs to be enabled using a flag.")
+
+                file_formats = ", ".join(
+                    f":ref:`{file_format.format_id}`"
+                    for file_format in FILE_FORMATS.values()
+                    if set(file_format.check_flags) & enable_flags
+                )
+                if file_formats:
+                    lines.append(
+                        f":File formats automatically enabling this check: {file_formats}"
+                    )
+                lines.append(f":Flag to enable: {flags}")
+            else:
+                lines.append(
+                    ":Trigger: This check is always enabled but can be ignored using a flag."
+                )
             lines.extend((f":Flag to ignore: ``{check.ignore_string}``", "\n"))
 
             self.flush_lines(lines)
@@ -81,5 +115,5 @@ class Command(BaseCommand):
                 )
 
         self.stdout.write("\n")
-        self.stdout.writelines(enables)
-        self.stdout.writelines(ignores)
+        self.stdout.write("\n".join(enables))
+        self.stdout.write("\n".join(ignores))

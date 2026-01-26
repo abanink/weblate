@@ -7,8 +7,7 @@ Installing on macOS
 
 .. code-block:: sh
 
-   brew install python pango cairo gobject-introspection glib libyaml pkg-config zstd xxhash libxmlsec1
-   pip install virtualenv
+   brew install python pango cairo gobject-introspection glib libyaml pkgconf zstd lz4 xxhash libxmlsec1 librsvg uv
 
 .. include:: steps/install-system-server.rst
 
@@ -20,8 +19,8 @@ Installing on macOS
     # Web server option 2: Apache with ``mod_wsgi``
     brew install httpd
 
-    # Caching backend: Redis
-    brew install redis
+    # Caching backend: Valkey
+    brew install valkey
 
     # Database server: PostgreSQL
     brew install postgresql

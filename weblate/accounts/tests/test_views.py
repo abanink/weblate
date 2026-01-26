@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from time import sleep
 from unittest import mock
 
 from django.conf import settings
@@ -17,7 +18,7 @@ from jsonschema import validate
 from weblate_schemas import load_schema
 
 from weblate.accounts.models import Profile, Subscription
-from weblate.accounts.notifications import FREQ_DAILY, FREQ_NONE, SCOPE_WATCHED
+from weblate.accounts.notifications import NotificationFrequency, NotificationScope
 from weblate.auth.models import User
 from weblate.lang.models import Language
 from weblate.trans.tests.test_models import RepoTestCase
@@ -100,14 +101,26 @@ class ViewTest(RepoTestCase):
         response = self.client.post(reverse("contact"), CONTACT_DATA)
         self.assertContains(response, "Too many messages sent, please try again later.")
 
-    @override_settings(RATELIMIT_MESSAGE_ATTEMPTS=1, RATELIMIT_WINDOW=0)
+    @override_settings(RATELIMIT_MESSAGE_ATTEMPTS=1, RATELIMIT_WINDOW=1)
     def test_contact_rate_window(self) -> None:
         """Test for contact form rate limiting."""
         message = "Too many messages sent, please try again later."
         response = self.client.post(reverse("contact"), CONTACT_DATA)
         self.assertNotContains(response, message)
+        sleep(1)
         response = self.client.post(reverse("contact"), CONTACT_DATA)
         self.assertNotContains(response, message)
+
+    @override_settings(CONTACT_FORM="disabled")
+    def test_contact_disabled(self) -> None:
+        """Test for disabled contact form."""
+        # Test GET request
+        response = self.client.get(reverse("contact"))
+        self.assertEqual(response.status_code, 404)
+
+        # Test POST request
+        response = self.client.post(reverse("contact"), CONTACT_DATA)
+        self.assertEqual(response.status_code, 404)
 
     @override_settings(OFFER_HOSTING=False)
     def test_hosting_disabled(self) -> None:
@@ -160,7 +173,7 @@ class ViewTest(RepoTestCase):
 
         # Repeated attempt should fail
         response = self.client.get(reverse("trial"))
-        self.assertRedirects(response, reverse("contact") + "?t=trial")
+        self.assertRedirects(response, f"{reverse('contact')}?t=trial")
 
     def test_contact_subject(self) -> None:
         # With set subject
@@ -224,7 +237,7 @@ class ViewTest(RepoTestCase):
         response = self.client.get(
             reverse("user_contributions", kwargs={"user": user.username})
         )
-        self.assertContains(response, "Translations with contribution")
+        self.assertContains(response, "Translates")
 
     def test_login(self) -> None:
         user = self.get_user()
@@ -245,7 +258,7 @@ class ViewTest(RepoTestCase):
 
         # Logout
         response = self.client.post(reverse("logout"))
-        self.assertRedirects(response, reverse("home"))
+        self.assertContains(response, "Thank you for using Weblate")
 
     @social_core_override_settings(
         AUTHENTICATION_BACKENDS=(
@@ -330,7 +343,7 @@ class ViewTest(RepoTestCase):
             },
         )
 
-        self.assertRedirects(response, reverse("profile") + "#account")
+        self.assertRedirects(response, f"{reverse('profile')}#account")
         self.assertTrue(
             User.objects.get(username="testuser").check_password("1pa$$word!")
         )
@@ -347,12 +360,12 @@ class ViewTest(RepoTestCase):
 
         # API key reset
         response = self.client.post(reverse("reset-api-key"))
-        self.assertRedirects(response, reverse("profile") + "#api")
+        self.assertRedirects(response, f"{reverse('profile')}#api")
 
         # API key reset without token
         user.auth_token.delete()
         response = self.client.post(reverse("reset-api-key"))
-        self.assertRedirects(response, reverse("profile") + "#api")
+        self.assertRedirects(response, f"{reverse('profile')}#api")
 
 
 class ProfileTest(FixtureTestCase):
@@ -509,13 +522,13 @@ class ProfileTest(FixtureTestCase):
         # Mute notifications for component
         self.client.post(reverse("mute", kwargs=self.kw_component))
         self.assertEqual(
-            self.user.subscription_set.filter(component=self.component).count(), 18
+            self.user.subscription_set.filter(component=self.component).count(), 20
         )
 
         # Mute notifications for project
         self.client.post(reverse("mute", kwargs={"path": self.project.get_url_path()}))
         self.assertEqual(
-            self.user.subscription_set.filter(project=self.project).count(), 18
+            self.user.subscription_set.filter(project=self.project).count(), 20
         )
 
         # Unwatch project
@@ -540,7 +553,7 @@ class ProfileTest(FixtureTestCase):
         self.assertEqual(self.user.profile.watched.count(), 1)
         # All project notifications should be muted
         self.assertEqual(
-            self.user.subscription_set.filter(project=self.project).count(), 18
+            self.user.subscription_set.filter(project=self.project).count(), 20
         )
         # Only default notifications should be enabled
         self.assertEqual(
@@ -549,30 +562,33 @@ class ProfileTest(FixtureTestCase):
 
     def test_unsubscribe(self) -> None:
         response = self.client.get(reverse("unsubscribe"), follow=True)
-        self.assertRedirects(response, reverse("profile") + "#notifications")
+        self.assertRedirects(response, f"{reverse('profile')}#notifications")
 
         response = self.client.get(reverse("unsubscribe"), {"i": "x"}, follow=True)
-        self.assertRedirects(response, reverse("profile") + "#notifications")
+        self.assertRedirects(response, f"{reverse('profile')}#notifications")
         self.assertContains(response, "notification change link is no longer valid")
 
         response = self.client.get(
             reverse("unsubscribe"), {"i": TimestampSigner().sign("-1")}, follow=True
         )
-        self.assertRedirects(response, reverse("profile") + "#notifications")
+        self.assertRedirects(response, f"{reverse('profile')}#notifications")
         self.assertContains(response, "notification change link is no longer valid")
 
         subscription = Subscription.objects.create(
-            user=self.user, notification="x", frequency=FREQ_DAILY, scope=SCOPE_WATCHED
+            user=self.user,
+            notification="x",
+            frequency=NotificationFrequency.FREQ_DAILY,
+            scope=NotificationScope.SCOPE_WATCHED,
         )
         response = self.client.get(
             reverse("unsubscribe"),
             {"i": TimestampSigner().sign(f"{subscription.pk}")},
             follow=True,
         )
-        self.assertRedirects(response, reverse("profile") + "#notifications")
+        self.assertRedirects(response, f"{reverse('profile')}#notifications")
         self.assertContains(response, "Notification settings adjusted")
         subscription.refresh_from_db()
-        self.assertEqual(subscription.frequency, FREQ_NONE)
+        self.assertEqual(subscription.frequency, NotificationFrequency.FREQ_NONE)
 
     def test_profile_password_warning(self) -> None:
         with mock.patch.object(User, "has_usable_password", return_value=False):

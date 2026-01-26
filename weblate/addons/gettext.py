@@ -5,24 +5,34 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from typing import TYPE_CHECKING, ClassVar
 
 from django.core.management.utils import find_command
 from django.utils.translation import gettext_lazy
 
-from weblate.addons.base import BaseAddon, StoreBaseAddon, UpdateBaseAddon
+from weblate.addons.base import BaseAddon, UpdateBaseAddon
 from weblate.addons.events import AddonEvent
-from weblate.addons.forms import GenerateMoForm, GettextCustomizeForm, MsgmergeForm
+from weblate.addons.forms import GenerateMoForm
 from weblate.formats.base import UpdateError
 from weblate.formats.exporters import MoExporter
 from weblate.utils.state import STATE_FUZZY, STATE_TRANSLATED
 
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from weblate.addons.base import CompatDict
+    from weblate.trans.models import Component, Project, Translation
+
 
 class GettextBaseAddon(BaseAddon):
-    compat = {"file_format": {"po", "po-mono"}}
+    compat: ClassVar[CompatDict] = {"file_format": {"po", "po-mono"}}
 
 
 class GenerateMoAddon(GettextBaseAddon):
-    events = (AddonEvent.EVENT_PRE_COMMIT,)
+    events: ClassVar[set[AddonEvent]] = {
+        AddonEvent.EVENT_PRE_COMMIT,
+    }
     name = "weblate.gettext.mo"
     verbose = gettext_lazy("Generate MO files")
     description = gettext_lazy(
@@ -30,7 +40,13 @@ class GenerateMoAddon(GettextBaseAddon):
     )
     settings_form = GenerateMoForm
 
-    def pre_commit(self, translation, author) -> None:
+    def pre_commit(
+        self,
+        translation: Translation,
+        author: str,
+        store_hash: bool,
+        activity_log_id: int | None = None,
+    ) -> None:
         exporter = MoExporter(translation=translation)
 
         if self.instance.configuration.get("fuzzy"):
@@ -49,13 +65,15 @@ class GenerateMoAddon(GettextBaseAddon):
         if not output:
             return
 
-        with open(output, "wb") as handle:
-            handle.write(exporter.serialize())
+        Path(output).write_bytes(exporter.serialize())
         translation.addon_commit_files.append(output)
 
 
 class UpdateLinguasAddon(GettextBaseAddon):
-    events = (AddonEvent.EVENT_POST_ADD, AddonEvent.EVENT_DAILY)
+    events: ClassVar[set[AddonEvent]] = {
+        AddonEvent.EVENT_POST_ADD,
+        AddonEvent.EVENT_DAILY,
+    }
     name = "weblate.gettext.linguas"
     verbose = gettext_lazy("Update LINGUAS file")
     description = gettext_lazy(
@@ -63,7 +81,7 @@ class UpdateLinguasAddon(GettextBaseAddon):
     )
 
     @staticmethod
-    def get_linguas_path(component):
+    def get_linguas_path(component: Component) -> str:
         base = component.get_new_base_filename()
         if not base:
             base = os.path.join(
@@ -72,14 +90,21 @@ class UpdateLinguasAddon(GettextBaseAddon):
         return os.path.join(os.path.dirname(base), "LINGUAS")
 
     @classmethod
-    def can_install(cls, component, user):
-        if not super().can_install(component, user):
+    def can_install(
+        cls,
+        *,
+        component: Component | None = None,
+        project: Project | None = None,
+    ) -> bool:
+        if not super().can_install(component=component, project=project):
             return False
+        if component is None:
+            return True
         path = cls.get_linguas_path(component)
-        return path and os.path.exists(path)
+        return bool(path) and os.path.exists(path)
 
     @staticmethod
-    def update_linguas(lines, codes):
+    def update_linguas(lines: list[str], codes: set[str]) -> tuple[bool, list[str]]:
         changed = False
         remove = []
 
@@ -93,7 +118,7 @@ class UpdateLinguasAddon(GettextBaseAddon):
             if " " in stripped:
                 expected = " ".join(sorted(codes))
                 if stripped != expected:
-                    lines[i] = expected + "\n"
+                    lines[i] = f"{expected}\n"
                     changed = True
                 codes = set()
                 break
@@ -116,8 +141,8 @@ class UpdateLinguasAddon(GettextBaseAddon):
 
         return changed, lines
 
-    def sync_linguas(self, component, path):
-        with open(path) as handle:
+    def sync_linguas(self, component: Component, path: str) -> bool:
+        with open(path, encoding="utf-8") as handle:
             lines = handle.readlines()
 
         codes = set(
@@ -129,18 +154,20 @@ class UpdateLinguasAddon(GettextBaseAddon):
         changed, lines = self.update_linguas(lines, codes)
 
         if changed:
-            with open(path, "w") as handle:
+            with open(path, "w", encoding="utf-8") as handle:
                 handle.writelines(lines)
 
         return changed
 
-    def post_add(self, translation) -> None:
+    def post_add(
+        self, translation: Translation, activity_log_id: int | None = None
+    ) -> None:
         with translation.component.repository.lock:
             path = self.get_linguas_path(translation.component)
             if self.sync_linguas(translation.component, path):
                 translation.addon_commit_files.append(path)
 
-    def daily(self, component) -> None:
+    def daily(self, component: Component, activity_log_id: int | None = None) -> None:
         with component.repository.lock:
             path = self.get_linguas_path(component)
             if self.sync_linguas(component, path):
@@ -148,7 +175,10 @@ class UpdateLinguasAddon(GettextBaseAddon):
 
 
 class UpdateConfigureAddon(GettextBaseAddon):
-    events = (AddonEvent.EVENT_POST_ADD, AddonEvent.EVENT_DAILY)
+    events: ClassVar[set[AddonEvent]] = {
+        AddonEvent.EVENT_POST_ADD,
+        AddonEvent.EVENT_DAILY,
+    }
     name = "weblate.gettext.configure"
     verbose = gettext_lazy('Update ALL_LINGUAS variable in the "configure" file')
     description = gettext_lazy(
@@ -157,7 +187,7 @@ class UpdateConfigureAddon(GettextBaseAddon):
     )
 
     @staticmethod
-    def get_configure_paths(component):
+    def get_configure_paths(component: Component) -> Generator[str]:
         base = component.full_path
         for name in ("configure", "configure.in", "configure.ac"):
             path = os.path.join(base, name)
@@ -165,19 +195,25 @@ class UpdateConfigureAddon(GettextBaseAddon):
                 yield path
 
     @classmethod
-    def can_install(cls, component, user) -> bool:
-        if not super().can_install(component, user):
+    def can_install(
+        cls,
+        *,
+        component: Component | None = None,
+        project: Project | None = None,
+    ) -> bool:
+        if not super().can_install(component=component, project=project):
             return False
+        if component is None:
+            return True
         for name in cls.get_configure_paths(component):
             try:
-                with open(name) as handle:
-                    if 'ALL_LINGUAS="' in handle.read():
-                        return True
+                if 'ALL_LINGUAS="' in Path(name).read_text(encoding="utf-8"):
+                    return True
             except UnicodeDecodeError:
                 continue
         return False
 
-    def sync_linguas(self, component, paths):
+    def sync_linguas(self, component: Component, paths: list[str]) -> bool:
         added = False
         codes = " ".join(
             component.translation_set.exclude(language_id=component.source_language_id)
@@ -186,7 +222,7 @@ class UpdateConfigureAddon(GettextBaseAddon):
         )
         expected = f'ALL_LINGUAS="{codes}"\n'
         for path in paths:
-            with open(path) as handle:
+            with open(path, encoding="utf-8") as handle:
                 lines = handle.readlines()
 
             for i, line in enumerate(lines):
@@ -201,18 +237,20 @@ class UpdateConfigureAddon(GettextBaseAddon):
                     added = True
 
             if added:
-                with open(path, "w") as handle:
+                with open(path, "w", encoding="utf-8") as handle:
                     handle.writelines(lines)
 
         return added
 
-    def post_add(self, translation) -> None:
+    def post_add(
+        self, translation: Translation, activity_log_id: int | None = None
+    ) -> None:
         with translation.component.repository.lock:
             paths = list(self.get_configure_paths(translation.component))
             if self.sync_linguas(translation.component, paths):
                 translation.addon_commit_files.extend(paths)
 
-    def daily(self, component) -> None:
+    def daily(self, component: Component, activity_log_id: int | None = None) -> None:
         with component.repository.lock:
             paths = list(self.get_configure_paths(component))
             if self.sync_linguas(component, paths):
@@ -227,29 +265,20 @@ class MsgmergeAddon(GettextBaseAddon, UpdateBaseAddon):
         'POT file (as configured by "Template for new translations") using msgmerge.'
     )
     alert = "MsgmergeAddonError"
-    settings_form = MsgmergeForm
+    compat: ClassVar[CompatDict] = {"file_format": {"po"}}
 
     @classmethod
-    def can_install(cls, component, user):
+    def can_install(
+        cls,
+        *,
+        component: Component | None = None,
+        project: Project | None = None,
+    ) -> bool:
         if find_command("msgmerge") is None:
             return False
-        return super().can_install(component, user)
+        return super().can_install(component=component, project=project)
 
-    def get_msgmerge_args(self, component):
-        args = []
-        if not self.instance.configuration.get("fuzzy", True):
-            args.append("--no-fuzzy-matching")
-        if self.instance.configuration.get("previous", True):
-            args.append("--previous")
-        if self.instance.configuration.get("no_location", False):
-            args.append("--no-location")
-
-        # Apply gettext customize add-on configuration
-        if customize_addon := component.get_addon(GettextCustomizeAddon.name):
-            args.extend(customize_addon.addon.get_msgmerge_args(component))
-        return args
-
-    def update_translations(self, component, previous_head) -> None:
+    def update_translations(self, component: Component, previous_head: str) -> None:
         # Run always when there is an alerts, there is a chance that
         # the update clears it.
         repository = component.repository
@@ -278,7 +307,7 @@ class MsgmergeAddon(GettextBaseAddon, UpdateBaseAddon):
             self.trigger_alerts(component)
             component.log_info("%s addon skipped, new base was not found", self.name)
             return
-        args = self.get_msgmerge_args(component)
+        args = component.file_format_cls.get_msgmerge_args(component)
         for translation in component.translation_set.iterator():
             filename = translation.get_filename()
             if (
@@ -304,31 +333,21 @@ class MsgmergeAddon(GettextBaseAddon, UpdateBaseAddon):
         self.trigger_alerts(component)
 
     def commit_and_push(
-        self, component, files: list[str] | None = None, skip_push: bool = False
-    ) -> None:
+        self,
+        component: Component,
+        files: list[str] | None = None,
+        skip_push: bool = False,
+    ) -> bool:
         if super().commit_and_push(component, files=files, skip_push=skip_push):
             component.create_translations()
-
-
-class GettextCustomizeAddon(GettextBaseAddon, StoreBaseAddon):
-    name = "weblate.gettext.customize"
-    verbose = gettext_lazy("Customize gettext output")
-    description = gettext_lazy(
-        "Allows customization of gettext output behavior, for example line wrapping."
-    )
-    settings_form = GettextCustomizeForm
-
-    def store_post_load(self, translation, store) -> None:
-        store.store.wrapper.width = int(self.instance.configuration.get("width", 77))
-
-    def get_msgmerge_args(self, component):
-        if int(self.instance.configuration.get("width", 77)) != 77:
-            return ["--no-wrap"]
-        return []
+            return True
+        return False
 
 
 class GettextAuthorComments(GettextBaseAddon):
-    events = (AddonEvent.EVENT_PRE_COMMIT,)
+    events: ClassVar[set[AddonEvent]] = {
+        AddonEvent.EVENT_PRE_COMMIT,
+    }
     name = "weblate.gettext.authors"
     verbose = gettext_lazy("Contributors in comment")
     description = gettext_lazy(
@@ -336,7 +355,13 @@ class GettextAuthorComments(GettextBaseAddon):
         "and years of contributions."
     )
 
-    def pre_commit(self, translation, author) -> None:
+    def pre_commit(
+        self,
+        translation: Translation,
+        author: str,
+        store_hash: bool,
+        activity_log_id: int | None = None,
+    ) -> None:
         if "noreply@weblate.org" in author:
             return
         if "<" in author:
@@ -349,3 +374,5 @@ class GettextAuthorComments(GettextBaseAddon):
 
         translation.store.store.updatecontributor(name, email)
         translation.store.save()
+        if store_hash:
+            translation.store_hash()

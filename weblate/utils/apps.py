@@ -6,28 +6,34 @@ from __future__ import annotations
 
 import errno
 import os
-import sys
 import time
 from datetime import timedelta
 from itertools import chain
-from typing import cast
+from pathlib import Path
+from shutil import disk_usage
+from typing import TYPE_CHECKING, cast
 
-from celery.exceptions import TimeoutError
+from celery.exceptions import TimeoutError as CeleryTimeoutError
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.cache import cache
 from django.core.checks import Error, Info, register
+from django.core.exceptions import ImproperlyConfigured
 from django.core.mail import get_connection
 from django.db import DatabaseError
 from django.db.models import CharField, TextField
 from django.db.models.functions import MD5, Lower
-from django.db.models.lookups import Lookup, Regex
+from django.db.models.lookups import Regex
 from django.utils import timezone
 from packaging.version import Version
 
+from weblate.utils.html import format_html_join_comma, list_to_tuples
+
 from .celery import is_celery_queue_long
 from .checks import weblate_check
-from .data import data_dir
+from .classloader import ClassLoader
+from .const import HEARTBEAT_FREQUENCY
+from .data import data_path
 from .db import (
     MySQLSearchLookup,
     PostgreSQLRegexLookup,
@@ -36,9 +42,17 @@ from .db import (
     measure_database_latency,
     using_postgresql,
 )
+from .encoding import get_filesystem_encoding, get_locale_encoding, get_python_encoding
 from .errors import init_error_collection
 from .site import check_domain, get_site_domain
 from .version import VERSION_BASE, get_latest_version
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
+
+    from django.core.checks import CheckMessage
+    from django.db.models.lookups import Lookup
+
 
 GOOD_CACHE = {"MemcachedCache", "PyLibMCCache", "DatabaseCache", "RedisCache"}
 DEFAULT_MAILS = {
@@ -54,8 +68,13 @@ DEFAULT_SECRET_KEYS = {
 
 
 @register(deploy=True)
-def check_mail_connection(app_configs, **kwargs):
-    errors = []
+def check_mail_connection(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
+    errors: list[CheckMessage] = []
     try:
         connection = get_connection(timeout=5)
         connection.open()
@@ -68,11 +87,16 @@ def check_mail_connection(app_configs, **kwargs):
 
 
 @register(deploy=True)
-def check_celery(app_configs, **kwargs):
+def check_celery(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     # Import this lazily to avoid evaluating settings too early
     from weblate.utils.tasks import ping
 
-    errors = []
+    errors: list[CheckMessage] = []
     if settings.CELERY_TASK_ALWAYS_EAGER:
         errors.append(
             weblate_check(
@@ -115,11 +139,10 @@ def check_celery(app_configs, **kwargs):
                 errors.append(
                     weblate_check(
                         "weblate.E034",
-                        "The Celery process is outdated or misconfigured."
-                        " Following items differ: {}".format(", ".join(differing)),
+                        f"The Celery process is outdated or misconfigured. Following items differ: {format_html_join_comma('{}', list_to_tuples(differing))}",
                     )
                 )
-        except TimeoutError:
+        except CeleryTimeoutError:
             errors.append(
                 weblate_check(
                     "weblate.E019",
@@ -139,7 +162,11 @@ def check_celery(app_configs, **kwargs):
     heartbeat = cache.get("celery_heartbeat")
     loaded = cache.get("celery_loaded")
     now = time.time()
-    if loaded and now - loaded > 60 and (not heartbeat or now - heartbeat > 600):
+    if (
+        loaded
+        and now - loaded > HEARTBEAT_FREQUENCY
+        and (not heartbeat or now - heartbeat > HEARTBEAT_FREQUENCY * 10)
+    ):
         errors.append(
             weblate_check(
                 "weblate.C030",
@@ -152,8 +179,13 @@ def check_celery(app_configs, **kwargs):
 
 
 @register(deploy=True)
-def check_database(app_configs, **kwargs):
-    errors = []
+def check_database(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
+    errors: list[CheckMessage] = []
     if not using_postgresql():
         errors.append(
             weblate_check(
@@ -165,7 +197,7 @@ def check_database(app_configs, **kwargs):
 
     try:
         delta = measure_database_latency()
-        if delta > 100:
+        if delta > 120:
             errors.append(
                 weblate_check(
                     "weblate.C038",
@@ -185,11 +217,16 @@ def check_database(app_configs, **kwargs):
 
 
 @register(deploy=True)
-def check_cache(app_configs, **kwargs):
+def check_cache(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     """Check for sane caching."""
-    errors = []
+    errors: list[CheckMessage] = []
 
-    cache_backend = cast(str, settings.CACHES["default"]["BACKEND"]).split(".")[-1]
+    cache_backend = cast("str", settings.CACHES["default"]["BACKEND"]).split(".")[-1]
     if cache_backend not in GOOD_CACHE:
         errors.append(
             weblate_check(
@@ -213,9 +250,14 @@ def check_cache(app_configs, **kwargs):
 
 
 @register(deploy=True)
-def check_settings(app_configs, **kwargs):
+def check_settings(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     """Check for sane settings."""
-    errors = []
+    errors: list[CheckMessage] = []
 
     if not settings.ADMINS or any(x[1] in DEFAULT_MAILS for x in settings.ADMINS):
         errors.append(
@@ -226,20 +268,21 @@ def check_settings(app_configs, **kwargs):
             )
         )
 
-    if settings.SERVER_EMAIL in DEFAULT_MAILS:
-        errors.append(
-            weblate_check(
-                "weblate.E012",
-                "The server e-mail address should be changed from its default value",
+    if settings.EMAIL_BACKEND != "django.core.mail.backends.dummy.EmailBackend":
+        if settings.SERVER_EMAIL in DEFAULT_MAILS:
+            errors.append(
+                weblate_check(
+                    "weblate.E012",
+                    "The server e-mail address should be changed from its default value",
+                )
             )
-        )
-    if settings.DEFAULT_FROM_EMAIL in DEFAULT_MAILS:
-        errors.append(
-            weblate_check(
-                "weblate.E013",
-                'The "From" e-mail address should be changed from its default value',
+        if settings.DEFAULT_FROM_EMAIL in DEFAULT_MAILS:
+            errors.append(
+                weblate_check(
+                    "weblate.E013",
+                    'The "From" e-mail address should be changed from its default value',
+                )
             )
-        )
 
     if settings.SECRET_KEY in DEFAULT_SECRET_KEYS:
         errors.append(
@@ -254,10 +297,31 @@ def check_settings(app_configs, **kwargs):
     return errors
 
 
+@register(deploy=True)
+def check_class_loader(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
+    errors: list[CheckMessage] = []
+    for instance in ClassLoader.instances.values():
+        try:
+            instance.load_data()
+        except ImproperlyConfigured as error:
+            errors.append(weblate_check("weblate.E028", str(error)))
+    return errors
+
+
 @register
-def check_data_writable(app_configs=None, **kwargs):
+def check_data_writable(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     """Check we can write to data dir."""
-    errors = []
+    errors: list[CheckMessage] = []
     if not settings.DATA_DIR:
         return [
             weblate_check(
@@ -265,40 +329,49 @@ def check_data_writable(app_configs=None, **kwargs):
                 "DATA_DIR is not configured.",
             )
         ]
-    dirs = [
-        settings.DATA_DIR,
-        data_dir("home"),
-        data_dir("ssh"),
-        data_dir("vcs"),
-        data_dir("backups"),
-        data_dir("fonts"),
-        data_dir("cache", "fonts"),
+    dirs: list[Path] = [
+        Path(settings.DATA_DIR),
+        data_path("home"),
+        data_path("ssh"),
+        data_path("vcs"),
+        data_path("backups"),
+        data_path("fonts"),
+        data_path("cache") / "fonts",
     ]
     message = "Path {} is not writable, check your DATA_DIR settings."
     for path in dirs:
-        if not os.path.exists(path):
-            os.makedirs(path)
-        elif not os.access(path, os.W_OK):
-            errors.append(weblate_check("weblate.E002", message.format(path)))
+        path.mkdir(parents=True, exist_ok=True)
+        if not os.access(path, os.W_OK):
+            errors.append(weblate_check("weblate.E002", message.format(path), Error))
 
     return errors
 
 
 @register
-def check_site(app_configs, **kwargs):
-    errors = []
+def check_site(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
+    errors: list[CheckMessage] = []
     if not check_domain(get_site_domain()):
         errors.append(weblate_check("weblate.E017", "Correct the site domain"))
     return errors
 
 
 @register(deploy=True)
-def check_perms(app_configs=None, **kwargs):
+def check_perms(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     """Check that the data dir can be written to."""
     if not settings.DATA_DIR:
         return []
     start = time.monotonic()
-    errors = []
+    errors: list[CheckMessage] = []
     uid = os.getuid()
     message = "The path {} is owned by a different user, check your DATA_DIR settings."
     for dirpath, dirnames, filenames in os.walk(settings.DATA_DIR):
@@ -330,7 +403,12 @@ def check_perms(app_configs=None, **kwargs):
 
 
 @register(deploy=True)
-def check_errors(app_configs=None, **kwargs):
+def check_errors(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     """Check that error collection is configured."""
     if hasattr(settings, "ROLLBAR") or settings.SENTRY_DSN:
         return []
@@ -345,9 +423,18 @@ def check_errors(app_configs=None, **kwargs):
 
 
 @register
-def check_encoding(app_configs=None, **kwargs):
+def check_encoding(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     """Check that the encoding is UTF-8."""
-    if sys.getfilesystemencoding() == "utf-8" and sys.getdefaultencoding() == "utf-8":
+    if (
+        get_filesystem_encoding() == "utf-8"
+        and get_python_encoding() == "utf-8"
+        and get_locale_encoding() == "utf-8"
+    ):
         return []
     return [
         weblate_check(
@@ -358,17 +445,38 @@ def check_encoding(app_configs=None, **kwargs):
 
 
 @register(deploy=True)
-def check_diskspace(app_configs=None, **kwargs):
+def check_diskspace(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     """Check free disk space."""
     if settings.DATA_DIR:
-        stat = os.statvfs(settings.DATA_DIR)
-        if stat.f_bavail * stat.f_bsize < 10000000:
-            return [weblate_check("weblate.C032", "The disk is nearly full")]
+        try:
+            usage = disk_usage(settings.DATA_DIR)
+        except OSError:
+            # check_data_writable will trigger for this
+            return []
+        if usage is None:
+            return []
+        # Show critical error on really low space, error on low space
+        if usage.free < 20_000_000:
+            message = f"There is not enough free space in {settings.DATA_DIR}"
+            return [weblate_check("weblate.C032", message)]
+        if usage.free < 100_000_000:
+            message = f"The disk space in {settings.DATA_DIR} is running low"
+            return [weblate_check("weblate.E043", message, Error)]
     return []
 
 
 @register(deploy=True)
-def check_version(app_configs=None, **kwargs):
+def check_version(
+    *,
+    app_configs: Sequence[AppConfig] | None,
+    databases: Sequence[str] | None,
+    **kwargs,
+) -> Iterable[CheckMessage]:
     try:
         latest = get_latest_version()
     except (ValueError, OSError):
@@ -415,8 +523,8 @@ class UtilsConfig(AppConfig):
                 (Regex, "trgm_regex"),
             ]
 
-        lookups.append((cast(type[Lookup], MD5),))
-        lookups.append((cast(type[Lookup], Lower),))
+        lookups.append((cast("type[Lookup]", MD5),))
+        lookups.append((cast("type[Lookup]", Lower),))
 
         for lookup in lookups:
             CharField.register_lookup(*lookup)

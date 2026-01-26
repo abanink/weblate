@@ -2,28 +2,32 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from django import template
-from django.utils.html import format_html
-from django.utils.translation import gettext
+from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
+from django import template
+
+from weblate.trans.templatetags.translations import render_documentation_icon
 from weblate.utils.checks import check_doc_link
+
+if TYPE_CHECKING:
+    from django.core.checks import CheckMessage
 
 register = template.Library()
 
 
 @register.simple_tag
-def check_link(check):
+def check_link(check: CheckMessage) -> str:
     fallback = None
     if check.hint and check.hint.startswith("https:"):
         fallback = check.hint
-    return configuration_error_link(check.id, fallback=fallback)
+    return configuration_error_link(cast("str", check.id), fallback=fallback)
 
 
 @register.simple_tag
-def configuration_error_link(check, fallback=None):
-    url = check_doc_link(check) or fallback
-    if url:
-        return format_html(
-            '<a class="btn btn-info" href="{}">{}</a>', url, gettext("Documentation")
-        )
-    return ""
+def configuration_error_link(check: str, fallback: str | None = None) -> str:
+    doc_link = check_doc_link(check) or fallback
+    if not doc_link:
+        return ""
+    return render_documentation_icon(doc_link)

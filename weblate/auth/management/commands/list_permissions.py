@@ -4,8 +4,10 @@
 
 from weblate.auth.data import ACL_GROUPS, GLOBAL_PERMISSIONS, GROUPS, PERMISSIONS, ROLES
 from weblate.utils.management.base import BaseCommand
+from weblate.utils.rst import format_table
 
 GROUP_NAMES = {
+    "announcement": "Announcements",
     "billing": "Billing (see :ref:`billing`)",
     "change": "Changes",
     "comment": "Comments",
@@ -31,69 +33,138 @@ PERMISSION_NAMES.update(PERMISSIONS)
 class Command(BaseCommand):
     help = "List permissions"
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--sections",
+            nargs="*",
+            choices=["acl", "perms", "roles", "teams"],
+            help="Filter output by section. Can specify multiple sections. "
+            "If not specified, all sections are shown.",
+        )
+
     def handle(self, *args, **options) -> None:
         """List permissions."""
-        self.stdout.write("Managing per-project access control\n\n")
+        sections = set(options.get("sections", []) or [])
+        show_all = not sections
+
+        if show_all or "acl" in sections:
+            self.write_acl()
+
+        if show_all or "perms" in sections:
+            self.write_perms()
+
+        if show_all or "roles" in sections:
+            self.write_roles()
+
+        if show_all or "teams" in sections:
+            self.write_teams()
+
+    def write_acl(self) -> None:
+        """Write access control section."""
+        self.stdout.write("""
+Managing per-project access control
+-----------------------------------
+
+..
+   Partly generated using ./manage.py list_permissions
+
+""")
 
         for name in ACL_GROUPS:
-            self.stdout.write(f"{name}\n\n\n")
+            self.stdout.write(f"`{name}`\n\n\n")
 
-        self.stdout.write("\n\n")
+    def write_perms(self) -> None:
+        """Write permissions section."""
+        self.stdout.write("""
+List of privileges
+++++++++++++++++++
+
+..
+   Generated using ./manage.py list_permissions
+
+""")
 
         last = ""
 
-        table = []
-        rows = []
+        table: list[list[str | list[list[str]]]] = []
+        rows: list[list[str]] = []
 
         for key, name in PERMISSIONS:
             base = key.split(".")[0]
             if base != last:
                 if last:
-                    table.append((GROUP_NAMES[last], rows))
+                    table.append([GROUP_NAMES[last], rows])
                 last = base
                 rows = []
 
             rows.append(
-                (
+                [
                     name,
-                    ", ".join(
-                        f":guilabel:`{name}`"
+                    [
+                        [f":guilabel:`{name}`"]
                         for name, permissions in ROLES
                         if key in permissions
-                    ),
-                )
+                    ],
+                ]
             )
-        table.append((GROUP_NAMES[last], rows))
+        # Fill in blank tables when there is no role
+        for row in rows:
+            if len(row[1]) == 0:
+                row[1].append([""])
+        table.append([GROUP_NAMES[last], rows])
 
-        rows = [(name, "") for _key, name in GLOBAL_PERMISSIONS]
-        table.append(("Site wide privileges", rows))
+        rows = [
+            [
+                name,
+                [
+                    [f":guilabel:`{name}`"]
+                    for name, permissions in ROLES
+                    if key in permissions
+                ],
+            ]
+            for key, name in GLOBAL_PERMISSIONS
+        ]
+        # Fill in blank tables when there is no role
+        for row in rows:
+            if len(row[1]) == 0:
+                row[1].append([""])
+        table.append(["Site wide privileges", rows])
 
-        len_1 = max(len(group) for group, _rows in table)
-        len_2 = max(len(name) for _group, rows in table for name, _role in rows)
-        len_3 = max(len(role) for _group, rows in table for _name, role in rows)
+        self.stdout.writelines(
+            format_table(table, ["Scope", "Permission", "Built-in roles"])
+        )
 
-        sep = f"+-{'-' * len_1}-+-{'-' * len_2}-+-{'-' * len_3}-+"
-        blank_sep = f"+ {' ' * len_1} +-{'-' * len_2}-+-{'-' * len_3}-+"
-        row = f"| {{:{len_1}}} | {{:{len_2}}} | {{:{len_3}}} |"
-        self.stdout.write(sep)
-        self.stdout.write(row.format("Scope", "Permission", "Built-in roles"))
-        self.stdout.write(sep.replace("-", "="))
-        for scope, rows in table:
-            for number, (name, role) in enumerate(rows):
-                if number:
-                    self.stdout.write(blank_sep)
-                self.stdout.write(row.format(scope if number == 0 else "", name, role))
-            self.stdout.write(sep)
+    def write_roles(self) -> None:
+        """Write roles section."""
+        self.stdout.write("""
+List of built-in roles
+++++++++++++++++++++++
+
+..
+   Generated using ./manage.py list_permissions
+
+""")
+
+        self.stdout.write(".. list-table::\n\n")
 
         for name, permissions in ROLES:
-            self.stdout.write(f"`{name}`")
-            self.stdout.write("    ", ending="")
+            self.stdout.write(f"   * - `{name}`")
+            self.stdout.write("     - ", ending="")
             self.stdout.write(
-                ", ".join(
-                    f":guilabel:`{PERMISSION_NAMES[perm]}`"
+                "\n       ".join(
+                    f"* :guilabel:`{PERMISSION_NAMES[perm]}`"
                     for perm in sorted(permissions)
                 )
             )
+            self.stdout.write("\n")
+
+    def write_teams(self) -> None:
+        """Write teams section."""
+        self.stdout.write("""
+List of teams
++++++++++++++
+
+""")
 
         for name, roles, _selection in GROUPS:
             self.stdout.write(f"`{name}`\n\n\n")

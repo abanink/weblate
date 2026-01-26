@@ -14,16 +14,31 @@ headers or linking to corresponding source files.
 
 .. seealso::
 
-    :doc:`../devel/gettext`,
-    :doc:`../devel/sphinx`,
-    `Gettext on Wikipedia <https://en.wikipedia.org/wiki/Gettext>`_,
-    :doc:`tt:formats/po`,
-    :ref:`addon-weblate.gettext.authors`,
-    :ref:`addon-weblate.gettext.configure`,
-    :ref:`addon-weblate.gettext.customize`,
-    :ref:`addon-weblate.gettext.linguas`,
-    :ref:`addon-weblate.gettext.mo`,
-    :ref:`addon-weblate.gettext.msgmerge`
+    * :doc:`../devel/gettext`
+    * :doc:`../devel/sphinx`
+    * `Gettext on Wikipedia <https://en.wikipedia.org/wiki/Gettext>`_
+    * :doc:`tt:formats/po`
+    * :ref:`addon-weblate.gettext.authors`
+    * :ref:`addon-weblate.gettext.configure`
+    * :ref:`addon-weblate.gettext.customize`
+    * :ref:`addon-weblate.gettext.linguas`
+    * :ref:`addon-weblate.gettext.mo`
+    * :ref:`addon-weblate.gettext.msgmerge`
+
+Showing source string change
+++++++++++++++++++++++++++++
+
+Weblate can extract previous source strings from the PO files if present and
+show the string difference for strings needing editing based on that. To
+include these, :program:`msgmerge` has to be executed with ``--previous`` and
+the resulting PO file then contains lines such as:
+
+.. code-block:: po
+
+   #, fuzzy
+   #| msgid "previous-untranslated-string"
+   msgid "untranslated-string"
+   msgstr "translated-string"
 
 PO file header
 ++++++++++++++
@@ -31,6 +46,30 @@ PO file header
 The header of the PO file is automatically maintained by Weblate. Optionally it
 can include :ref:`component-report_source_bugs` and
 :ref:`project-set_language_team`.
+
+The header comments also can be updated to contain author names using :ref:`addon-weblate.gettext.authors`.
+
+Line wrapping
++++++++++++++
+
+The line wrapping mostly matches GNU gettext behavior. Both the wrapping
+algorithm in the GNU gettext and the Unicode data the wrapping is based on
+evolve which might cause differences in some corner cases.
+
+The wrapping width can be configured using the ``po_line_wrap`` parameter, see :ref:`file_format_params`.
+
+Generating matching MO files
+++++++++++++++++++++++++++++
+
+In case MO files are kept in the repository together with PO files,
+:ref:`addon-weblate.gettext.mo` can be used to keep them up-to-date with PO
+files.
+
+Updating PO files from the POT file
++++++++++++++++++++++++++++++++++++
+
+:ref:`addon-weblate.gettext.msgmerge` can be used to update PO files from the
+POT file, see :ref:`updating-target-files`.
 
 .. _mono_gettext:
 
@@ -121,3 +160,9 @@ Weblate configuration
 +--------------------------------+----------------------------------+
 | File format                    | `Gettext PO file (monolingual)`  |
 +--------------------------------+----------------------------------+
+
+
+File format parameters
+++++++++++++++++++++++
+
+:ref:`file_format_params` with the pattern `po_*` can be used to configure the behavior of the gettext format.

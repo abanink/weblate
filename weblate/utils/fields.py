@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
+from typing import ClassVar
 
 from django.db import models
 from django.utils.translation import gettext_lazy
@@ -11,10 +14,10 @@ from weblate.utils import forms
 from weblate.utils.validators import validate_email
 
 
-class CaseInsensitiveFieldMixin:
+class CaseInsensitiveField(models.CharField):
     """Field mixin that uses case-insensitive lookup alternatives if they exist."""
 
-    LOOKUP_CONVERSIONS = {
+    LOOKUP_CONVERSIONS: ClassVar[dict[str, str]] = {
         "exact": "iexact",
         "contains": "icontains",
         "startswith": "istartswith",
@@ -27,15 +30,15 @@ class CaseInsensitiveFieldMixin:
         return super().get_lookup(converted)
 
 
-class UsernameField(CaseInsensitiveFieldMixin, models.CharField):
+class UsernameField(CaseInsensitiveField):
     pass
 
 
-class EmailField(CaseInsensitiveFieldMixin, models.CharField):
-    default_validators = [validate_email]
+class EmailField(CaseInsensitiveField):
+    default_validators = [validate_email]  # noqa: RUF012
     description = gettext_lazy("E-mail")
-    default_error_messages = {
-        "unique": gettext_lazy("A user with this e-mail already exists.")
+    default_error_messages = {  # noqa: RUF012
+        "unique": gettext_lazy("A user with this e-mail already exists."),
     }
 
     def __init__(self, *args, **kwargs) -> None:
@@ -48,7 +51,7 @@ class EmailField(CaseInsensitiveFieldMixin, models.CharField):
         # the default in future.
         return name, path, args, kwargs
 
-    def formfield(self, **kwargs):
+    def formfield(self, **kwargs):  # type: ignore[override]
         # As with CharField, this will cause email validation to be performed
         # twice.
         return super().formfield(

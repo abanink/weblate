@@ -8,13 +8,13 @@ from weblate.checks.duplicate import DuplicateCheck
 from weblate.checks.models import Check
 from weblate.checks.tests.test_checks import CheckTestCase, MockUnit
 from weblate.lang.models import Language
-from weblate.trans.models import Component, Translation, Unit
+from weblate.trans.models import Component, Project, Translation, Unit
 
 
 class DuplicateCheckTest(CheckTestCase):
     check = DuplicateCheck()
 
-    def _run_check(self, target, source="", lang="cs"):
+    def _run_check(self, target: str, source="", lang="cs"):
         return self.check.check_single(source, target, MockUnit(code=lang, note=""))
 
     def test_no_duplicated_token(self) -> None:
@@ -73,19 +73,33 @@ class DuplicateCheckTest(CheckTestCase):
     def test_check_duplicated_language_ignore(self) -> None:
         self.assertFalse(self._run_check("Si vous vous interrogez", lang="fr"))
 
+        self.assertFalse(self._run_check("luôn luôn", source="always", lang="vi"))
+        self.assertFalse(
+            self._run_check(
+                "thao tác song song", source="parallel operations", lang="vi"
+            )
+        )
+
     def test_description(self) -> None:
         unit = Unit(
             source="string",
             target="I have two two lemons lemons",
             translation=Translation(
                 language=Language("cs"),
-                component=Component(source_language=Language("en"), file_format="po"),
+                component=Component(
+                    source_language=Language("en"), file_format="po", project=Project()
+                ),
             ),
         )
         check = Check(unit=unit)
         self.assertEqual(
             self.check.get_description(check),
-            "Text contains the same word twice in a row: lemons, two",
+            "The following words are duplicated: <code>lemons</code>, <code>two</code>",
+        )
+        unit.target = "I have two two"
+        self.assertEqual(
+            self.check.get_description(check),
+            "The following word is duplicated: <code>two</code>",
         )
 
     def test_check_duplicated_language_cleanup(self) -> None:
@@ -106,6 +120,11 @@ class DuplicateCheckTest(CheckTestCase):
         self.assertFalse(self.check.check_single("", "for [em]x[/em]", MockUnit()))
         self.assertTrue(self.check.check_single("", "em [em]x[/em]", MockUnit()))
         self.assertTrue(self.check.check_single("", "em [em]x", MockUnit()))
+        self.assertFalse(
+            self.check.check_single(
+                "", "em [em]x[/em]", MockUnit(flags=["bbcode-text"])
+            )
+        )
 
     def test_duplicated_punctuation(self) -> None:
         self.assertFalse(
@@ -133,4 +152,14 @@ class DuplicateCheckTest(CheckTestCase):
                 MockUnit(code="pt"),
             ),
             {"para"},
+        )
+
+    def test_rst_markup(self) -> None:
+        self.assertEqual(
+            self.check.check_single(
+                "This can be done in :guilabel:`Service hooks` under :guilabel:`Project settings`.",
+                "Esto se puede hacer en :guilabel:`Ganchos de servicio` en :guilabel:` Configuración del proyecto` .",
+                MockUnit(code="es", flags="rst-text"),
+            ),
+            {},
         )

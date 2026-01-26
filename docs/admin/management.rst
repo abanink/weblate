@@ -69,11 +69,11 @@ In case you need to pass it a file, you can temporary add a volume:
 
 .. seealso::
 
-    :doc:`install/docker`,
-    :doc:`install/venv-debian`,
-    :doc:`install/venv-suse`,
-    :doc:`install/venv-redhat`,
-    :doc:`install/source`
+   * :doc:`install/docker`
+   * :doc:`install/venv-debian`
+   * :doc:`install/venv-suse`
+   * :doc:`install/venv-redhat`
+   * :doc:`install/source`
 
 
 add_suggestions
@@ -153,12 +153,65 @@ Example:
 
    :ref:`auto-translation`
 
+benchmark
+---------
+
+.. weblate-admin:: benchmark
+
+Imports given content into Weblate, useful for benchmarking.
+
+.. code-block:: sh
+   :caption: Example of performance profiling
+
+   # Run benchmark with a profiling
+   python -m cProfile -o benchmark.prof ./manage.py benchmark --project benchmark --filemask '*.tbx' --format tbx --zipfile /tmp/MicrosoftTermCollection2.zip
+
+   # Convert to SVG for visualization
+   uvx gprof2dot -f pstats benchmark.prof | dot -Tsvg -o benchmark.svg
+
+   # Display SVG
+   firefox ./benchmark.svg
+
+.. code-block:: sh
+   :caption: Example of memory profiling
+
+   # Run benchmark under memray
+   uvx memray run ./manage.py benchmark --project benchmark --filemask '*.tbx' --format tbx --zipfile /tmp/MicrosoftTermCollection2.zip
+
+   # Render the profile
+   uvx memray flamegraph ./memray-manage.py.2554179.bin
+
+   # Display it
+   fixefox memray-flamegraph-manage.py.2554179.html
+
+billing_demo
+------------
+
+.. weblate-admin:: billing_demo
+
+.. versionadded:: 5.15
+
+Creates a demo billing project. Can be executed multiple times to add
+additional invoices and billing events.
+
+This can be useful when developing Weblate. Needs :ref:`billing` installed.
+
+.. seealso::
+
+   * :wladmin:`import_demo`
+   * :ref:`devel-demo`
+
+
 celery_queues
 -------------
 
 .. weblate-admin:: celery_queues
 
 Displays length of Celery task queues.
+
+.. seealso::
+
+   :ref:`background-tasks-internals`
 
 checkgit
 --------
@@ -204,8 +257,8 @@ You can either define which project or component to update (for example
 
 .. seealso::
 
-    :ref:`production-cron`,
-    :setting:`COMMIT_PENDING_HOURS`
+   * :ref:`production-cron`
+   * :setting:`COMMIT_PENDING_HOURS`
 
 cleanuptrans
 ------------
@@ -218,6 +271,17 @@ manually, as the cleanups happen automatically in the background.
 .. seealso::
 
    :ref:`production-cron`
+
+
+cleanup_memory
+--------------
+
+.. weblate-admin:: cleanup_memory
+
+.. versionadded:: 5.13
+
+Removes all obsolete entries with pending status from the translation memory.
+
 
 cleanup_ssh_keys
 ----------------
@@ -275,8 +339,8 @@ Export a JSON file containing Weblate Translation Memory content.
 
 .. seealso::
 
-    :ref:`translation-memory`,
-    :ref:`schema-memory`
+   * :ref:`translation-memory`
+   * :ref:`schema-memory`
 
 dumpuserdata
 ------------
@@ -304,6 +368,11 @@ This can be useful when developing Weblate.
 .. weblate-admin-option:: --delete
 
    Removes existing demo project.
+
+.. seealso::
+
+   * :wladmin:`billing_demo`
+   * :ref:`devel-demo`
 
 
 import_json
@@ -342,12 +411,18 @@ Example of JSON file:
 
     :wladmin:`import_memory`
 
+
 import_memory
 -------------
 
 .. weblate-admin:: import_memory <file>
 
-Imports a TMX or JSON file into the Weblate translation memory.
+Imports a file into the Weblate translation memory.
+
+Supported file formats are TMX, JSON, XLIFF, PO, CSV.
+
+Specifying a source and a target languages might be necessary
+for formats other than JSON and TMX.
 
 .. weblate-admin-option:: --language-map LANGMAP
 
@@ -360,10 +435,20 @@ Imports a TMX or JSON file into the Weblate translation memory.
     This can be useful in case your TMX file locales happen not to match what you
     use in Weblate.
 
+.. weblate-admin-option:: --source-language SOURCE_LANG
+
+    Specifies the source language for imported translations. Typically needed for formats
+    where the languages cannot be determined from the file itself.
+
+.. weblate-admin-option:: --target-language TARGET_LANG
+
+    Specifies the target language for imported translations. Typically needed for formats
+    where the languages cannot be determined from the file itself.
+
 .. seealso::
 
-    :ref:`translation-memory`,
-    :ref:`schema-memory`
+   * :ref:`translation-memory`
+   * :ref:`schema-memory`
 
 import_project
 --------------
@@ -388,8 +473,8 @@ be made simple using wildcards, or it can use the full power of regular expressi
 The simple matching uses ``**`` for component name and ``*`` for language, for
 example: ``**/*.po``
 
-The regular expression has to contain groups named `component` and `language`.
-For example: ``(?P<language>[^/]*)/(?P<component>[^-/]*)\.po``
+The regular expression has to contain groups named `component` and `language`,
+for example: ``(?P<language>[^/]*)/(?P<component>[^-/]*)\.po``.
 
 The import matches existing components based on files and adds the ones that
 do not exist. It does not change already existing ones.
@@ -449,8 +534,8 @@ separate a folder with the translations of each chapter:
 
     weblate import_project \
         debian-handbook \
-        git://anonscm.debian.org/debian-handbook/debian-handbook.git \
-        squeeze/master \
+        https://salsa.debian.org/hertzog/debian-handbook.git \
+        bullseye/main \
         '*/**.po'
 
 Then the Tanaguru tool, where the file format needs be specified,
@@ -515,6 +600,19 @@ Importing Sphinx documentation split to multiple files and directories:
     More detailed examples can be found in the :ref:`starting` chapter,
     alternatively you might want to use :wladmin:`import_json`.
 
+import_projectbackup
+--------------------
+
+.. weblate-admin:: import_projectbackup <project_name> <project_slug> <username> <filename>
+
+.. versionadded:: 5.10
+
+Imports :ref:`projectbackup`.
+
+.. hint::
+
+   Usually it is more comfortable to import project when :ref:`adding-projects`.
+
 importuserdata
 --------------
 
@@ -535,11 +633,19 @@ Imports users from JSON dump of the Django auth_users database.
     With this option it will just check whether a given file can be imported and
     report possible conflicts arising from usernames or e-mails.
 
-You can dump users from the existing Django installation using:
+You can dump users from the existing Django site using:
 
 .. code-block:: sh
 
-    weblate dumpdata auth.User > users.json
+    ./manage.py dumpdata auth.User > users.json
+
+.. hint::
+
+   Use :wladmin:`dumpuserdata` for dumping data from other Weblate server as that includes user settings as well.
+
+.. seealso::
+
+   :ref:`pootle-migration`
 
 install_addon
 -------------
@@ -563,11 +669,11 @@ Installs an add-on to a set of components.
 You can either define which project or component to install the add-on in (for example
 ``weblate/application``), or use ``--all`` to include all existing components.
 
-To install :ref:`addon-weblate.gettext.customize` for all components:
+To install :ref:`addon-weblate.gettext.mo` for all components:
 
 .. code-block:: shell
 
-   weblate install_addon --addon weblate.gettext.customize --configuration '{"width": -1}' --update --all
+   weblate install_addon --addon weblate.gettext.mo --configuration '{"fuzzy": true}' --update --all
 
 .. seealso::
 
@@ -598,11 +704,45 @@ To install :ref:`mt-deepl`:
 
 .. code-block:: shell
 
-   weblate install_service --service deepl --configuration '{"key": "x", "url": "https://api.deepl.com/v2/"}' --update
+   weblate install_machinery --service deepl --configuration '{"key": "x", "url": "https://api.deepl.com/v2/"}' --update
 
 .. seealso::
 
    :doc:`machine`
+
+list_addons
+-----------
+
+.. weblate-admin:: list_addons
+
+Lists add-ons in reStructuredText as a template for :doc:`/admin/addons`.
+
+.. seealso::
+
+   :doc:`/contributing/documentation`
+
+list_permissions
+----------------
+
+.. weblate-admin:: list_permissions
+
+Lists permissions in reStructuredText as a template for :doc:`/admin/access`.
+
+.. seealso::
+
+   :doc:`/contributing/documentation`
+
+list_checks
+-----------
+
+.. weblate-admin:: list_checks
+
+Lists quality checks in reStructuredText as a template for :doc:`/admin/checks` and :doc:`/user/checks`.
+
+.. seealso::
+
+   :doc:`/contributing/documentation`
+
 
 list_languages
 --------------
@@ -612,14 +752,27 @@ list_languages
 Lists supported languages in MediaWiki markup - language codes, English names
 and localized names.
 
-This is used to generate <https://wiki.l10n.cz/Slovn%C3%ADk_s_n%C3%A1zvy_jazyk%C5%AF>.
+This is used to generate <https://www.l10n.cz/wiki/Slovn%C3%ADky/Slovn%C3%ADk_s_n%C3%A1zvy_jazyk%C5%AF/>.
+
+list_machinery
+--------------
+
+.. weblate-admin:: list_machinery
+
+Lists automatic suggestions services in reStructuredText as a template for :doc:`/admin/machine`.
+
+.. seealso::
+
+   :doc:`/contributing/documentation`
 
 list_translators
 ----------------
 
 .. weblate-admin:: list_translators <project|project/component>
 
-Lists translators by contributed language for the given project::
+Lists translators by contributed language for the given project:
+
+.. code-block:: text
 
     [French]
     Jean Dupont <jean.dupont@example.com>
@@ -640,6 +793,20 @@ list_versions
 .. weblate-admin:: list_versions
 
 Lists all Weblate dependencies and their versions.
+
+list_file_format_params
+-----------------------
+
+.. weblate-admin:: list_file_format_params
+
+Lists File format parameters.
+
+list_change_events
+------------------
+
+.. weblate-admin:: list_change_events
+
+Lists all possible change event types.
 
 loadpo
 ------
@@ -700,8 +867,8 @@ described at Django :djadmin:`django:migrate`.
 
 .. seealso::
 
-   :djadmin:`django:migrate`,
-   :ref:`tables-setup`
+   * :djadmin:`django:migrate`
+   * :ref:`tables-setup`
 
 move_language
 -------------
@@ -710,7 +877,7 @@ move_language
 
 Allows you to merge language content. This is useful when updating to a new
 version which contains aliases for previously unknown languages that have been
-created with the `(generated)` suffix. It moves all content from the `source`
+created with the :samp:`(generated)` suffix. It moves all content from the `source`
 language to the `target` one.
 
 Example:
@@ -721,7 +888,7 @@ Example:
 
 After moving the content, you should check whether there is anything left (this is
 subject to race conditions when somebody updates the repository meanwhile) and
-remove the `(generated)` language.
+remove the :samp:`(generated)` language.
 
 pushgit
 -------

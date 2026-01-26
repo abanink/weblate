@@ -157,6 +157,21 @@ class PlaceholdersTest(CheckTestCase):
             )
         )
 
+    def test_escaped_markup(self) -> None:
+        unit = MockUnit(
+            None,
+            'icu-message-format, placeholders:r"&lt;[a-z/]+&gt;", xml-text',
+            self.default_lang,
+            "&lt;strong&gt;Not limit the amount of videos&lt;/strong&gt; new users can upload",
+        )
+        self.assertEqual(
+            list(self.check.check_highlight(unit.source, unit)),
+            [
+                (0, 14, "&lt;strong&gt;"),
+                (44, 59, "&lt;/strong&gt;"),
+            ],
+        )
+
 
 class PluralPlaceholdersTest(FixtureTestCase):
     def test_plural(self) -> None:
@@ -205,7 +220,7 @@ class RegexTest(CheckTestCase):
         self.test_failure_1 = ("string URL", "string", "regex:URL")
         self.test_failure_2 = ("string URL", "string url", "regex:URL")
         self.test_failure_3 = ("string URL", "string URL", "regex:^URL$")
-        self.test_highlight = ("regex:URL", "See URL", [(4, 7, "URL")])
+        self.test_highlight = ("regex:URL", "See URL", [])
 
     def do_test(self, expected, data, lang=None) -> None:
         # Skip using check_single as the Check does not use that
@@ -227,11 +242,17 @@ class RegexTest(CheckTestCase):
             self.default_lang,
             "@:(foo.bar.baz) | @:(hello.world) | {foo32}",
         )
+        self.assertEqual(list(self.check.check_highlight(unit.source, unit)), [])
+
+    def test_unicode_regex(self) -> None:
+        unit = MockUnit(
+            None,
+            r'regex:"((?:@:\(|\{)[-_\p{Lo}\p{Ll}\p{N}]+(?:\)|\}))"',
+            self.default_lang,
+            "@:(你好世界一۲༣) | @:(Hello-World123) | @:(你好世界一۲༣!) | @:(-你好世界一۲༣_) "
+            "| {hello-world123}",
+        )
         self.assertEqual(
             list(self.check.check_highlight(unit.source, unit)),
-            [
-                (0, 15, "@:(foo.bar.baz)"),
-                (18, 33, "@:(hello.world)"),
-                (36, 43, "{foo32}"),
-            ],
+            [],
         )

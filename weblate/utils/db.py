@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 
-from django.db import connections, models
+from django.db import ProgrammingError, connections, models, transaction
 from django.db.models.lookups import PatternLookup, Regex
 
 from .inv_regex import invert_re
@@ -20,6 +20,10 @@ PG_DROP = "DROP INDEX {0}_{1}_fulltext"
 
 MY_FTX = "CREATE FULLTEXT INDEX {0}_{1}_fulltext ON trans_{0}({1})"
 MY_DROP = "ALTER TABLE trans_{0} DROP INDEX {0}_{1}_fulltext"
+
+
+class MissingTransactionError(ProgrammingError):
+    pass
 
 
 def using_postgresql():
@@ -87,6 +91,10 @@ class PostgreSQLFallbackLookupMixin:
     def process_lhs(self, compiler, connection, lhs=None):
         if self._needs_fallback:  # type: ignore[attr-defined]
             lhs_sql, params = super().process_lhs(compiler, connection, lhs)  # type: ignore[misc]
+            if self.lookup_name in {"search", "substring"}:
+                # These are matched against UPPER, so convert them
+                return f"UPPER({lhs_sql})", params
+            # This concatenation will prevent using trigram index
             return f"{lhs_sql} || ''", params
         return super().process_lhs(compiler, connection, lhs)  # type: ignore[misc]
 
@@ -115,7 +123,7 @@ class PostgreSQLSearchLookup(PostgreSQLFallbackLookup):
 
     def get_rhs_op(self, connection, rhs):
         if self._needs_fallback:
-            return connection.operators["contains"] % rhs
+            return connection.operators["icontains"] % rhs
         return f"%% {rhs} = true"
 
 
@@ -125,7 +133,7 @@ class MySQLSearchLookup(models.Lookup):
     def as_sql(self, compiler, connection):
         lhs, lhs_params = self.process_lhs(compiler, connection)
         rhs, rhs_params = self.process_rhs(compiler, connection)
-        params = lhs_params + rhs_params
+        params = lhs_params + rhs_params  # type: ignore[operator]
         return f"MATCH ({lhs}) AGAINST ({rhs} IN NATURAL LANGUAGE MODE)", params
 
 
@@ -141,7 +149,7 @@ class PostgreSQLSubstringLookup(PostgreSQLFallbackLookup):
 
     def get_rhs_op(self, connection, rhs):
         if self._needs_fallback:
-            return connection.operators["contains"] % rhs
+            return connection.operators["icontains"] % rhs
         return f"ILIKE {rhs}"
 
 
@@ -166,3 +174,10 @@ def measure_database_latency() -> float:
     start = time.monotonic()
     Project.objects.exists()
     return round(1000 * (time.monotonic() - start))
+
+
+def verify_in_transaction() -> None:
+    """Verify the code is executed inside a transaction."""
+    connection = transaction.get_connection()
+    if not connection.in_atomic_block:
+        raise MissingTransactionError

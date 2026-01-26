@@ -2,13 +2,22 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from django.conf import settings
+from django.db.models import Value
+from django.db.models.functions import MD5, Lower
 
 from weblate.trans.models import Unit
 from weblate.utils.db import adjust_similarity_threshold
 from weblate.utils.state import STATE_TRANSLATED
 
-from .base import DownloadTranslations, InternalMachineTranslation
+from .base import InternalMachineTranslation
+
+if TYPE_CHECKING:
+    from .base import DownloadTranslations
 
 
 class WeblateTranslation(InternalMachineTranslation):
@@ -16,11 +25,14 @@ class WeblateTranslation(InternalMachineTranslation):
 
     name = "Weblate"
     rank_boost = 1
+    cache_translations = True
+    # Cache results for 1 hour to avoid frequent database hits
+    cache_expiry = 3600
 
     def download_translations(
         self,
-        source,
-        language,
+        source_language,
+        target_language,
         text: str,
         unit,
         user,
@@ -36,15 +48,29 @@ class WeblateTranslation(InternalMachineTranslation):
         if "memory_db" in settings.DATABASES:
             base = base.using("memory_db")
 
-        lookup_term = "source__search" if threshold < 100 else "source"
-        lookup = {lookup_term: text}
+        # Build search query
+        lookup: dict[str, Any] = {}
+        if threshold < 100:
+            # Full text search
+            lookup["source__search"] = text
+        else:
+            # Utilize PostgreSQL index
+            lookup["source__lower__md5"] = MD5(Lower(Value(text)))
+            lookup["source"] = text
 
-        matching_units = base.filter(
-            translation__component__source_language=source,
-            translation__language=language,
-            state__gte=STATE_TRANSLATED,
-            **lookup,
-        ).prefetch()
+        matching_units = (
+            base.filter(
+                translation__component__source_language=source_language,
+                translation__language=target_language,
+                state__gte=STATE_TRANSLATED,
+                **lookup,
+            )
+            .exclude(
+                # The read-only strings can be possibly blank
+                target__lower__md5=MD5(Lower(Value("")))
+            )
+            .prefetch()
+        )
 
         # We want only close matches here
         adjust_similarity_threshold(0.98)

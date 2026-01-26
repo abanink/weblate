@@ -4,14 +4,25 @@
 
 """Tests for unitdata models."""
 
+from django.test import SimpleTestCase
 from django.urls import reverse
 from django.utils.html import format_html
 
-from weblate.checks.models import Check
+from weblate.checks.models import CHECKS, Check
 from weblate.checks.tasks import batch_update_checks
 from weblate.trans.models import Unit
 from weblate.trans.tasks import auto_translate
 from weblate.trans.tests.test_views import FixtureTestCase, ViewTestCase
+
+
+class CheckLintTestCase(SimpleTestCase):
+    def test_check_id(self) -> None:
+        for check in CHECKS.values():
+            self.assertRegex(check.check_id, r"^[a-z][a-z0-9_-]*[a-z]$")
+            self.assertTrue(
+                check.description.endswith("."),
+                f"{check.__class__.__name__} description does not have a stop: {check.description}",
+            )
 
 
 class CheckModelTestCase(FixtureTestCase):
@@ -21,7 +32,7 @@ class CheckModelTestCase(FixtureTestCase):
     def test_check(self) -> None:
         check = self.create_check("same")
         self.assertEqual(
-            str(check.get_description()), "Source and translation are identical"
+            str(check.get_description()), "Source and translation are identical."
         )
         self.assertTrue(check.get_doc_url().endswith("user/checks.html#check-same"))
         self.assertEqual(str(check), "Unchanged translation")
@@ -43,7 +54,7 @@ class CheckModelTestCase(FixtureTestCase):
             check.get_description(),
             format_html(
                 '<a href="{0}?pos={1}" class="thumbnail img-check">'
-                '<img class="img-responsive" src="{0}?pos={1}" /></a>',
+                '<img class="img-fluid" src="{0}?pos={1}" /></a>',
                 url,
                 0,
             ),
@@ -76,15 +87,14 @@ class BatchUpdateTest(ViewTestCase):
         other = self.do_base()
         translation = other.translation_set.get(language_code="cs")
         auto_translate(
-            None,
-            translation.pk,
-            "translate",
-            "todo",
-            "others",
-            self.component.pk,
-            [],
-            99,
-            translation=translation,
+            user_id=None,
+            mode="translate",
+            q="state:<translated",
+            auto_source="others",
+            component=self.component.pk,
+            engines=[],
+            threshold=99,
+            translation_id=translation.pk,
         )
         unit = self.get_unit()
         self.assertEqual(unit.all_checks_names, set())

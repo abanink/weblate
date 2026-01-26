@@ -1,16 +1,21 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Count, Sum
 from django.shortcuts import redirect
 from django.utils.translation import gettext, ngettext
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 
 from weblate.lang.models import Language
+from weblate.trans.actions import ActionEvents
 from weblate.trans.bulk import bulk_perform
 from weblate.trans.forms import (
     BulkEditForm,
@@ -18,23 +23,26 @@ from weblate.trans.forms import (
     ReplaceForm,
     SearchForm,
 )
-from weblate.trans.models import Category, Change, Component, Project, Translation, Unit
+from weblate.trans.models import Category, Component, Project, Translation, Unit
+from weblate.trans.models.unit import fill_in_source_translation
 from weblate.trans.util import render
 from weblate.utils import messages
 from weblate.utils.ratelimit import check_rate_limit
 from weblate.utils.stats import CategoryLanguage, ProjectLanguage
 from weblate.utils.views import (
     get_paginator,
-    get_sort_name,
     import_message,
     parse_path_units,
     show_form_errors,
 )
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
+
 
 @login_required
 @require_POST
-def search_replace(request, path):
+def search_replace(request: AuthenticatedHttpRequest, path):
     obj, unit_set, context = parse_path_units(
         request,
         path,
@@ -44,7 +52,7 @@ def search_replace(request, path):
     if not request.user.has_perm("unit.edit", obj):
         raise PermissionDenied
 
-    form = ReplaceForm(request.POST)
+    form = ReplaceForm(obj=obj, data=request.POST)
 
     if not form.is_valid():
         messages.error(request, gettext("Could not process form!"))
@@ -76,6 +84,7 @@ def search_replace(request, path):
 
         if not confirm.is_valid():
             for unit in matching:
+                # This is rendered using format_unit_target which does split_plurals
                 unit.replacement = unit.target.replace(search_text, replacement)
             context.update(
                 {
@@ -97,9 +106,12 @@ def search_replace(request, path):
                     continue
                 unit.translate(
                     request.user,
-                    unit.target.replace(search_text, replacement),
+                    [
+                        plural.replace(search_text, replacement)
+                        for plural in unit.get_target_plurals()
+                    ],
                     unit.state,
-                    change_action=Change.ACTION_REPLACE,
+                    change_action=ActionEvents.REPLACE,
                 )
                 updated += 1
 
@@ -118,11 +130,9 @@ def search_replace(request, path):
 
 
 @never_cache
-def search(request, path=None):
+def search(request: AuthenticatedHttpRequest, path=None):
     """Perform site-wide search on units."""
     is_ratelimited = not check_rate_limit("search", request)
-    search_form = SearchForm(user=request.user, data=request.GET)
-    sort = get_sort_name(request)
     obj, unit_set, context = parse_path_units(
         request,
         path,
@@ -138,22 +148,33 @@ def search(request, path=None):
         ),
     )
 
+    search_form = SearchForm(request=request, data=request.GET, obj=obj)
     context["search_form"] = search_form
     context["back_url"] = obj.get_absolute_url() if obj is not None else None
 
     if not is_ratelimited and request.GET and search_form.is_valid():
         # This is ugly way to hide query builder when showing results
         search_form = SearchForm(
-            user=request.user, data=request.GET, show_builder=False
+            request=request, data=request.GET, show_builder=False, obj=obj
         )
         search_form.is_valid()
-        units = unit_set.prefetch_full().search(
+        units = unit_set.prefetch_bulk().search(
             search_form.cleaned_data.get("q", ""), project=context.get("project")
         )
+
+        # Count total strings and sum total words from the search results
+        aggregation = units.aggregate(
+            total_strings=Count("id"), total_words=Sum("num_words")
+        )
+        # Get the total strings and total words from the aggregation
+        total_strings = aggregation["total_strings"]
+        total_words = aggregation["total_words"]
 
         units = get_paginator(
             request, units.order_by_request(search_form.cleaned_data, obj)
         )
+        # Make sure source translation is available
+        fill_in_source_translation(units)
         # Rebuild context from scratch here to get new form
         context.update(
             {
@@ -166,8 +187,8 @@ def search(request, path=None):
                 "search_url": search_form.urlencode(),
                 "search_query": search_form.cleaned_data["q"],
                 "search_items": search_form.items(),
-                "sort_name": sort["name"],
-                "sort_query": sort["query"],
+                "total_strings": total_strings,
+                "total_words": total_words,
             }
         )
     elif is_ratelimited:
@@ -184,14 +205,14 @@ def search(request, path=None):
 @login_required
 @require_POST
 @never_cache
-def bulk_edit(request, path):
+def bulk_edit(request: AuthenticatedHttpRequest, path):
     obj, unit_set, context = parse_path_units(
         request,
         path,
         (Translation, Component, Project, ProjectLanguage, Category, CategoryLanguage),
     )
 
-    if not request.user.has_perm("translation.auto", obj) or not request.user.has_perm(
+    if not request.user.has_perm("unit.bulk_edit", obj) or not request.user.has_perm(
         "unit.edit", obj
     ):
         raise PermissionDenied

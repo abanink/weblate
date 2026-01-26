@@ -18,7 +18,7 @@ The project backups all translation content from Weblate (project, components,
 translations, string comments, suggestions or checks). It is suitable for
 transferring a project to another Weblate instance.
 
-You can perform a project backup in :guilabel:`Manage` ↓ :guilabel:`Backups`.
+You can perform a project backup in :guilabel:`Operations` ↓ :guilabel:`Backups`.
 The backup can be restored when creating a project (see
 :ref:`adding-projects`).
 
@@ -32,7 +32,7 @@ The generated backups are kept on the server as configured by
 :setting:`PROJECT_BACKUP_KEEP_DAYS` and :setting:`PROJECT_BACKUP_KEEP_COUNT`
 (it defaults to keep at most 3 backups for 30 days).
 
-Use the generated file to import project when :ref:`adding-projects`.
+Use the generated file to import project when :ref:`adding-projects` or in :wladmin:`import_projectbackup`.
 
 .. note::
 
@@ -41,6 +41,8 @@ Use the generated file to import project when :ref:`adding-projects`.
    :setting:`SIMPLIFY_LANGUAGES`. The restore will tell you which language
    codes could not be processed and you can then add missing language
    definitions manually.
+
+.. _automated-backup:
 
 Automated backup using BorgBackup
 ---------------------------------
@@ -160,8 +162,10 @@ via SSH using the Weblate SSH key:
 2. Install the SSH server on it (you will get it by default with most Linux distributions).
 3. Install `BorgBackup`_ on that server; most Linux distributions have packages available (see :doc:`borg:installation`).
 4. Choose an existing user or create a new user that will be used for backing up.
-5. Add Weblate SSH key to the user so that Weblate can SSH to the server without a password (see :ref:`weblate-ssh-key`).
-6. Configure the backup location in Weblate as ``user@host:/path/to/backups`` or ``ssh://user@host:port/path/to/backups``.
+5. Add Weblate SSH key to the user's `.ssh/authorized_keys` file, so that Weblate can SSH to the server without a password (see :ref:`weblate-ssh-key`).
+6. Create a user-writable directory where Weblate can remotely set up the Borg backup repository, for example in the home directory (i.e. ``/home/borg/backups``).
+7. Configure the backup location in Weblate as ``user@host:/home/borg/backups`` or ``ssh://user@host:port/home/borg/backups``.
+8. Once enabled, the backups will be triggered automatically daily. You can also manually trigger a backup from the Weblate UI.
 
 .. hint::
 
@@ -169,7 +173,10 @@ via SSH using the Weblate SSH key:
 
 .. seealso::
 
-   :ref:`weblate-ssh-key`, :doc:`borg:usage/general`
+   * :ref:`weblate-ssh-key`
+   * :doc:`borg:usage/general`
+
+.. _restore-borg:
 
 Restoring from BorgBackup
 -------------------------
@@ -203,14 +210,14 @@ The Borg session might look like this:
 
    $ borg list /tmp/xxx
    Enter passphrase for key /tmp/xxx:
-   2019-09-26T14:56:08                  Thu, 2019-09-26 14:56:08 [de0e0f13643635d5090e9896bdaceb92a023050749ad3f3350e788f1a65576a5]
+   2019-09-26T14:56:08 Thu, 2019-09-26 14:56:08 [de0e0f13643635d5090e9896bdaceb92a023050749ad3f3350e788f1a65576a5]
    $ borg extract /tmp/xxx::2019-09-26T14:56:08
    Enter passphrase for key /tmp/xxx:
 
 .. seealso::
 
-   :doc:`borg:usage/list`,
-   :doc:`borg:usage/extract`
+   * :doc:`borg:usage/list`
+   * :doc:`borg:usage/extract`
 
 
 .. _BorgBackup: https://www.borgbackup.org/
@@ -307,7 +314,7 @@ backups. The files are updated daily (requires a running Celery beats server, se
 The database backups are saved as plain text by default, but they can also be compressed
 or entirely skipped using :setting:`DATABASE_BACKUP`.
 
-To restore the database backup load it using database tools, for example:
+To restore the database backup, load it using database tools, for example:
 
 .. code-block:: shell
 
@@ -322,7 +329,7 @@ The version control repositories contain a copy of your upstream repositories
 with Weblate changes. If you have :ref:`component-push_on_commit` enabled for all your
 translation components, all Weblate changes are included upstream. No need to
 back up the repositories on the Weblate side as they can be cloned
-again from the upstream location(s) with no data loss.
+again from the upstream location with no data loss.
 
 SSH and GPG keys
 ++++++++++++++++
@@ -386,5 +393,5 @@ by following the backing up and restoration instructions above.
 
 .. seealso::
 
-   `Upgrading from Python 2 to Python 3 in the Weblate 3.11.1 documentation <https://docs.weblate.org/en/weblate-3.11.1/admin/upgrade.html#upgrading-from-python-2-to-python-3>`_,
-   :ref:`database-migration`
+   * `Upgrading from Python 2 to Python 3 in the Weblate 3.11.1 documentation <https://docs.weblate.org/en/weblate-3.11.1/admin/upgrade.html#upgrading-from-python-2-to-python-3>`_
+   * :ref:`database-migration`

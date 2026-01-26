@@ -1,8 +1,11 @@
 {% load i18n %}
+
 {% autoescape off %}
-{% if old %}
-{% blocktrans %}Changed translation in {{ translation }}{% endblocktrans %}
-{% else %}
-{% blocktrans %}New translation in {{ translation }}{% endblocktrans %}
-{% endif %}
+  {% if old %}
+    {# Translators: e-mail subject #}
+    {% blocktranslate %}Changed translation in {{ translation }}{% endblocktranslate %}
+  {% else %}
+    {# Translators: e-mail subject #}
+    {% blocktranslate %}New translation in {{ translation }}{% endblocktranslate %}
+  {% endif %}
 {% endautoescape %}

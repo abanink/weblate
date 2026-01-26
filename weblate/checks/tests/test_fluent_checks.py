@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from django.test import SimpleTestCase
 
@@ -21,11 +21,10 @@ from weblate.checks.fluent.syntax import (
     FluentSourceSyntaxCheck,
     FluentTargetSyntaxCheck,
 )
+from weblate.checks.tests.test_checks import MockUnit
 
 if TYPE_CHECKING:
-    from weblate.checks.base import Check
-
-from weblate.checks.tests.test_checks import MockUnit
+    from weblate.checks.base import BaseCheck, SourceCheck, TargetCheck
 
 
 class MockFluentTransUnit(MockUnit):
@@ -34,7 +33,7 @@ class MockFluentTransUnit(MockUnit):
         source: str,
         target: str = "",
         fluent_type: str | None = None,
-        unit_id: str | None = None,
+        unit_id: str = "",
         is_source: bool = False,
     ) -> None:
         self._fluent_type = fluent_type
@@ -69,7 +68,7 @@ class MockFluentTransUnit(MockUnit):
         return f"{fluent_type} ({source!r} -> {target!r})"
 
 
-class MockCheckModel:
+class MockCheckModel:  # noqa: B903
     # Mock Check object from weblate.checks.models
     def __init__(self, unit: MockFluentTransUnit) -> None:
         self.unit = unit
@@ -100,7 +99,7 @@ class FluentCheckTestBase(SimpleTestCase):
 
     def assert_check_description(
         self,
-        check: Check,
+        check: BaseCheck,
         unit: MockFluentTransUnit,
         description: str | re.Pattern,
     ) -> None:
@@ -118,8 +117,11 @@ class FluentCheckTestBase(SimpleTestCase):
                 f"Description for {check.check_id} should match regex for {unit}",
             )
 
-    SOURCE_CHECKS = [FluentSourceSyntaxCheck(), FluentSourceInnerHTMLCheck()]
-    TARGET_CHECKS = [
+    SOURCE_CHECKS: ClassVar[list[SourceCheck]] = [
+        FluentSourceSyntaxCheck(),
+        FluentSourceInnerHTMLCheck(),
+    ]
+    TARGET_CHECKS: ClassVar[list[TargetCheck]] = [
         FluentTargetSyntaxCheck(),
         FluentPartsCheck(),
         FluentReferencesCheck(),
@@ -131,12 +133,12 @@ class FluentCheckTestBase(SimpleTestCase):
         source: str,
         target: str,
         fluent_type: str,
-        check_state: dict[type[Check], bool] | None = None,
+        check_state: dict[type[BaseCheck], bool] | None = None,
     ) -> None:
         if check_state is None:
             check_state = {}
         source_unit = self._create_source_unit(source, fluent_type)
-        check: Check
+        check: BaseCheck
         for check in self.SOURCE_CHECKS:
             if check_state.get(check.__class__, True):
                 self.assertFalse(
@@ -163,7 +165,7 @@ class FluentCheckTestBase(SimpleTestCase):
 
     def assert_source_check_passes(
         self,
-        check: Check,
+        check: BaseCheck,
         source: str,
         fluent_type: str,
     ) -> None:
@@ -175,7 +177,7 @@ class FluentCheckTestBase(SimpleTestCase):
 
     def assert_source_check_fails(
         self,
-        check: Check,
+        check: BaseCheck,
         source: str,
         fluent_type: str,
         description: str | re.Pattern,
@@ -189,7 +191,7 @@ class FluentCheckTestBase(SimpleTestCase):
 
     def assert_target_check_passes(
         self,
-        check: Check,
+        check: BaseCheck,
         source: str,
         target: str,
         fluent_type: str,
@@ -202,7 +204,7 @@ class FluentCheckTestBase(SimpleTestCase):
 
     def assert_target_check_fails(
         self,
-        check: Check,
+        check: BaseCheck,
         source: str,
         target: str,
         fluent_type: str,
@@ -217,7 +219,7 @@ class FluentCheckTestBase(SimpleTestCase):
 
     def assert_source_highlights(
         self,
-        check: Check,
+        check: BaseCheck,
         source: str,
         fluent_type: str,
         highlights: list[tuple[int, str]],
@@ -287,7 +289,7 @@ class FluentSyntaxCheckTestBase:
     def test_syntax_errors(self) -> None:
         # The error message comes from translate, we just look for the prefix
         # and a non-empty error.
-        error_message = re.compile("^Fluent syntax error: .")
+        error_message = re.compile(r"^Fluent syntax error: .")
         for value in (
             "open { ref",
             "close } ref",
@@ -671,248 +673,297 @@ class TestFluentReferencesCheck(FluentCheckTestBase):
             # With selectors.
             (
                 "with { -term }",
-                "with { -term.starts-with-vowel ->\n"
-                "  [yes] an { -term }\n"
-                " *[no] a { -term }\n"
-                "}",
-                "with { -term.starts-with-vowel ->\n"
-                "  [yes] an\n"
-                " *[no] a\n"
-                "} { -term }",
-                "with { PLATFORM() ->\n"
-                "  [linux] { -term }!\n"
-                " *[other] { -term }\n"
-                "}",
-                "with { -term.starts-with-vowel ->\n"
-                "  [yes] an { -term }\n"
-                " *[no] a { PLATFORM() ->\n"
-                "    [linux] { -term }!\n"
-                "   *[other] { -term }\n"
-                "  }\n"
-                "} more",
+                (
+                    "with { -term.starts-with-vowel ->\n"
+                    "  [yes] an { -term }\n"
+                    " *[no] a { -term }\n"
+                    "}"
+                ),
+                "with { -term.starts-with-vowel ->\n  [yes] an\n *[no] a\n} { -term }",
+                "with { PLATFORM() ->\n  [linux] { -term }!\n *[other] { -term }\n}",
+                (
+                    "with { -term.starts-with-vowel ->\n"
+                    "  [yes] an { -term }\n"
+                    " *[no] a { PLATFORM() ->\n"
+                    "    [linux] { -term }!\n"
+                    "   *[other] { -term }\n"
+                    "  }\n"
+                    "} more"
+                ),
             ),
             (
                 "with { $var }",
-                "with { $var ->\n"
-                "  [one] { $var } variable\n"
-                " *[other] { $var } variables\n"
-                "}",
+                (
+                    "with { $var ->\n"
+                    "  [one] { $var } variable\n"
+                    " *[other] { $var } variables\n"
+                    "}"
+                ),
                 # $var is optional in the branch where we split over $var if the
                 # other branch contains it.
-                "with { $var ->\n"
-                "  [one] a variable\n"
-                " *[some] some variables\n"
-                "  [other] { $var } variables\n"
-                "}",
-                "with { $var ->\n"
-                "  [one] a variable\n"
-                "  [some] { NUMBER($var, param: 0) } variables\n"
-                " *[other] { $var } variables\n"
-                "}",
-                "with { $var ->\n"
-                "  [one] a variable\n"
-                " *[other] { FUNC($var) } variables\n"
-                "}",
+                (
+                    "with { $var ->\n"
+                    "  [one] a variable\n"
+                    " *[some] some variables\n"
+                    "  [other] { $var } variables\n"
+                    "}"
+                ),
+                (
+                    "with { $var ->\n"
+                    "  [one] a variable\n"
+                    "  [some] { NUMBER($var, param: 0) } variables\n"
+                    " *[other] { $var } variables\n"
+                    "}"
+                ),
+                (
+                    "with { $var ->\n"
+                    "  [one] a variable\n"
+                    " *[other] { FUNC($var) } variables\n"
+                    "}"
+                ),
                 # Extra variable in the selector is ok.
-                "with { FUNC2($var, $var2) ->\n"
-                "  [one] a variable\n"
-                " *[other] { $var } variables\n"
-                "}",
+                (
+                    "with { FUNC2($var, $var2) ->\n"
+                    "  [one] a variable\n"
+                    " *[other] { $var } variables\n"
+                    "}"
+                ),
                 # Appearing twice in the selector is ok.
-                "with { FUNC2($var, $var) ->\n"
-                "  [one] a variable\n"
-                " *[other] { $var } variables\n"
-                "}",
-                "with { $var }{ $var ->\n"
-                "  [one] variable\n"
-                " *[other] variables\n"
-                "}",
+                (
+                    "with { FUNC2($var, $var) ->\n"
+                    "  [one] a variable\n"
+                    " *[other] { $var } variables\n"
+                    "}"
+                ),
+                "with { $var }{ $var ->\n  [one] variable\n *[other] variables\n}",
                 # $var that is two selection expressions up still gets shared as
                 # long as each variant below has the same number of refs.
-                "with { $var ->\n"
-                "  [one] a variable\n"
-                " *[other] { PLATFORM() ->\n"
-                "    [linux] { $var } variables!\n"
-                "   *[other] { $var } variables\n"
-                "  }\n"
-                "}",
+                (
+                    "with { $var ->\n"
+                    "  [one] a variable\n"
+                    " *[other] { PLATFORM() ->\n"
+                    "    [linux] { $var } variables!\n"
+                    "   *[other] { $var } variables\n"
+                    "  }\n"
+                    "}"
+                ),
             ),
             (
                 # Two refs.
                 "{ $num } and { message }",
-                "{ $num ->\n"
-                "  [one] { $num } is { message }\n"
-                " *[other] { $num } are { message }\n"
-                "}",
-                "{ $num ->\n"
-                "  [one] { $num } is\n"
-                " *[other] { $num } are\n"
-                "} { message }",
-                "{ $num ->\n"
-                "  [one] a person is { message }\n"
-                " *[other] { $num } people are { message }\n"
-                "}",
-                "{ $num ->\n"
-                "  [one] a person\n"
-                " *[other] { $num } people\n"
-                "} really { $num ->\n"
-                "  [one] is { message }\n"
-                " *[other] are { message }\n"
-                "}",
-                "{ message } for { $num ->\n"
-                "  [one] a person\n"
-                " *[other] { $num } people\n"
-                "}",
-                "{ $num ->\n"
-                "  [one] a person is { message }\n"
-                " *[other] { $num ->\n"
-                "    [2] a pair of people are { message }\n"
-                "   *[other] { $num } people are { message }\n"
-                "  }\n"
-                "}",
+                (
+                    "{ $num ->\n"
+                    "  [one] { $num } is { message }\n"
+                    " *[other] { $num } are { message }\n"
+                    "}"
+                ),
+                "{ $num ->\n  [one] { $num } is\n *[other] { $num } are\n} { message }",
+                (
+                    "{ $num ->\n"
+                    "  [one] a person is { message }\n"
+                    " *[other] { $num } people are { message }\n"
+                    "}"
+                ),
+                (
+                    "{ $num ->\n"
+                    "  [one] a person\n"
+                    " *[other] { $num } people\n"
+                    "} really { $num ->\n"
+                    "  [one] is { message }\n"
+                    " *[other] are { message }\n"
+                    "}"
+                ),
+                (
+                    "{ message } for { $num ->\n"
+                    "  [one] a person\n"
+                    " *[other] { $num } people\n"
+                    "}"
+                ),
+                (
+                    "{ $num ->\n"
+                    "  [one] a person is { message }\n"
+                    " *[other] { $num ->\n"
+                    "    [2] a pair of people are { message }\n"
+                    "   *[other] { $num } people are { message }\n"
+                    "  }\n"
+                    "}"
+                ),
             ),
             (
                 # Two variable refs.
                 "{ $num } and { $var }",
-                "{ $num ->\n"
-                "  [zero] none\n"
-                " *[other] { $num }\n"
-                "} and { $var ->\n"
-                " *[yes] { $var }\n"
-                "  [no] none\n"
-                "}",
-                "{ $num ->\n"
-                "  [zero] none and { $var ->\n"
-                "   *[no] none\n"
-                "    [yes] { $var }"
-                "    [third] nope\n"
-                "  }\n"
-                " *[other] { $num } and { $var ->\n"
-                "   *[yes] { $var }\n"
-                "    [no] nothing\n"
-                "  }\n"
-                "}",
+                (
+                    "{ $num ->\n"
+                    "  [zero] none\n"
+                    " *[other] { $num }\n"
+                    "} and { $var ->\n"
+                    " *[yes] { $var }\n"
+                    "  [no] none\n"
+                    "}"
+                ),
+                (
+                    "{ $num ->\n"
+                    "  [zero] none and { $var ->\n"
+                    "   *[no] none\n"
+                    "    [yes] { $var }"
+                    "    [third] nope\n"
+                    "  }\n"
+                    " *[other] { $num } and { $var ->\n"
+                    "   *[yes] { $var }\n"
+                    "    [no] nothing\n"
+                    "  }\n"
+                    "}"
+                ),
                 # If both refs appear in the same selector, they can both be
                 # shared amongst the branches.
-                "{ FUNC($num, $var) ->\n"
-                "  [0] nothing\n"
-                " *[other] { $num } are { $var }\n"
-                "}",
-                "{ FUNC($var, $num) ->\n"
-                "  [0] nothing { $var }\n"
-                "  [1] a { $var }\n"
-                " *[other] just { $num }\n"
-                "}",
-                "{ FUNC($var, $num) ->\n"
-                "  [0] nothing { $var }\n"
-                "  [1] a { $num }\n"
-                " *[other] just { $num } and { $var }\n"
-                "}",
-                "{ FUNC($num, $var) ->\n"
-                "  [zero] none\n"
-                " *[other] { $num } and { $var ->\n"
-                "   *[yes] { $var }\n"
-                "    [no] nothing\n"
-                "  }\n"
-                "}",
-                "{ FUNC($num, $var) ->\n"
-                "  [zero] { $var ->\n"
-                "    [a] nothing\n"
-                "   *[b] { $var }\n"
-                "  }\n"
-                " *[other] { $num ->\n"
-                "   *[other] { $num }\n"
-                "    [zero] nothing\n"
-                "  }\n"
-                "}",
+                (
+                    "{ FUNC($num, $var) ->\n"
+                    "  [0] nothing\n"
+                    " *[other] { $num } are { $var }\n"
+                    "}"
+                ),
+                (
+                    "{ FUNC($var, $num) ->\n"
+                    "  [0] nothing { $var }\n"
+                    "  [1] a { $var }\n"
+                    " *[other] just { $num }\n"
+                    "}"
+                ),
+                (
+                    "{ FUNC($var, $num) ->\n"
+                    "  [0] nothing { $var }\n"
+                    "  [1] a { $num }\n"
+                    " *[other] just { $num } and { $var }\n"
+                    "}"
+                ),
+                (
+                    "{ FUNC($num, $var) ->\n"
+                    "  [zero] none\n"
+                    " *[other] { $num } and { $var ->\n"
+                    "   *[yes] { $var }\n"
+                    "    [no] nothing\n"
+                    "  }\n"
+                    "}"
+                ),
+                (
+                    "{ FUNC($num, $var) ->\n"
+                    "  [zero] { $var ->\n"
+                    "    [a] nothing\n"
+                    "   *[b] { $var }\n"
+                    "  }\n"
+                    " *[other] { $num ->\n"
+                    "   *[other] { $num }\n"
+                    "    [zero] nothing\n"
+                    "  }\n"
+                    "}"
+                ),
             ),
             (
                 # Same ref appears twice, it will also be shared across
                 # variants.
                 "{ $num } and { $num }",
                 "{ $num ->\n  [zero] none\n *[other] { $num } and { $num }\n}",
-                "{ $num ->\n"
-                "  [zero] none\n"
-                "  [one] just { $num }\n"
-                " *[other] { $num } and { $num }\n"
-                "}",
-                "{ $num ->\n"
-                "  [zero] none\n"
-                " *[other] { $num } and { $num ->\n"
-                "    [2] a pair\n"
-                "   *[other] { $num }\n"
-                "  }\n"
-                "}",
-                "{ $num ->\n"
-                "  [zero] none\n"
-                " *[other] have { $num ->\n"
-                "    [2] a pair\n"
-                "   *[other] { $num } and { $num }\n"
-                "  }\n"
-                "}",
+                (
+                    "{ $num ->\n"
+                    "  [zero] none\n"
+                    "  [one] just { $num }\n"
+                    " *[other] { $num } and { $num }\n"
+                    "}"
+                ),
+                (
+                    "{ $num ->\n"
+                    "  [zero] none\n"
+                    " *[other] { $num } and { $num ->\n"
+                    "    [2] a pair\n"
+                    "   *[other] { $num }\n"
+                    "  }\n"
+                    "}"
+                ),
+                (
+                    "{ $num ->\n"
+                    "  [zero] none\n"
+                    " *[other] have { $num ->\n"
+                    "    [2] a pair\n"
+                    "   *[other] { $num } and { $num }\n"
+                    "  }\n"
+                    "}"
+                ),
             ),
             (
                 # Have two variants with different refs, just need at least one
                 # match for each set of refs.
-                "value { PLATFORM() ->\n"
-                "  [linux] none\n"
-                " *[other] with { -term }\n"
-                "}",
-                "value { PLATFORM() ->\n"
-                "  [linux] none\n"
-                "  [macos] and { -term }\n"
-                " *[other] with { -term }\n"
-                "}",
-                "value { -term.attr ->\n"
-                "  [a] none\n"
-                "  [b] another\n"
-                " *[c] with { -term }\n"
-                "}",
-                "value { -term.attr ->\n"
-                "  [a] none\n"
-                "  [b] another\n"
-                " *[c] with { -term }\n"
-                "} and { $var ->\n"
-                "  [one] some more\n"
-                " *[other] a lot\n"
-                "}",
+                "value { PLATFORM() ->\n  [linux] none\n *[other] with { -term }\n}",
+                (
+                    "value { PLATFORM() ->\n"
+                    "  [linux] none\n"
+                    "  [macos] and { -term }\n"
+                    " *[other] with { -term }\n"
+                    "}"
+                ),
+                (
+                    "value { -term.attr ->\n"
+                    "  [a] none\n"
+                    "  [b] another\n"
+                    " *[c] with { -term }\n"
+                    "}"
+                ),
+                (
+                    "value { -term.attr ->\n"
+                    "  [a] none\n"
+                    "  [b] another\n"
+                    " *[c] with { -term }\n"
+                    "} and { $var ->\n"
+                    "  [one] some more\n"
+                    " *[other] a lot\n"
+                    "}"
+                ),
             ),
             (
                 # Have three variants.
-                "{ $var ->\n"
-                " *[a] a { $num } and { -term }\n"
-                "  [b] { message.title } and b { $num }\n"
-                "  [c] c { $num }\n"
-                "}",
-                "{ $var ->\n"
-                " *[a] a { $num } and { -term }\n"
-                "  [b] { message.title } and b { $num }\n"
-                "  [c] c { $num }\n"
-                "  [d] d { -term } and { $num }\n"
-                "}",
-                "{ $var ->\n"
-                " *[a] a\n"
-                "  [b] { message.title }\n"
-                "  [c] c { -term }\n"
-                "} and { $num ->\n"
-                "  [one] single\n"
-                " *[other] { $num }\n"
-                "}",
+                (
+                    "{ $var ->\n"
+                    " *[a] a { $num } and { -term }\n"
+                    "  [b] { message.title } and b { $num }\n"
+                    "  [c] c { $num }\n"
+                    "}"
+                ),
+                (
+                    "{ $var ->\n"
+                    " *[a] a { $num } and { -term }\n"
+                    "  [b] { message.title } and b { $num }\n"
+                    "  [c] c { $num }\n"
+                    "  [d] d { -term } and { $num }\n"
+                    "}"
+                ),
+                (
+                    "{ $var ->\n"
+                    " *[a] a\n"
+                    "  [b] { message.title }\n"
+                    "  [c] c { -term }\n"
+                    "} and { $num ->\n"
+                    "  [one] single\n"
+                    " *[other] { $num }\n"
+                    "}"
+                ),
                 # Selector references are still shared amongst branches with
                 # different references.
-                "{ $num ->\n"
-                " *[other] a { $num } and { -term }\n"
-                "  [zero] none\n"
-                "  [one] { message.title }\n"
-                "}",
-                "{ $var ->\n"
-                " *[a] a { $num ->\n"
-                "    [one] { -term }\n"
-                "   *[other] { $num } { -term }\n"
-                "  } more\n"
-                "  [b] { message.title } and b { $num }\n"
-                "  [c] c { $num }\n"
-                "}",
+                (
+                    "{ $num ->\n"
+                    " *[other] a { $num } and { -term }\n"
+                    "  [zero] none\n"
+                    "  [one] { message.title }\n"
+                    "}"
+                ),
+                (
+                    "{ $var ->\n"
+                    " *[a] a { $num ->\n"
+                    "    [one] { -term }\n"
+                    "   *[other] { $num } { -term }\n"
+                    "  } more\n"
+                    "  [b] { message.title } and b { $num }\n"
+                    "  [c] c { $num }\n"
+                    "}"
+                ),
             ),
         ):
             # The check should be transitive and symmetric, so the check should
@@ -1058,11 +1109,13 @@ class TestFluentReferencesCheck(FluentCheckTestBase):
                 # All have the same refs.
                 "source { $num }",
                 "source { NUMBER($num) }",
-                "source { PLATFORM() ->\n"
-                "  [linux] { $num }!\n"
-                "  [macos] { $num }?\n"
-                " *[rest] { $num }\n"
-                "}",
+                (
+                    "source { PLATFORM() ->\n"
+                    "  [linux] { $num }!\n"
+                    "  [macos] { $num }?\n"
+                    " *[rest] { $num }\n"
+                    "}"
+                ),
                 "source { $num ->\n  [zero] nothing\n *[other] { $num }\n}",
             ):
                 self.assert_target_check_fails(
@@ -1090,10 +1143,7 @@ class TestFluentReferencesCheck(FluentCheckTestBase):
                 self.assert_target_check_fails(
                     self.check,
                     source,
-                    "{ PLATFORM() ->\n"
-                    "  [linux] a { num }\n"
-                    " *[other] b { num }\n"
-                    "}",
+                    "{ PLATFORM() ->\n  [linux] a { num }\n *[other] b { num }\n}",
                     fluent_type,
                     # Even though we have multiple target variants, they each
                     # have the same missing and extra refs, so the variants are
@@ -1210,10 +1260,7 @@ class TestFluentReferencesCheck(FluentCheckTestBase):
                 self.assert_target_check_fails(
                     self.check,
                     source,
-                    "{ $var ->\n"
-                    "  [one] a { $num }\n"
-                    " *[other] { $var } { $num }\n"
-                    "}",
+                    "{ $var ->\n  [one] a { $num }\n *[other] { $var } { $num }\n}",
                     fluent_type,
                     # Even though the $var ref is shared between the variants,
                     # since it is an extra ref we do not report it for the
@@ -1225,22 +1272,23 @@ class TestFluentReferencesCheck(FluentCheckTestBase):
 
             for source in (
                 "{ $num } and { $var }",
-                "{ $var ->\n"
-                "  *[yes] { $num } and { $var }\n"
-                "   [no] { $num }\n"
-                "}",
-                "{ $num ->\n"
-                "  *[other] { $num }\n"
-                "   [0] none\n"
-                "} and { $var ->\n"
-                '  [no] { "" }\n'
-                " *[yes] { $var }\n"
-                "}",
-                "{ FUNC($num, $var) ->\n"
-                "  *[yes] { $num } and { $var }\n"
-                "   [maybe] { $num }\n"
-                "   [no] nothing\n"
-                "}",
+                "{ $var ->\n  *[yes] { $num } and { $var }\n   [no] { $num }\n}",
+                (
+                    "{ $num ->\n"
+                    "  *[other] { $num }\n"
+                    "   [0] none\n"
+                    "} and { $var ->\n"
+                    '  [no] { "" }\n'
+                    " *[yes] { $var }\n"
+                    "}"
+                ),
+                (
+                    "{ FUNC($num, $var) ->\n"
+                    "  *[yes] { $num } and { $var }\n"
+                    "   [maybe] { $num }\n"
+                    "   [no] nothing\n"
+                    "}"
+                ),
             ):
                 # If a sub-selector does not share the same references, it will
                 # not be shared across super-selectors either.
@@ -1344,10 +1392,7 @@ class TestFluentReferencesCheck(FluentCheckTestBase):
             self.assert_target_check_fails(
                 self.check,
                 "{ $n ->\n  [a] { $n } and { -term }\n *[b] { message }\n}",
-                "{ $n ->\n"
-                "  [x] { $n } and { message }\n"
-                " *[y] { $ns } and { -term }\n"
-                "}",
+                "{ $n ->\n  [x] { $n } and { message }\n *[y] { $ns } and { -term }\n}",
                 fluent_type,
                 "The following variants in the original Fluent value do not "
                 "have at least one matching variant in the translation with "
@@ -1473,10 +1518,7 @@ class TestFluentReferencesCheck(FluentCheckTestBase):
         # With source variants having different references.
         self.assert_target_check_fails(
             self.check,
-            ".title = { PLATFORM() ->\n"
-            "  [linux]  with { -term }\n"
-            " *[other] none\n"
-            "}",
+            ".title = { PLATFORM() ->\n  [linux]  with { -term }\n *[other] none\n}",
             ".title = { -terms }",
             "Message",
             "The following variants in the original Fluent <code>title</code> "
@@ -1726,7 +1768,7 @@ class FluentInnerHTMLCheckTestBase:
             "with <SPAN>capitals</SPAN> or <sPaN>mix</sPaN>",
             "with <span DATA-val='something'></span>",
             # Can include a "'" in double quotes.
-            "before <img data-val1=\"val'ue\" other='ok'/> after",
+            "before <img data-val1=\"val'ue\" other='ok'/> after",  # codespell:ignore
             # And '"' in single quotes.
             'before <my-img data-val=\'val"ue\' other="ok"></my-img> after',  # codespell:ignore
             # Empty values.
@@ -1788,27 +1830,30 @@ class FluentInnerHTMLCheckTestBase:
             'a&{ "{" }b',
             'a{ "&{b" }c',
             # With variants, each variant is parsed individually.
-            "<p>add ${ $n ->\n"
-            "  [one] { $n } tab\n"
-            " *[other] { $n } tabs\n"
-            "}</p>",
+            "<p>add ${ $n ->\n  [one] { $n } tab\n *[other] { $n } tabs\n}</p>",
             # Need not match.
-            "<p>add ${ $n ->\n"
-            "  [one] { $n } tab <br> more\n"
-            " *[other] { $n } tabs\n"
-            "}</p>",
-            "<p>add ${ $n ->\n"
-            "  [one] { $n } tab <br> more\n"
-            " *[other] { $n } tabs\n"
-            "} and ${ $var ->\n"
-            "  [yes] <img>\n"
-            " *[no] none\n"
-            "}</p>",
-            "<p>add ${ PLATFORM() ->\n"
-            "  [linux] tab </p>\n"
-            "  [macos] <em data-var='ok'>{ -term }</em> tabs </p>\n"
-            " *[other] { $n } <br> tabs </p>\n"
-            "}",
+            (
+                "<p>add ${ $n ->\n"
+                "  [one] { $n } tab <br> more\n"
+                " *[other] { $n } tabs\n"
+                "}</p>"
+            ),
+            (
+                "<p>add ${ $n ->\n"
+                "  [one] { $n } tab <br> more\n"
+                " *[other] { $n } tabs\n"
+                "} and ${ $var ->\n"
+                "  [yes] <img>\n"
+                " *[no] none\n"
+                "}</p>"
+            ),
+            (
+                "<p>add ${ PLATFORM() ->\n"
+                "  [linux] tab </p>\n"
+                "  [macos] <em data-var='ok'>{ -term }</em> tabs </p>\n"
+                " *[other] { $n } <br> tabs </p>\n"
+                "}"
+            ),
         ):
             for fluent_type in ("Message", "Term"):
                 self.assert_html_ok(value, fluent_type)
@@ -2227,10 +2272,7 @@ class FluentInnerHTMLCheckTestBase:
 
             # Some errors with variants.
             self.assert_html_error(
-                "{ $var ->\n"
-                "  [one] <span>open\n"
-                " *[other] none\n"
-                "} close</span>",
+                "{ $var ->\n  [one] <span>open\n *[other] none\n} close</span>",
                 fluent_type,
                 "Unmatched HTML end tag: <code>&lt;/span&gt;</code>.",
             )
@@ -2327,54 +2369,70 @@ class FluentTargetInnerHTMLCheckTest(FluentCheckTestBase, FluentInnerHTMLCheckTe
             # With selectors.
             (
                 "<p>a<i>{ $num }</i>c and <img data-val='ok'></p>",
-                "<p>{ $num ->\n"
-                "  [zero] <i>none</i>\n"
-                " *[other] <i>{ $num }</i>\n"
-                "} and <img data-val='ok' ></p>",
-                "<p>{ $num ->\n"
-                '  [zero] <img data-val="ok"/> <i>none</i></p>\n'
-                " *[other] <i>{ $num }</i> and <img data-val='ok'></p>\n"
-                "}",
-                "<p> <i>{ $num ->\n"
-                "  [zero] none\n"
-                "  [one] one\n"
-                " *[other] { $num }\n"
-                "}</i> and { FUNC() ->\n"
-                "  [a] a <img data-val='ok'></p>\n"
-                " *[b] b <img data-val='ok'></p>\n"
-                "}",
+                (
+                    "<p>{ $num ->\n"
+                    "  [zero] <i>none</i>\n"
+                    " *[other] <i>{ $num }</i>\n"
+                    "} and <img data-val='ok' ></p>"
+                ),
+                (
+                    "<p>{ $num ->\n"
+                    '  [zero] <img data-val="ok"/> <i>none</i></p>\n'
+                    " *[other] <i>{ $num }</i> and <img data-val='ok'></p>\n"
+                    "}"
+                ),
+                (
+                    "<p> <i>{ $num ->\n"
+                    "  [zero] none\n"
+                    "  [one] one\n"
+                    " *[other] { $num }\n"
+                    "}</i> and { FUNC() ->\n"
+                    "  [a] a <img data-val='ok'></p>\n"
+                    " *[b] b <img data-val='ok'></p>\n"
+                    "}"
+                ),
             ),
             # With selectors with different elements in each variant.
             (
-                "{ FUNC() ->\n"
-                "  [yes] <img data-val1='yes' data-val2='y'> and <br>\n"
-                " *[no] <img data-val1='no'> and <br> and <i>more</i>\n"
-                "}",
-                "<img { FUNC() ->\n"
-                "  [yes] data-val1='yes' data-val2='y'>\n"
-                " *[no] data-val1='no'> and <i>more</i>\n"
-                "} and <br>",
+                (
+                    "{ FUNC() ->\n"
+                    "  [yes] <img data-val1='yes' data-val2='y'> and <br>\n"
+                    " *[no] <img data-val1='no'> and <br> and <i>more</i>\n"
+                    "}"
+                ),
+                (
+                    "<img { FUNC() ->\n"
+                    "  [yes] data-val1='yes' data-val2='y'>\n"
+                    " *[no] data-val1='no'> and <i>more</i>\n"
+                    "} and <br>"
+                ),
             ),
             (
-                "<p>{ $var ->\n"
-                "  [b] add <b>tag</b>\n"
-                " *[i] add <i data-val='some val'>tag</i>\n"
-                "  [strong] add <strong>t<br>ag</strong>\n"
-                "}</p>",
-                "<p>{ FUNC($var) ->\n"
-                "  [x] add <b>tag</b>\n"
-                "  [i] add <i data-val='some val'>tag</i>\n"
-                "  [strong] <strong><br></strong>\n"
-                " *[y] add <b>tags</b>\n"
-                "}</p>",
-                "{ FUNC($var) ->\n"
-                "  [x] <p> add <b>tag</b>\n"
-                "  [i] <p>add <i data-val='some val'>tag</i> more\n"
-                " *[strong] <p>{ $var ->\n"
-                "    [a] <strong><br></strong>\n"
-                "   *[b] <strong>before<br>after</strong>\n"
-                "  }\n"
-                "}</p>",
+                (
+                    "<p>{ $var ->\n"
+                    "  [b] add <b>tag</b>\n"
+                    " *[i] add <i data-val='some val'>tag</i>\n"
+                    "  [strong] add <strong>t<br>ag</strong>\n"
+                    "}</p>"
+                ),
+                (
+                    "<p>{ FUNC($var) ->\n"
+                    "  [x] add <b>tag</b>\n"
+                    "  [i] add <i data-val='some val'>tag</i>\n"
+                    "  [strong] <strong><br></strong>\n"
+                    " *[y] add <b>tags</b>\n"
+                    "}</p>"
+                ),
+                (
+                    "{ FUNC($var) ->\n"
+                    "  [x] <p> add <b>tag</b>\n"
+                    "  [i] <p>add <i data-val='some val'>tag</i> more\n"
+                    " *[strong] <p>{ $var ->\n"
+                    "    [a] <strong><br></strong>\n"
+                    "   *[b] <strong>before<br>after</strong>\n"
+                    "  }\n"
+                    "}</p>"
+                ),
             ),
         ):
             # The check should be transitive and symmetric, so the check should
@@ -2558,19 +2616,25 @@ class FluentTargetInnerHTMLCheckTest(FluentCheckTestBase, FluentInnerHTMLCheckTe
             # With selectors in the source that all have the same tags.
             for source in (
                 # Equivalent sources.
-                "<p class='ok'><span data-val='a'>first</span><br>"
-                "<span data-val='b'>second</span></p>",
-                "<p class='ok'>{ FUNC() ->\n"
-                "  [a] <span data-val='a'>a</span><br>"
-                "<span data-val='b'>b</span>\n"
-                " *[b] <span data-val='b'>B</span><br>"
-                "<span data-val='a'>A</span>\n"
-                "}</p>",
-                '<p class="ok"><span data-val="a"></span><br>{ $var ->\n'
-                "  [1] <span data-val='b'>one</span></p>\n"
-                "  [2] <span data-val='b'>two</span></p>\n"
-                " *[3] <span data-val='b'>three</span></p>\n"
-                "}",
+                (
+                    "<p class='ok'><span data-val='a'>first</span><br>"
+                    "<span data-val='b'>second</span></p>"
+                ),
+                (
+                    "<p class='ok'>{ FUNC() ->\n"
+                    "  [a] <span data-val='a'>a</span><br>"
+                    "<span data-val='b'>b</span>\n"
+                    " *[b] <span data-val='b'>B</span><br>"
+                    "<span data-val='a'>A</span>\n"
+                    "}</p>"
+                ),
+                (
+                    '<p class="ok"><span data-val="a"></span><br>{ $var ->\n'
+                    "  [1] <span data-val='b'>one</span></p>\n"
+                    "  [2] <span data-val='b'>two</span></p>\n"
+                    " *[3] <span data-val='b'>three</span></p>\n"
+                    "}"
+                ),
             ):
                 self.assert_target_check_fails(
                     self.check,
@@ -2645,10 +2709,7 @@ class FluentTargetInnerHTMLCheckTest(FluentCheckTestBase, FluentInnerHTMLCheckTe
             )
             self.assert_target_check_fails(
                 self.check,
-                "{ PLATFORM() ->\n"
-                "  [yes] <a data-val='ok'>text</a>\n"
-                " *[no] none\n"
-                "}",
+                "{ PLATFORM() ->\n  [yes] <a data-val='ok'>text</a>\n *[no] none\n}",
                 "<a data-val='not'>text</a>",
                 fluent_type,
                 "The following variants in the original Fluent value do not "

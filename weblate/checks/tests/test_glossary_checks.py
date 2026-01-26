@@ -2,10 +2,19 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-from weblate.checks.glossary import GlossaryCheck
+from __future__ import annotations
+
+from random import choice
+from typing import TYPE_CHECKING
+
+from weblate.checks.glossary import GlossaryCheck, ProhibitedInitialCharacterCheck
 from weblate.checks.models import Check
 from weblate.trans.tests.test_views import ViewTestCase
+from weblate.utils.csv import PROHIBITED_INITIAL_CHARS
 from weblate.utils.state import STATE_TRANSLATED
+
+if TYPE_CHECKING:
+    from weblate.trans.models import Unit
 
 
 class GlossaryCheckTest(ViewTestCase):
@@ -24,8 +33,8 @@ class GlossaryCheckTest(ViewTestCase):
             language=self.unit.translation.language
         )
 
-    def add_glossary(self, target, context="") -> None:
-        self.glossary.add_unit(None, context, "hello", target)
+    def add_glossary(self, target: str, context="") -> None:
+        self.glossary.add_unit(None, context, "hello", target, author=self.user)
 
     def test_missing(self) -> None:
         self.assertFalse(
@@ -95,3 +104,59 @@ class GlossaryCheckTest(ViewTestCase):
             self.check.get_description(check),
             "Following terms are not translated according to glossary: hello",
         )
+
+
+class ProhibitedInitialCharacterCheckTest(ViewTestCase):
+    check = ProhibitedInitialCharacterCheck()
+    CREATE_GLOSSARIES = True
+
+    def setUp(self) -> None:
+        """Set up the test."""
+        super().setUp()
+        self.glossary = self.project.glossaries[0].translation_set.get(
+            language_code="cs"
+        )
+
+    def add_glossary(self, source: str) -> Unit:
+        """Add a glossary term."""
+        return self.glossary.add_unit(
+            None, context="", source=source, target=source, author=self.user
+        )
+
+    def get_term(self) -> str:
+        char = choice(list(PROHIBITED_INITIAL_CHARS))  # noqa: S311
+        return f"{char} glossary term"
+
+    def test_prohibited_initial_character(self) -> None:
+        """Check that the check identifies prohibited characters."""
+        valid_unit = self.add_glossary("glossary term")
+        self.assertEqual(Check.objects.filter(name=self.check.check_id).count(), 0)
+        self.assertFalse(
+            self.check.check_target(["glossary term"], ["glossary term"], valid_unit)
+        )
+
+        for i, term in enumerate(PROHIBITED_INITIAL_CHARS, start=1):
+            unit = self.add_glossary(term)
+            self.assertEqual(
+                Check.objects.filter(name=self.check.check_id).count(), i * 2
+            )
+            self.assertTrue(self.check.check_target([term], [term], unit))
+
+    def test_ignore_prohibited_initial_character(self) -> None:
+        """Check that the check can be ignored with flag."""
+        term = self.get_term()
+        unit = self.add_glossary(term)
+        unit.extra_flags = "ignore-prohibited-initial-character"
+
+        # reset all_flags to reset cached_property
+        unit.all_flags = unit.get_all_flags()
+        self.assertFalse(self.check.check_target([term], [term], unit))
+
+    def test_non_glossary(self) -> None:
+        self.assertEqual(Check.objects.filter(name=self.check.check_id).count(), 0)
+        translation = self.get_translation()
+        term = self.get_term()
+        translation.add_unit(
+            None, context="", source=term, target=term, author=self.user
+        )
+        self.assertEqual(Check.objects.filter(name=self.check.check_id).count(), 0)

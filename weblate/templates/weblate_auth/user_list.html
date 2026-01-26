@@ -1,12 +1,15 @@
 {% extends "base.html" %}
+
 {% load i18n %}
 
 {% block breadcrumbs %}
-<li><a href="{% url "user_list" %}">{% trans "Users" %}</a></li>
-{% endblock %}
+  <li>
+    <a class="breadcrumb-item" href="{% url "user_list" %}">{% translate "Users" %}</a>
+  </li>
+{% endblock breadcrumbs %}
 
 {% block content %}
 
-{% include "snippets/user-list.html" %}
+  {% include "snippets/user-list.html" %}
 
-{% endblock %}
+{% endblock content %}

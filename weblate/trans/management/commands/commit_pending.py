@@ -4,14 +4,19 @@
 
 from __future__ import annotations
 
-from weblate.trans.management.commands import WeblateLangCommand
+from typing import TYPE_CHECKING
+
 from weblate.trans.tasks import commit_pending
+from weblate.utils.management.base import WeblateLangCommand
+
+if TYPE_CHECKING:
+    from django.core.management.base import CommandParser
 
 
 class Command(WeblateLangCommand):
     help = "commits pending changes older than given age"
 
-    def add_arguments(self, parser) -> None:
+    def add_arguments(self, parser: CommandParser) -> None:
         super().add_arguments(parser)
         parser.add_argument(
             "--age",

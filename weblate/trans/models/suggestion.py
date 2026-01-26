@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from copy import copy
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.db import models, transaction
@@ -12,38 +13,53 @@ from django.db.models import Q, Sum
 from django.utils.translation import gettext
 
 from weblate.checks.models import CHECKS, Check
+from weblate.trans.actions import ActionEvents
 from weblate.trans.autofixes import fix_target
+from weblate.trans.exceptions import SuggestionSimilarToTranslationError
 from weblate.trans.mixins import UserDisplayMixin
-from weblate.trans.models.change import Change
 from weblate.trans.util import join_plural, split_plural
 from weblate.utils import messages
 from weblate.utils.antispam import report_spam
 from weblate.utils.request import get_ip_address, get_user_agent_raw
 from weblate.utils.state import STATE_TRANSLATED
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest, User
+    from weblate.trans.models.unit import Unit
+
 
 class SuggestionManager(models.Manager["Suggestion"]):
-    def add(self, unit, target: list[str], request, vote: bool = False, user=None):
+    def add(
+        self,
+        unit: Unit,
+        target: list[str],
+        request: AuthenticatedHttpRequest | None,
+        vote: bool = False,
+        user: User | None = None,
+        raise_exception: bool = True,
+    ):
         """Create new suggestion for this unit."""
         from weblate.auth.models import get_anonymous
 
         # Apply fixups
-        fixups = []
+        fixups: list[str] = []
         if not unit.translation.is_template:
             target, fixups = fix_target(target, unit)
 
-        target = join_plural(target)
+        target_merged = join_plural(target)
 
         if user is None:
             user = request.user if request else get_anonymous()
 
-        if unit.translated and unit.target == target:
+        if unit.translated and unit.target == target_merged:
+            if raise_exception:
+                raise SuggestionSimilarToTranslationError
             return False
 
-        same_suggestions = self.filter(target=target, unit=unit)
+        same_suggestions = self.filter(target=target_merged, unit=unit)
         # Do not rely on the SQL as MySQL compares strings case insensitive
         for same in same_suggestions:
-            if same.target == target:
+            if same.target == target_merged:
                 if same.user == user or not vote:
                     return False
                 same.add_vote(request, Vote.POSITIVE)
@@ -51,7 +67,7 @@ class SuggestionManager(models.Manager["Suggestion"]):
 
         # Create the suggestion
         suggestion = self.create(
-            target=target,
+            target=target_merged,
             unit=unit,
             user=user,
             userdetails={
@@ -63,10 +79,10 @@ class SuggestionManager(models.Manager["Suggestion"]):
 
         # Record in change
         change = unit.generate_change(
-            user, user, Change.ACTION_SUGGESTION, check_new=False, save=False
+            user, user, ActionEvents.SUGGESTION, check_new=False, save=False
         )
         change.suggestion = suggestion
-        change.target = target
+        change.target = target_merged
         change.save()
 
         # Add unit vote
@@ -86,7 +102,7 @@ class SuggestionQuerySet(models.QuerySet):
     def order(self):
         return self.order_by("-timestamp")
 
-    def filter_access(self, user):
+    def filter_access(self, user: User):
         result = self
         if user.needs_project_filter:
             result = result.filter(
@@ -124,9 +140,7 @@ class Suggestion(models.Model, UserDisplayMixin):
         verbose_name_plural = "string suggestions"
 
     def __str__(self) -> str:
-        return "suggestion for {} by {}".format(
-            self.unit, self.user.username if self.user else "unknown"
-        )
+        return f"suggestion for {self.unit} by {self.user.username if self.user else 'unknown'}"
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -134,7 +148,10 @@ class Suggestion(models.Model, UserDisplayMixin):
 
     @transaction.atomic
     def accept(
-        self, request, permission="suggestion.accept", state=STATE_TRANSLATED
+        self,
+        request: AuthenticatedHttpRequest,
+        permission: str = "suggestion.accept",
+        state=STATE_TRANSLATED,
     ) -> None:
         if not request.user.has_perm(permission, self.unit):
             messages.error(request, gettext("Could not accept suggestion!"))
@@ -151,7 +168,7 @@ class Suggestion(models.Model, UserDisplayMixin):
                 split_plural(self.target),
                 state,
                 author=author,
-                change_action=Change.ACTION_ACCEPT,
+                change_action=ActionEvents.ACCEPT,
             )
 
         # Delete the suggestion
@@ -159,10 +176,11 @@ class Suggestion(models.Model, UserDisplayMixin):
 
     def delete_log(
         self,
-        user,
-        change=Change.ACTION_SUGGESTION_DELETE,
+        user: User,
+        change=ActionEvents.SUGGESTION_DELETE,
         is_spam: bool = False,
         rejection_reason: str = "",
+        old: str = "",
     ) -> None:
         """Delete with logging change."""
         if is_spam and self.userdetails:
@@ -175,6 +193,7 @@ class Suggestion(models.Model, UserDisplayMixin):
             target=self.target,
             author=user,
             details={"rejection_reason": rejection_reason},
+            old=old,
         )
         self.delete()
 
@@ -187,7 +206,7 @@ class Suggestion(models.Model, UserDisplayMixin):
         """Return number of votes."""
         return self.vote_set.aggregate(Sum("value"))["value__sum"] or 0
 
-    def add_vote(self, request, value) -> None:
+    def add_vote(self, request: AuthenticatedHttpRequest | None, value: int) -> None:
         """Add (or updates) vote for a suggestion."""
         if request is None or not request.user.is_authenticated:
             return
@@ -236,7 +255,7 @@ class Vote(models.Model):
     NEGATIVE = -1
 
     class Meta:
-        unique_together = [("suggestion", "user")]
+        unique_together = [("suggestion", "user")]  # noqa: RUF012
         app_label = "trans"
         verbose_name = "suggestion vote"
         verbose_name_plural = "suggestion votes"

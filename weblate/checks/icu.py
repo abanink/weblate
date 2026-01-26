@@ -5,12 +5,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 from django.utils.translation import gettext, gettext_lazy
 from pyicumessageformat import Parser
 
 from weblate.checks.base import SourceCheck
 from weblate.checks.format import BaseFormatCheck
+from weblate.utils.html import format_html_join_comma, list_to_tuples
+
+if TYPE_CHECKING:
+    from weblate.trans.models import Unit
 
 # Unique value for checking tags. Since types are
 # always strings, this will never be encountered.
@@ -19,15 +24,15 @@ TAG_TYPE = -100
 # These types are to be considered numeric. Numeric placeholders
 # can be of any numeric type without triggering a warning from
 # the checker.
-NUMERIC_TYPES = ["number", "plural", "selectordinal"]
+NUMERIC_TYPES = {"number", "plural", "selectordinal"}
 
 # These types have their sub-messages checked to ensure that
 # sub-message selectors are valid.
-PLURAL_TYPES = ["plural", "selectordinal"]
+PLURAL_TYPES = {"plural", "selectordinal"}
 
 # ... and these are the valid selectors, along with selectors
 # for specific values, formatted such as: =0, =1, etc.
-PLURAL_SELECTORS = ["zero", "one", "two", "few", "many", "other"]
+PLURAL_SELECTORS = {"zero", "one", "two", "few", "many", "other"}
 
 
 # We construct two Parser instances, one for tags and one without.
@@ -121,7 +126,7 @@ def update_maybe_value(value, old):
     return 0
 
 
-def extract_highlights(token, source):
+def extract_highlights(token, source: str):
     """Extract all placeholders from an AST selected for highlighting."""
     if isinstance(token, str):
         return
@@ -207,6 +212,11 @@ def extract_placeholders(token, variables=None):
             if "format" in token:
                 data["formats"].add(token["format"])
 
+    elif name in {"count", "number"}:
+        # Assume count is a numeric type
+        data["types"].add("number")
+        data["is_number"] = update_maybe_value(True, data["is_number"])
+
     if "options" in token:
         choices = data.setdefault("choices", set())
 
@@ -231,12 +241,12 @@ def extract_placeholders(token, variables=None):
 
 
 class ICUCheckMixin:
-    def get_flags(self, unit):
+    def get_flags(self, unit: Unit):
         if unit and unit.all_flags.has_value("icu-flags"):
             return unit.all_flags.get_value("icu-flags")
         return []
 
-    def get_tag_prefix(self, unit):
+    def get_tag_prefix(self, unit: Unit):
         if unit and unit.all_flags.has_value("icu-tag-prefix"):
             return unit.all_flags.get_value("icu-tag-prefix")
         return None
@@ -255,9 +265,9 @@ class ICUSourceCheck(ICUCheckMixin, SourceCheck):
         self.enable_string = "icu-message-format"
         self.ignore_string = f"ignore-{self.enable_string}"
 
-    def check_source_unit(self, source, unit) -> bool:
+    def check_source_unit(self, sources: list[str], unit: Unit) -> bool:
         """Checker for source strings. Only check for syntax issues."""
-        if not source or not source[0]:
+        if not sources or not sources[0]:
             return False
 
         flags = self.get_flags(unit)
@@ -266,7 +276,7 @@ class ICUSourceCheck(ICUCheckMixin, SourceCheck):
         tag_prefix = self.get_tag_prefix(unit)
 
         _ast, src_err, _tokens = parse_icu(
-            source[0], allow_tags, strict_tags, tag_prefix
+            sources[0], allow_tags, strict_tags, tag_prefix
         )
         return bool(src_err)
 
@@ -280,7 +290,7 @@ class ICUMessageFormatCheck(ICUCheckMixin, BaseFormatCheck):
         "Syntax errors and/or placeholder mismatches in ICU MessageFormat strings."
     )
 
-    def check_format(self, source, target, ignore_missing, unit):
+    def check_format(self, source: str, target: str, ignore_missing, unit: Unit):
         """Checker for ICU MessageFormat strings."""
         if not target or not source:
             return False
@@ -448,63 +458,68 @@ class ICUMessageFormatCheck(ICUCheckMixin, BaseFormatCheck):
 
     def format_result(self, result):
         if result.get("syntax"):
-            yield gettext("Syntax error: %s") % ", ".join(
-                err.msg for err in result["syntax"]
+            yield gettext("Syntax error: %s") % format_html_join_comma(
+                "{}",
+                list_to_tuples(err.msg or "unknown error" for err in result["syntax"]),
             )
 
         if result.get("extra"):
             yield gettext(
                 "One or more unknown placeholders in the translation: %s"
-            ) % ", ".join(result["extra"])
+            ) % format_html_join_comma("{}", list_to_tuples(result["extra"]))
 
         if result.get("missing"):
             yield gettext(
                 "One or more placeholders missing in the translation: %s"
-            ) % ", ".join(result["missing"])
+            ) % format_html_join_comma("{}", list_to_tuples(result["missing"]))
 
         if result.get("wrong_type"):
             yield gettext(
                 "One or more placeholder types are incorrect: %s"
-            ) % ", ".join(result["wrong_type"])
+            ) % format_html_join_comma("{}", list_to_tuples(result["wrong_type"]))
 
         if result.get("no_other"):
-            yield gettext("Missing other sub-message for: %s") % ", ".join(
-                result["no_other"]
+            yield gettext("Missing other sub-message for: %s") % format_html_join_comma(
+                "{}", list_to_tuples(result["no_other"])
             )
 
         if result.get("bad_plural"):
-            yield gettext("Incorrect plural selectors for: %s") % ", ".join(
-                f"{x[0]} ({', '.join(x[1])})" for x in result["bad_plural"]
+            yield gettext(
+                "Incorrect plural selectors for: %s"
+            ) % format_html_join_comma(
+                "{}", (f"{x[0]} ({', '.join(x[1])})" for x in result["bad_plural"])
             )
 
         if result.get("bad_submessage"):
-            yield gettext("Incorrect sub-message selectors for: %s") % ", ".join(
-                f"{x[0]} ({', '.join(x[1])})" for x in result["bad_submessage"]
+            yield gettext(
+                "Incorrect sub-message selectors for: %s"
+            ) % format_html_join_comma(
+                "{}", (f"{x[0]} ({', '.join(x[1])})" for x in result["bad_submessage"])
             )
 
         if result.get("should_be_tag"):
             yield gettext(
                 "One or more placeholders should have "
                 "a corresponding XML tag in the translation: %s"
-            ) % ", ".join(result["should_be_tag"])
+            ) % format_html_join_comma("{}", list_to_tuples(result["should_be_tag"]))
 
         if result.get("not_tag"):
             yield gettext(
                 "One or more placeholders should not be "
                 "an XML tag in the translation: %s"
-            ) % ", ".join(result["not_tag"])
+            ) % format_html_join_comma("{}", list_to_tuples(result["not_tag"]))
 
         if result.get("tag_not_empty"):
             yield gettext(
                 "One or more XML tags has unexpected content in the translation: %s"
-            ) % ", ".join(result["tag_not_empty"])
+            ) % format_html_join_comma("{}", list_to_tuples(result["tag_not_empty"]))
 
         if result.get("tag_empty"):
             yield gettext(
                 "One or more XML tags missing content in the translation: %s"
-            ) % ", ".join(result["tag_empty"])
+            ) % format_html_join_comma("{}", list_to_tuples(result["tag_empty"]))
 
-    def check_highlight(self, source, unit):
+    def check_highlight(self, source: str, unit: Unit):
         if self.should_skip(unit):
             return
 

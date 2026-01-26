@@ -1,13 +1,12 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 from __future__ import annotations
 
 import json
 import time
 from math import ceil
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import sentry_sdk
 from django.conf import settings
@@ -25,14 +24,15 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
-from django.utils.translation import gettext, gettext_noop
+from django.utils.translation import gettext
 from django.views.decorators.http import require_POST
 
 from weblate.checks.models import CHECKS, get_display_checks
 from weblate.glossary.forms import TermForm
-from weblate.glossary.models import get_glossary_terms
+from weblate.glossary.models import fetch_glossary_terms, get_glossary_terms
 from weblate.screenshots.forms import ScreenshotForm
-from weblate.trans.exceptions import FileParseError
+from weblate.trans.actions import ActionEvents
+from weblate.trans.exceptions import FileParseError, SuggestionSimilarToTranslationError
 from weblate.trans.forms import (
     AutoForm,
     ChecksumForm,
@@ -45,7 +45,16 @@ from weblate.trans.forms import (
     ZenTranslationForm,
     get_new_unit_form,
 )
-from weblate.trans.models import Change, Comment, Suggestion, Translation, Unit, Vote
+from weblate.trans.models import (
+    Category,
+    Comment,
+    Component,
+    Suggestion,
+    Translation,
+    Unit,
+    Vote,
+)
+from weblate.trans.models.unit import fill_in_source_translation
 from weblate.trans.tasks import auto_translate
 from weblate.trans.templatetags.translations import (
     try_linkify_filename,
@@ -56,31 +65,38 @@ from weblate.trans.util import redirect_next, render, split_plural
 from weblate.utils import messages
 from weblate.utils.antispam import is_spam
 from weblate.utils.hash import hash_to_checksum
+from weblate.utils.html import format_html_join_comma, list_to_tuples
 from weblate.utils.messages import get_message_kind
 from weblate.utils.ratelimit import revert_rate_limit, session_ratelimit_post
-from weblate.utils.state import STATE_APPROVED, STATE_FUZZY, STATE_TRANSLATED
+from weblate.utils.state import (
+    STATE_APPROVED,
+    STATE_NEEDS_REWRITING,
+    STATE_TRANSLATED,
+)
 from weblate.utils.stats import CategoryLanguage, ProjectLanguage
 from weblate.utils.views import (
-    get_sort_name,
     parse_path,
     parse_path_units,
     show_form_errors,
 )
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
+
 SESSION_SEARCH_CACHE_TTL = 1800
 
 
-def display_fixups(request, fixups) -> None:
+def display_fixups(request: AuthenticatedHttpRequest, fixups) -> None:
     messages.info(
         request,
         gettext("Following fixups were applied to translation: %s")
-        % ", ".join(str(f) for f in fixups),
+        % format_html_join_comma("{}", list_to_tuples(fixups)),
     )
 
 
 def get_other_units(unit):
     """Return other units to show while translating."""
-    with sentry_sdk.start_span(op="unit.others", description=unit.pk):
+    with sentry_sdk.start_span(op="unit.others", name=f"{unit.pk}"):
         result: dict[str, Any] = {
             "total": 0,
             "skipped": False,
@@ -119,23 +135,20 @@ def get_other_units(unit):
 
         base = (
             Unit.objects.filter(
-                query,
                 translation__component__project=component.project,
                 translation__language=translation.language,
             )
             .annotate(matches_current=Count("id", filter=match))
             .prefetch()
-            .select_related("source_unit")
+            .prefetch_source()
             .order_by("-matches_current")
         )
 
         units = base.filter(query)
         if unit.target:
-            units = units.union(
-                base.filter(
-                    Q(target__lower__md5=MD5(Lower(Value(unit.target))))
-                    & Q(state__gte=STATE_TRANSLATED)
-                )
+            units |= base.filter(
+                Q(target__lower__md5=MD5(Lower(Value(unit.target))))
+                & Q(state__gte=STATE_TRANSLATED)
             )
 
         # Use memory_db for the query in case it exists. This is supposed
@@ -145,7 +158,7 @@ def get_other_units(unit):
             units = units.using("memory_db")
 
         max_units = 20
-        units_limited = units[:max_units]
+        units_limited = units[:max_units].fill_in_source_translation()
         units_count = len(units_limited)
 
         # Is it only this unit?
@@ -219,14 +232,16 @@ def search(
     """Perform search or returns cached search results."""
     now = int(time.time())
     # Possible new search
-    form = PositionSearchForm(user=request.user, data=request.GET, show_builder=False)
+    form = PositionSearchForm(
+        request=request, data=request.GET, show_builder=False, obj=base
+    )
 
     # Process form
     form_valid = form.is_valid()
     if form_valid:
         cleaned_data = form.cleaned_data
         search_url = form.urlencode()
-        search_query = form.get_search_query()
+        search_query = form.cleaned_data["q"]
         name = form.get_name()
         search_items = form.items()
     else:
@@ -237,7 +252,7 @@ def search(
         name = ""
         search_items = ()
 
-    with sentry_sdk.start_span(op="unit.search", description=search_url):
+    with sentry_sdk.start_span(op="unit.search", name=search_url):
         search_result = {
             "form": form,
             "offset": cleaned_data.get("offset", 1),
@@ -274,6 +289,7 @@ def search(
             "name": str(name),
             "ids": unit_ids,
             "ttl": now + SESSION_SEARCH_CACHE_TTL,
+            "last_viewed_unit_id": None,
         }
         if use_cache:
             request.session[session_key] = store_result
@@ -282,7 +298,7 @@ def search(
         return search_result
 
 
-def perform_suggestion(unit, form, request):
+def perform_suggestion(unit, form, request: AuthenticatedHttpRequest):
     """Handle suggesion saving."""
     if not form.cleaned_data["target"][0]:
         messages.error(request, gettext("Your suggestion is empty!"))
@@ -297,30 +313,39 @@ def perform_suggestion(unit, form, request):
         return False
     # Spam check for unauthenticated users
     if not request.user.is_authenticated and is_spam(
-        "\n".join(form.cleaned_data["target"]), request
+        request, form.cleaned_data["target"]
     ):
         messages.error(request, gettext("Your suggestion has been identified as spam!"))
         return False
 
     # Create the suggestion
-    result = Suggestion.objects.add(
-        unit,
-        form.cleaned_data["target"],
-        request,
-        request.user.has_perm("suggestion.vote", unit),
-    )
-    if not result:
-        messages.error(request, gettext("Your suggestion already exists!"))
-    elif result.fixups:
-        display_fixups(request, result.fixups)
+    try:
+        result = Suggestion.objects.add(
+            unit,
+            form.cleaned_data["target"],
+            request,
+            request.user.has_perm("suggestion.vote", unit),
+            raise_exception=True,
+        )
+    except SuggestionSimilarToTranslationError:
+        messages.error(
+            request, gettext("Your suggestion is similar to the current translation!")
+        )
+        result = False
+    else:
+        if not result:
+            messages.error(request, gettext("Your suggestion already exists!"))
+        elif result.fixups:
+            display_fixups(request, result.fixups)
     return result
 
 
-def perform_translation(unit, form, request) -> bool:
+def perform_translation(unit, form, request: AuthenticatedHttpRequest) -> bool:
     """Handle translation and stores it to a backend."""
     user = request.user
     profile = user.profile
-    project = unit.translation.component.project
+    component = unit.translation.component
+    project = component.project
     # Remember old checks
     oldchecks = unit.all_checks_names
     # Alternative translations handling
@@ -328,8 +353,7 @@ def perform_translation(unit, form, request) -> bool:
 
     # Update explanation for glossary
     change_explanation = (
-        unit.translation.component.is_glossary
-        and unit.explanation != form.cleaned_data["explanation"]
+        component.is_glossary and unit.explanation != form.cleaned_data["explanation"]
     )
     # Save
     saved = unit.translate(
@@ -341,7 +365,7 @@ def perform_translation(unit, form, request) -> bool:
     )
     # Make sure explanation is saved
     if change_explanation:
-        unit.update_explanation(form.cleaned_data["explanation"], user)
+        saved |= unit.update_explanation(form.cleaned_data["explanation"], user)
 
     # Warn about applied fixups
     if unit.fixups:
@@ -382,7 +406,13 @@ def perform_translation(unit, form, request) -> bool:
     if (
         saved
         and form.cleaned_data["state"] >= STATE_TRANSLATED
-        and newchecks > oldchecks
+        and (
+            # Any new checks?
+            newchecks > oldchecks
+            or
+            # Any enforced check?
+            (component.enforced_checks and newchecks & set(component.enforced_checks))
+        )
     ):
         # Show message to user
         messages.error(
@@ -390,7 +420,11 @@ def perform_translation(unit, form, request) -> bool:
             gettext(
                 "The translation has been saved, however there "
                 "are some newly failing checks: {0}"
-            ).format(", ".join(str(CHECKS[check].name) for check in newchecks)),
+            ).format(
+                format_html_join_comma(
+                    "{}", list_to_tuples(CHECKS[check].name for check in newchecks)
+                )
+            ),
         )
         # Stay on same entry
         return False
@@ -399,7 +433,9 @@ def perform_translation(unit, form, request) -> bool:
 
 
 @session_ratelimit_post("translate", logout_user=False)
-def handle_translate(request, unit, this_unit_url, next_unit_url):
+def handle_translate(
+    request: AuthenticatedHttpRequest, unit, this_unit_url, next_unit_url
+):
     """Save translation or suggestion to database and backend."""
     form = TranslationForm(request.user, unit, request.POST)
     if not form.is_valid():
@@ -411,7 +447,7 @@ def handle_translate(request, unit, this_unit_url, next_unit_url):
     if "suggest" in request.POST:
         go_next = perform_suggestion(unit, form, request)
     elif not request.user.has_perm("unit.edit", unit):
-        if request.user.has_perm("unit.flag", unit):
+        if request.user.has_perm("meta:unit.flag", unit):
             unit.update_explanation(form.cleaned_data["explanation"], request.user)
         else:
             messages.error(
@@ -426,11 +462,11 @@ def handle_translate(request, unit, this_unit_url, next_unit_url):
     return HttpResponseRedirect(this_unit_url)
 
 
-def handle_merge(unit, request, next_unit_url):
+def handle_merge(unit, request: AuthenticatedHttpRequest, next_unit_url):
     """Handle unit merging."""
     mergeform = MergeForm(unit, request.POST)
     if not mergeform.is_valid():
-        messages.error(request, gettext("Invalid merge request!"))
+        show_form_errors(request, mergeform)
         return None
 
     merged = mergeform.cleaned_data["merge_unit"]
@@ -447,10 +483,10 @@ def handle_merge(unit, request, next_unit_url):
     return HttpResponseRedirect(next_unit_url)
 
 
-def handle_revert(unit, request, next_unit_url):
+def handle_revert(unit, request: AuthenticatedHttpRequest, next_unit_url):
     revertform = RevertForm(unit, request.GET)
     if not revertform.is_valid():
-        messages.error(request, gettext("Invalid revert request!"))
+        show_form_errors(request, revertform)
         return None
 
     change = revertform.cleaned_data["revert_change"]
@@ -468,14 +504,18 @@ def handle_revert(unit, request, next_unit_url):
     unit.translate(
         request.user,
         split_plural(change.old),
-        STATE_FUZZY if change.action == Change.ACTION_MARKED_EDIT else unit.state,
-        change_action=Change.ACTION_REVERT,
+        STATE_NEEDS_REWRITING
+        if change.action == ActionEvents.MARKED_EDIT
+        else unit.state,
+        change_action=ActionEvents.REVERT,
     )
     # Redirect to next entry
     return HttpResponseRedirect(next_unit_url)
 
 
-def check_suggest_permissions(request, mode, unit, suggestion) -> bool:
+def check_suggest_permissions(
+    request: AuthenticatedHttpRequest, mode, unit, suggestion
+) -> bool:
     """Check permission for suggestion handling."""
     user = request.user
     if mode in {"accept", "accept_edit", "accept_approve"}:
@@ -500,7 +540,9 @@ def check_suggest_permissions(request, mode, unit, suggestion) -> bool:
     return True
 
 
-def handle_suggestions(request, unit, this_unit_url, next_unit_url):
+def handle_suggestions(
+    request: AuthenticatedHttpRequest, unit, this_unit_url, next_unit_url
+):
     """Handle suggestion deleting/accepting."""
     sugid = ""
     params = (
@@ -552,6 +594,7 @@ def handle_suggestions(request, unit, this_unit_url, next_unit_url):
             request.user,
             is_spam="spam" in request.POST,
             rejection_reason=request.POST.get("rejection", ""),
+            old=unit.target,
         )
     elif "upvote" in request.POST:
         suggestion.add_vote(request, Vote.POSITIVE)
@@ -563,7 +606,7 @@ def handle_suggestions(request, unit, this_unit_url, next_unit_url):
 
 
 @transaction.atomic
-def translate(request, path):
+def translate(request: AuthenticatedHttpRequest, path):
     """Translate, suggest and search view."""
     obj, unit_set, context = parse_path_units(
         request, path, (Translation, ProjectLanguage, CategoryLanguage)
@@ -615,10 +658,22 @@ def translate(request, path):
             messages.error(request, gettext("Invalid search string!"))
             return redirect(obj)
 
+    last_viewed_unit_id = search_result.get("last_viewed_unit_id")
+    if last_viewed_unit_id:
+        previous_unit = unit_set.get(pk=last_viewed_unit_id)
+        if unit.translation.component != previous_unit.translation.component:
+            messages.warning(
+                request,
+                gettext("You have shifted from %(previous)s to %(current)s.")
+                % {
+                    "previous": previous_unit.translation.full_slug,
+                    "current": unit.translation.full_slug,
+                },
+            )
+    search_result["last_viewed_unit_id"] = unit.id
+
     # Some URLs we will most likely use
-    base_unit_url = "{}?{}&offset=".format(
-        obj.get_translate_url(), search_result["url"]
-    )
+    base_unit_url = f"{obj.get_translate_url()}?{search_result['url']}&offset="
     this_unit_url = base_unit_url + str(offset)
     next_unit_url = base_unit_url + str(offset + 1)
 
@@ -657,7 +712,6 @@ def translate(request, path):
 
     # Prepare form
     form = TranslationForm(user, unit)
-    sort = get_sort_name(request, obj)
 
     screenshot_form = None
     if user.has_perm("screenshot.add", unit.translation):
@@ -671,8 +725,12 @@ def translate(request, path):
         {
             "path_object": obj,
             "this_unit_url": this_unit_url,
-            "first_unit_url": base_unit_url + "1",
+            "first_unit_url": f"{base_unit_url}1",
             "last_unit_url": base_unit_url + str(num_results),
+            "next_section_url": base_unit_url
+            + str(offset + user.profile.nearby_strings),
+            "prev_section_url": base_unit_url
+            + str(max(1, offset - user.profile.nearby_strings)),
             "next_unit_url": next_unit_url,
             "prev_unit_url": base_unit_url + str(offset - 1),
             "object": obj,
@@ -681,18 +739,17 @@ def translate(request, path):
             "unit": unit,
             "nearby": unit.nearby(user.profile.nearby_strings),
             "nearby_keys": unit.nearby_keys(user.profile.nearby_strings),
+            "can_go_next_section": offset + user.profile.nearby_strings <= num_results,
             "others": get_other_units(unit) if user.is_authenticated else {"total": 0},
             "search_url": search_result["url"],
             "search_items": search_result["items"],
             "search_query": search_result["query"],
             "offset": offset,
-            "sort_name": sort["name"],
-            "sort_query": sort["query"],
             "filter_count": num_results,
             "filter_pos": offset,
             "form": form,
             "comment_form": CommentForm(
-                project,
+                unit.translation,
                 initial={"scope": "global" if unit.is_source else "translation"},
             ),
             "context_form": ContextForm(instance=unit.source_unit, user=user),
@@ -730,79 +787,101 @@ def translate(request, path):
 
 @require_POST
 @login_required
-def auto_translation(request, path):
-    translation = parse_path(request, path, (Translation,))
-    project = translation.component.project
+def auto_translation(request: AuthenticatedHttpRequest, path):
+    obj = parse_path(request, path, (Translation, Component, Category, ProjectLanguage))
+    update_locked = False
+    task_kwargs = {}
+
+    match obj:
+        case Translation():
+            translation = obj
+            project = translation.component.project
+            autoform = AutoForm(translation.component, request.user, request.POST)
+            update_locked = translation.component.locked
+            task_kwargs["translation_id"] = translation.id
+        case Component():
+            component = obj
+            project = component.project
+            autoform = AutoForm(component, request.user, request.POST)
+            update_locked = component.locked
+            task_kwargs["component_id"] = component.id
+        case Category():
+            category = obj
+            project = category.project
+            autoform = AutoForm(category.project, request.user, request.POST)
+            update_locked = category.component_set.filter(locked=True).exists()
+            task_kwargs["category_id"] = category.id
+        case ProjectLanguage():
+            project = obj.project
+            autoform = AutoForm(project, request.user, request.POST)
+            update_locked = project.locked
+            task_kwargs.update(
+                {
+                    "project_id": project.id,
+                    "language_id": obj.language.id,
+                }
+            )
+        case _:  # pragma: no cover
+            msg = "Unsupported object for auto translation"
+            raise PermissionDenied(msg)
+
     if not request.user.has_perm("translation.auto", project):
         raise PermissionDenied
 
-    autoform = AutoForm(translation.component, request.user, request.POST)
-
-    if translation.component.locked or not autoform.is_valid():
+    if update_locked or not autoform.is_valid():
         messages.error(request, gettext("Could not process form!"))
         show_form_errors(request, autoform)
-        return redirect(translation)
-
-    args = (
-        request.user.id,
-        translation.id,
-        autoform.cleaned_data["mode"],
-        autoform.cleaned_data["filter_type"],
-        autoform.cleaned_data["auto_source"],
-        autoform.cleaned_data["component"],
-        autoform.cleaned_data["engines"],
-        autoform.cleaned_data["threshold"],
-    )
+        return redirect(obj)
 
     if settings.CELERY_TASK_ALWAYS_EAGER:
-        messages.success(
-            request, auto_translate(*args, translation=translation)["message"]
+        result = auto_translate(
+            **task_kwargs,
+            user_id=request.user.id,
+            mode=autoform.cleaned_data["mode"],
+            q=autoform.cleaned_data.get("q"),
+            auto_source=autoform.cleaned_data["auto_source"],
+            component=autoform.cleaned_data["component"],
+            engines=autoform.cleaned_data["engines"],
+            threshold=autoform.cleaned_data["threshold"],
         )
+        messages.success(request, result["message"])
     else:
-        task = auto_translate.delay(*args)
+        task = auto_translate.delay(
+            **task_kwargs,
+            user_id=request.user.id,
+            mode=autoform.cleaned_data["mode"],
+            q=autoform.cleaned_data.get("q"),
+            auto_source=autoform.cleaned_data["auto_source"],
+            component=autoform.cleaned_data["component"],
+            engines=autoform.cleaned_data["engines"],
+            threshold=autoform.cleaned_data["threshold"],
+        )
         messages.success(
             request, gettext("Automatic translation in progress"), f"task:{task.id}"
         )
 
-    return redirect(translation)
+    return redirect(obj)
 
 
 @login_required
-@session_ratelimit_post("comment", logout_user=False)
 @transaction.atomic
-def comment(request, pk):
+@session_ratelimit_post("comment", logout_user=False)
+def comment(request: AuthenticatedHttpRequest, pk):
     """Add new comment."""
-    scope = unit = get_object_or_404(Unit, pk=pk)
-    component = unit.translation.component
+    unit = get_object_or_404(Unit, pk=pk)
 
     if not request.user.has_perm("comment.add", unit.translation):
         raise PermissionDenied
 
-    form = CommentForm(component.project, request.POST)
+    form = CommentForm(unit.translation, request.POST)
 
     if form.is_valid():
-        # Is this source or target comment?
-        if form.cleaned_data["scope"] in {"global", "report"}:
-            scope = unit.source_unit
-        # Create comment object
-        Comment.objects.add(scope, request, form.cleaned_data["comment"])
-        # Add review label/flag
-        if form.cleaned_data["scope"] == "report":
-            if component.has_template():
-                if scope.translated and not scope.readonly:
-                    scope.translate(
-                        request.user,
-                        scope.target,
-                        STATE_FUZZY,
-                        change_action=Change.ACTION_MARKED_EDIT,
-                    )
-            else:
-                label = component.project.label_set.get_or_create(
-                    name=gettext_noop("Source needs review"), defaults={"color": "red"}
-                )[0]
-                scope.labels.add(label)
+        text = form.cleaned_data["comment"]
+        scope = form.cleaned_data["scope"]
+        Comment.objects.add(request, unit, text, scope)
         messages.success(request, gettext("Posted new comment"))
     else:
+        show_form_errors(request, form)
         messages.error(request, gettext("Could not add comment!"))
 
     return redirect_next(request.POST.get("next"), unit)
@@ -811,7 +890,7 @@ def comment(request, pk):
 @login_required
 @require_POST
 @transaction.atomic
-def delete_comment(request, pk):
+def delete_comment(request: AuthenticatedHttpRequest, pk):
     """Delete comment."""
     comment_obj = get_object_or_404(Comment, pk=pk)
 
@@ -831,7 +910,7 @@ def delete_comment(request, pk):
 @login_required
 @require_POST
 @transaction.atomic
-def resolve_comment(request, pk):
+def resolve_comment(request: AuthenticatedHttpRequest, pk):
     """Resolve comment."""
     comment_obj = get_object_or_404(Comment, pk=pk)
 
@@ -846,7 +925,7 @@ def resolve_comment(request, pk):
     return redirect_next(request.POST.get("next"), fallback_url)
 
 
-def get_zen_unitdata(obj, project, unit_set, request):
+def get_zen_unitdata(obj, project, unit_set, request: AuthenticatedHttpRequest):
     """Load unit data for zen mode."""
     # Search results
     search_result = search(obj, project, unit_set, request)
@@ -861,6 +940,8 @@ def get_zen_unitdata(obj, project, unit_set, request):
     units = unit_set.prefetch_full().get_ordered(
         search_result["ids"][offset : offset + 20]
     )
+    fill_in_source_translation(units)
+    fetch_glossary_terms(units)
 
     unitdata = [
         {
@@ -871,9 +952,7 @@ def get_zen_unitdata(obj, project, unit_set, request):
                 and request.user.profile.secondary_in_zen
                 else None
             ),
-            "form": ZenTranslationForm(
-                request.user, unit, tabindex=100 + (unit.position * 10)
-            ),
+            "form": ZenTranslationForm(request.user, unit),
             "offset": offset + pos + 1,
             "glossary": get_glossary_terms(unit),
         }
@@ -883,7 +962,7 @@ def get_zen_unitdata(obj, project, unit_set, request):
     return search_result, unitdata
 
 
-def zen(request, path):
+def zen(request: AuthenticatedHttpRequest, path):
     """Zen mode view."""
     obj, unit_set, context = parse_path_units(
         request, path, (Translation, ProjectLanguage, CategoryLanguage)
@@ -891,7 +970,6 @@ def zen(request, path):
     project = context["project"]
 
     search_result, unitdata = get_zen_unitdata(obj, project, unit_set, request)
-    sort = get_sort_name(request, obj)
 
     # Handle redirects
     if isinstance(search_result, HttpResponse):
@@ -908,8 +986,7 @@ def zen(request, path):
             "unitdata": unitdata,
             "search_query": search_result["query"],
             "filter_count": len(search_result["ids"]),
-            "sort_name": sort["name"],
-            "sort_query": sort["query"],
+            "filter_pos": search_result["offset"],
             "last_section": search_result["last_section"],
             "search_url": search_result["url"],
             "offset": search_result["offset"],
@@ -919,7 +996,7 @@ def zen(request, path):
     )
 
 
-def load_zen(request, path):
+def load_zen(request: AuthenticatedHttpRequest, path):
     """Load additional units for zen editor."""
     obj, unit_set, context = parse_path_units(
         request, path, (Translation, ProjectLanguage, CategoryLanguage)
@@ -951,7 +1028,7 @@ def load_zen(request, path):
 @login_required
 @require_POST
 @transaction.atomic
-def save_zen(request, path):
+def save_zen(request: AuthenticatedHttpRequest, path):
     """Save handler for zen mode."""
     _obj, unit_set, _context = parse_path_units(
         request, path, (Translation, ProjectLanguage, CategoryLanguage)
@@ -969,7 +1046,7 @@ def save_zen(request, path):
     if not form.is_valid():
         show_form_errors(request, form)
     elif not request.user.has_perm("unit.edit", unit):
-        if request.user.has_perm("unit.flag", unit):
+        if request.user.has_perm("meta:unit.flag", unit):
             unit.update_explanation(form.cleaned_data["explanation"], request.user)
         else:
             messages.error(
@@ -1008,7 +1085,7 @@ def save_zen(request, path):
 @require_POST
 @login_required
 @transaction.atomic
-def new_unit(request, path):
+def new_unit(request: AuthenticatedHttpRequest, path):
     translation = parse_path(request, path, (Translation,))
     if not request.user.has_perm("unit.add", translation):
         raise PermissionDenied
@@ -1027,7 +1104,7 @@ def new_unit(request, path):
 @login_required
 @require_POST
 @transaction.atomic
-def delete_unit(request, unit_id):
+def delete_unit(request: AuthenticatedHttpRequest, unit_id):
     """Delete unit."""
     unit = get_object_or_404(Unit, pk=unit_id)
 
@@ -1040,15 +1117,16 @@ def delete_unit(request, unit_id):
         unit.translation.component.update_import_alerts(delete=False)
         messages.error(request, gettext("Could not remove the string: %s") % error)
         return redirect(unit)
+    messages.success(request, gettext("String was removed."))
     # Remove cached search results as we've just removed one of the unit there
     cleanup_session(request.session, delete_all=True)
-    return redirect(unit.translation)
+    return redirect_next(request.POST.get("next"), unit.translation)
 
 
-def browse(request, path):
+def browse(request: AuthenticatedHttpRequest, path):
     """Strings browsing."""
     obj, unit_set, context = parse_path_units(
-        request, path, (Translation, ProjectLanguage)
+        request, path, (Translation, ProjectLanguage, CategoryLanguage)
     )
     project = context["project"]
     search_result = search(obj, project, unit_set, request, blank=True, use_cache=False)
@@ -1058,12 +1136,8 @@ def browse(request, path):
         search_result["ids"][(offset - 1) * page : (offset - 1) * page + page]
     )
 
-    base_unit_url = "{}?{}&offset=".format(
-        reverse("browse", kwargs={"path": obj.get_url_path()}),
-        search_result["url"],
-    )
+    base_unit_url = f"{reverse('browse', kwargs={'path': obj.get_url_path()})}?{search_result['url']}&offset="
     num_results = ceil(len(search_result["ids"]) / page)
-    sort = get_sort_name(request, obj)
 
     return render(
         request,
@@ -1079,13 +1153,12 @@ def browse(request, path):
             "search_form": search_result["form"].reset_offset(),
             "filter_count": num_results,
             "filter_pos": offset,
-            "first_unit_url": base_unit_url + "1",
+            "first_unit_url": f"{base_unit_url}1",
             "last_unit_url": base_unit_url + str(num_results),
             "next_unit_url": base_unit_url + str(offset + 1)
             if offset < num_results
             else None,
             "prev_unit_url": base_unit_url + str(offset - 1) if offset > 1 else None,
-            "sort_name": sort["name"],
-            "sort_query": sort["query"],
+            "is_in_browse": True,
         },
     )

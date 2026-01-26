@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
     from weblate.formats.base import TranslationFormat
+    from weblate.trans.file_format_params import FileFormatParams
 
 
 def detect_filename(filename: str) -> type[TranslationFormat] | None:
@@ -33,7 +34,7 @@ def detect_filename(filename: str) -> type[TranslationFormat] | None:
 
 def formats_iter(
     filename: str, original_format: type[TranslationFormat] | None
-) -> Generator[type[TranslationFormat], None, None]:
+) -> Generator[type[TranslationFormat]]:
     # Detect based on the extension
     detected_format = detect_filename(filename)
     if detected_format is not None and detected_format != original_format:
@@ -70,7 +71,7 @@ def params_iter(
     file_format: type[TranslationFormat],
     template_store: TranslationFormat | None,
     is_template: bool = False,
-) -> Generator[tuple[dict[str, Any], bool], None, None]:
+) -> Generator[tuple[dict[str, Any], bool]]:
     if file_format.monolingual in {True, None} and (template_store or is_template):
         yield {"template_store": template_store, "is_template": is_template}, True
 
@@ -83,7 +84,10 @@ def try_load(
     content: bytes,
     original_format: type[TranslationFormat] | None,
     template_store: TranslationFormat | None,
+    language_code: str | None = None,
+    source_language: str | None = None,
     is_template: bool = False,
+    file_format_params: FileFormatParams | None = None,
 ) -> TranslationFormat:
     """Try to load file by guessing type."""
     failure = None
@@ -91,7 +95,15 @@ def try_load(
         for kwargs, validate in params_iter(file_format, template_store, is_template):
             handle = NamedBytesIO(filename, content)
             try:
-                result = file_format(handle, **kwargs)
+                result = file_format(
+                    handle,
+                    language_code=language_code,
+                    source_language=language_code
+                    if kwargs.get("is_template", False)
+                    else source_language,
+                    file_format_params=file_format_params,
+                    **kwargs,
+                )
                 result.check_valid()
             except Exception as error:
                 if failure is None:
@@ -104,7 +116,8 @@ def try_load(
                     return result
 
     if failure is None:
-        raise ValueError("Could not load file.")
+        msg = "Could not load file."
+        raise ValueError(msg)
     raise failure
 
 
@@ -116,10 +129,11 @@ class AutodetectFormat(TTKitFormat):
     """
 
     @classmethod
+    # pylint: disable-next=arguments-differ
     def parse_store(cls, storefile):
         """Directly loads using translate-toolkit."""
         return factory.getobject(storefile)
 
     @classmethod
-    def get_class(cls):
+    def get_class(cls) -> None:
         return None

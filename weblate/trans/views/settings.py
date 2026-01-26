@@ -1,10 +1,10 @@
 # Copyright © Michal Čihař <michal@weblate.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
@@ -19,7 +19,8 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_POST
 from django.views.generic import TemplateView, View
 
-from weblate.trans.backups import PROJECTBACKUP_PREFIX
+from weblate.auth.models import AuthenticatedHttpRequest
+from weblate.trans.backups import PROJECTBACKUP_PREFIX, list_backups
 from weblate.trans.forms import (
     AddCategoryForm,
     AnnouncementForm,
@@ -52,10 +53,13 @@ from weblate.utils.random import get_random_identifier
 from weblate.utils.stats import CategoryLanguage, ProjectLanguage
 from weblate.utils.views import parse_path, show_form_errors
 
+if TYPE_CHECKING:
+    from weblate.auth.models import AuthenticatedHttpRequest
+
 
 @never_cache
 @login_required
-def change(request, path):
+def change(request: AuthenticatedHttpRequest, path):
     obj = parse_path(request, path, (Component, Project, ProjectLanguage))
     if not request.user.has_perm(obj.settings_permission, obj):
         raise Http404
@@ -67,7 +71,7 @@ def change(request, path):
     return change_project(request, obj)
 
 
-def change_project(request, obj):
+def change_project(request: AuthenticatedHttpRequest, obj):
     if request.method == "POST":
         settings_form = ProjectSettingsForm(request, request.POST, instance=obj)
         if settings_form.is_valid():
@@ -87,7 +91,7 @@ def change_project(request, obj):
     )
 
 
-def change_project_language(request, obj):
+def change_project_language(request: AuthenticatedHttpRequest, obj):
     try:
         instance = obj.project.workflowsetting_set.get(language=obj.language)
     except WorkflowSetting.DoesNotExist:
@@ -116,7 +120,7 @@ def change_project_language(request, obj):
     )
 
 
-def change_component(request, obj):
+def change_component(request: AuthenticatedHttpRequest, obj):
     if not request.user.has_perm("component.edit", obj):
         raise Http404
 
@@ -154,7 +158,7 @@ def change_component(request, obj):
 @never_cache
 @login_required
 @require_POST
-def dismiss_alert(request, path):
+def dismiss_alert(request: AuthenticatedHttpRequest, path):
     obj = parse_path(request, path, (Component,))
 
     if not request.user.has_perm("component.edit", obj):
@@ -162,18 +166,19 @@ def dismiss_alert(request, path):
 
     try:
         alert = obj.alert_set.get(name=request.POST["dismiss"])
+    except ObjectDoesNotExist:
+        pass
+    else:
         if alert.obj.dismissable:
             alert.dismissed = True
             alert.save(update_fields=["dismissed"])
-    except ObjectDoesNotExist:
-        pass
 
     return redirect_param(obj, "#alerts")
 
 
 @login_required
 @require_POST
-def remove(request, path):
+def remove(request: AuthenticatedHttpRequest, path):
     obj = parse_path(
         request,
         path,
@@ -188,6 +193,7 @@ def remove(request, path):
         show_form_errors(request, form)
         return redirect_param(obj, "#organize")
 
+    parent: Component | Category | Project | str
     if isinstance(obj, Translation):
         parent = obj.component
         obj.remove(request.user)
@@ -222,7 +228,7 @@ def remove(request, path):
     return redirect(parent)
 
 
-def perform_rename(form_cls, request, obj, perm: str):
+def perform_rename(form_cls, request: AuthenticatedHttpRequest, obj, perm: str):
     if not request.user.has_perm(perm, obj):
         raise PermissionDenied
 
@@ -232,8 +238,10 @@ def perform_rename(form_cls, request, obj, perm: str):
     except ValidationError as err:
         messages.error(
             request,
-            gettext("Could not change %s due to outstanding issue in its settings: %s")
-            % (obj, err),
+            gettext(
+                "Could not change %(obj)s due to an outstanding issue in its settings: %(error)s"
+            )
+            % {"obj": obj, "error": err},
         )
         return redirect_param(obj, "#organize")
 
@@ -257,7 +265,7 @@ def perform_rename(form_cls, request, obj, perm: str):
 
 @login_required
 @require_POST
-def rename(request, path):
+def rename(request: AuthenticatedHttpRequest, path):
     obj = parse_path(request, path, (Component, Project, Category))
     if isinstance(obj, Component):
         return perform_rename(ComponentRenameForm, request, obj, "component.edit")
@@ -268,7 +276,7 @@ def rename(request, path):
 
 @login_required
 @require_POST
-def add_category(request, path):
+def add_category(request: AuthenticatedHttpRequest, path):
     obj = parse_path(request, path, (Project, Category))
     if not request.user.has_perm("project.edit", obj) or not obj.can_add_category:
         raise PermissionDenied
@@ -282,12 +290,14 @@ def add_category(request, path):
 
 @login_required
 @require_POST
-def announcement(request, path):
+def announcement(request: AuthenticatedHttpRequest, path):
     obj = parse_path(
         request, path, (ProjectLanguage, Translation, Component, Project, Category)
     )
 
-    if not request.user.has_perm("component.edit", obj):
+    if not request.user.has_perm("component.edit", obj) and not request.user.has_perm(
+        "announcement.add", obj
+    ):
         raise PermissionDenied
 
     form = AnnouncementForm(request.POST)
@@ -324,29 +334,71 @@ def announcement(request, path):
 
 @login_required
 @require_POST
-def announcement_delete(request, pk):
+def announcement_delete(request: AuthenticatedHttpRequest, pk):
     announcement = get_object_or_404(Announcement, pk=pk)
 
-    if request.user.has_perm("announcement.delete", announcement):
-        announcement.delete()
+    obj = (
+        announcement.component
+        if announcement.component is not None
+        else announcement.project
+    )
+    if not request.user.has_perm("announcement.delete", obj):
+        raise PermissionDenied
 
+    announcement.delete()
     return JsonResponse({"responseStatus": 200})
 
 
 @login_required
-def component_progress(request, path):
-    obj = parse_path(request, path, (Component,))
-    return_url = "show" if "info" in request.GET else "guide"
-    if not obj.in_progress():
-        return redirect(return_url, path=obj.get_url_path())
+def show_progress(request: AuthenticatedHttpRequest, path):
+    """
+    Show component update progress.
 
-    progress, log = obj.get_progress()
+    The target 'return to' URL can be either the component itself,
+    or one of its languages.
+    """
+    obj = parse_path(request, path, (Project, Category, Component, Translation))
+    if isinstance(obj, (Project, Category)):
+        return multi_progress(request, obj)
+
+    return component_progress(request, obj)
+
+
+def multi_progress(request: AuthenticatedHttpRequest, obj: Category | Project):
+    components = list(obj.all_repo_components)
+    return_target = obj
+    # There is no guide as in component view here
+    return_url = "show"
+    if not any(component.in_progress() for component in components):
+        return redirect(return_url, path=return_target.get_url_path())
+    return render(
+        request,
+        "multi-progress.html",
+        {
+            "object": obj,
+            "return_target": return_target,
+            "return_url": return_url,
+            "components": components,
+        },
+    )
+
+
+def component_progress(request: AuthenticatedHttpRequest, obj: Component | Translation):
+    component = obj if isinstance(obj, Component) else obj.component
+    return_target = obj
+    return_url = "show" if "info" in request.GET else "guide"
+
+    if not component.in_progress():
+        return redirect(return_url, path=return_target.get_url_path())
+
+    progress, log = component.get_progress()
 
     return render(
         request,
         "component-progress.html",
         {
-            "object": obj,
+            "object": component,
+            "return_target": return_target,
             "progress": progress,
             "log": "\n".join(log),
             "return_url": return_url,
@@ -354,8 +406,8 @@ def component_progress(request, path):
     )
 
 
-class BackupsMixin:
-    def setup(self, request, *args, **kwargs) -> None:
+class BackupsMixin(View):
+    def setup(self, request: AuthenticatedHttpRequest, *args, **kwargs) -> None:  # type: ignore[override]
         super().setup(request, *args, **kwargs)
         self.obj = parse_path(request, [kwargs["project"]], (Project,))
         if not request.user.has_perm("project.edit", self.obj):
@@ -366,7 +418,7 @@ class BackupsMixin:
 class BackupsView(BackupsMixin, TemplateView):
     template_name = "trans/backups.html"
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request: AuthenticatedHttpRequest, *args, **kwargs):
         create_project_backup.delay(self.obj.pk)
         messages.success(
             request, gettext("Backup scheduled. It will be available soon.")
@@ -377,20 +429,20 @@ class BackupsView(BackupsMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         context["keep_count"] = settings.PROJECT_BACKUP_KEEP_COUNT
         context["keep_days"] = settings.PROJECT_BACKUP_KEEP_DAYS
-        context["object"] = self.obj
-        context["backups"] = self.obj.list_backups()
+        context["object"] = context["project"] = self.obj
+        context["backups"] = list_backups(self.obj)
         return context
 
 
 @method_decorator(login_required, name="dispatch")
-class BackupsDownloadView(BackupsMixin, View):
-    def get(self, request, *args, **kwargs):
-        for backup in self.obj.list_backups():
+class BackupsDownloadView(BackupsMixin):
+    def get(self, request: AuthenticatedHttpRequest, *args, **kwargs):
+        for backup in list_backups(self.obj):
             if backup["name"] != kwargs["backup"]:
                 continue
             # Generate random name for download
             name = os.path.join(
-                PROJECTBACKUP_PREFIX, f"{get_random_identifier(32)}.zip"
+                PROJECTBACKUP_PREFIX, f"{self.obj.slug}-{get_random_identifier(32)}.zip"
             )
             # Copy to static files
             with open(backup["path"], "rb") as handle:

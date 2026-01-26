@@ -9,6 +9,11 @@ Android string resources
 
 Android specific file format for translating applications.
 
+.. hint::
+
+   A very similar formats are :doc:`/formats/compose-multiplatform-resources`
+   and :doc:`/formats/moko-resources`.
+
 Android string resources are monolingual, the :ref:`component-template` is
 stored in a different location from the other files -- :file:`res/values/strings.xml`.
 
@@ -57,8 +62,10 @@ Weblate does following escaping of strings:
 
 .. seealso::
 
-    `Android string resources documentation <https://developer.android.com/guide/topics/resources/string-resource>`_,
-    :doc:`tt:formats/android`
+   * `Android string resources documentation <https://developer.android.com/guide/topics/resources/string-resource>`_
+   * :doc:`/formats/compose-multiplatform-resources`
+   * :doc:`/formats/moko-resources`
+   * :doc:`tt:formats/android`
 
 Weblate configuration
 +++++++++++++++++++++

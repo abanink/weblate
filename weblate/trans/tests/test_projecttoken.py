@@ -17,7 +17,7 @@ class ProjectTokenTest(ViewTestCase):
         super().setUp()
         self.project.access_control = Project.ACCESS_PRIVATE
         self.project.save()
-        self.access_url = reverse("manage-access", kwargs=self.kw_project) + "#api"
+        self.access_url = f"{reverse('manage-access', kwargs=self.kw_project)}#api"
 
     def create_token(self):
         self.make_manager()
@@ -26,16 +26,14 @@ class ProjectTokenTest(ViewTestCase):
             {"full_name": "Test Token", "date_expires": "2999-12-31"},
             follow=True,
         )
+        self.assertContains(response, 'data-clipboard-message="Token copied')
         html = response.content.decode("utf-8")
-        result = re.search(
-            r'data-clipboard-text="(\w+)" data-clipboard-message="Token copied',
-            html,
-        )
+        result = re.search(r'data-clipboard-value="(\w+)"', html)
         self.assertIsNotNone(result)
         return result.group(1)
 
     def delete_token(self) -> None:
-        token = User.objects.filter(is_bot=True).get()
+        token = User.objects.filter(is_bot=True).exclude(username__contains=":").get()
         response = self.client.post(
             reverse("delete-user", kwargs=self.kw_project),
             {"user": token.username},
