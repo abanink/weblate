@@ -1320,6 +1320,7 @@ class OwaVerification(models.Model):
     def __str__(self):
         return f"Owa verification token for {self.remote_url}"
 
+
 class AuthenticatedHttpRequest(HttpRequest):
     user: User
     # Added by weblate.accounts.AuthenticationMiddleware

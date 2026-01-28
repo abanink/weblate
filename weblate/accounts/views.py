@@ -11,25 +11,23 @@ import re
 import secrets
 import string
 import time
-from collections import defaultdict
-from datetime import datetime, timedelta
-from importlib import import_module
-from urllib.parse import urlparse, urlunparse, quote
 from base64 import b32encode
 from binascii import unhexlify
 from collections import defaultdict
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import quote, urlparse, urlunparse
 
 import qrcode
 import qrcode.image.svg
-from weblate.utils.whirlpool import whirlpool
+from asgiref.sync import async_to_sync
 from django.conf import settings
-from django.core.cache import InvalidCacheBackendError, caches
 from django.contrib.auth import REDIRECT_FIELD_NAME, get_backends
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_not_required, login_required
 from django.contrib.auth.views import LoginView, RedirectURLMixin
+from django.core.cache import InvalidCacheBackendError, caches
 from django.core.exceptions import (
     ImproperlyConfigured,
     ObjectDoesNotExist,
@@ -55,9 +53,6 @@ from django.utils.translation import gettext, gettext_lazy
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
-from PIL import Image, UnidentifiedImageError
-from requests.exceptions import JSONDecodeError
-from asgiref.sync import async_to_sync
 from django.views.generic import (
     DetailView,
     FormView,
@@ -78,6 +73,8 @@ from django_otp_webauthn.views import (
     BeginCredentialAuthenticationView,
     CompleteCredentialAuthenticationView,
 )
+from PIL import Image, UnidentifiedImageError
+from requests.exceptions import JSONDecodeError
 from rest_framework.authtoken.models import Token
 from social_core.actions import do_auth
 from social_core.backends.base import BaseAuth
@@ -99,12 +96,12 @@ from social_core.exceptions import (
 from social_django.utils import load_backend, load_strategy
 from social_django.views import complete, disconnect
 
+from weblate.accounts.auth import WeblateUserBackend
 from weblate.accounts.avatar import (
     get_avatar_cache_key,
     get_avatar_image,
     get_fallback_avatar_url,
 )
-from weblate.accounts.auth import WeblateUserBackend
 from weblate.accounts.forms import (
     CommitForm,
     ContactForm,
@@ -139,9 +136,6 @@ from weblate.accounts.notifications import (
     send_notification_email,
 )
 from weblate.accounts.pipeline import EmailAlreadyAssociated, UsernameAlreadyAssociated
-from weblate.auth.forms import UserEditForm
-from weblate.auth.models import Invitation, OwaVerification, User, get_auth_keys
-from weblate.auth.utils import format_address
 from weblate.accounts.utils import (
     SESSION_SECOND_FACTOR_SOCIAL,
     SESSION_SECOND_FACTOR_TOTP,
@@ -152,7 +146,13 @@ from weblate.accounts.utils import (
     remove_user,
 )
 from weblate.auth.forms import UserEditForm
-from weblate.auth.models import Invitation, User, get_anonymous
+from weblate.auth.models import (
+    Invitation,
+    OwaVerification,
+    User,
+    get_anonymous,
+    get_auth_keys,
+)
 from weblate.auth.utils import format_address, get_auth_keys
 from weblate.logger import LOGGER
 from weblate.trans.models import Change, Component, Project, Suggestion, Translation
@@ -168,6 +168,7 @@ from weblate.utils.stats import prefetch_stats
 from weblate.utils.token import get_token
 from weblate.utils.version import USER_AGENT
 from weblate.utils.views import get_paginator, parse_path
+from weblate.utils.whirlpool import whirlpool
 from weblate.utils.zammad import ZammadError, submit_zammad_ticket
 
 if TYPE_CHECKING:
@@ -827,7 +828,8 @@ def user_contributions(request: AuthenticatedHttpRequest, user: str):
 def user_avatar(request: AuthenticatedHttpRequest, user: str, size: int):
     """User avatar view."""
     if size not in ALLOWED_SIZES:
-        raise Http404(f"Not supported size: {size}")
+        msg = f"Not supported size: {size}"
+        raise Http404(msg)
 
     avatar_user = get_object_or_404(User, username=user)
     email = avatar_user.email
@@ -2005,7 +2007,7 @@ class VerifiedRemoteUser:
                 )
             )
         else:
-            key_id = re.sub("acct:", "", key_id)
+            key_id = key_id.replace("acct:", "")
 
         self.key_id = key_id
 
@@ -2114,6 +2116,7 @@ async def owa_server(request):
         LOGGER.info("Signature verification failed")
 
     return JsonResponse(ret_response)
+
 
 @method_decorator(login_required, name="dispatch")
 class RecoveryCodesView(TemplateView):
