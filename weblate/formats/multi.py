@@ -14,11 +14,16 @@ from django.utils.translation import gettext_lazy
 from weblate.trans.util import get_string
 
 from .base import TranslationFormat, TranslationUnit
-from .ttkit import CSVUtf8Format
+from .ttkit import CSVFormat
 
 if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from lxml import etree
     from translate.storage.base import TranslationStore
     from translate.storage.base import TranslationUnit as TranslateToolkitUnit
+
+    from weblate.checks.flags import Flags
 
 
 class MultiUnit(TranslationUnit):
@@ -105,12 +110,11 @@ class MultiUnit(TranslationUnit):
         for unit in self.units:
             unit.set_state(state)
 
-    @cached_property
-    def flags(self):
-        flags = super().flags
+    def get_extra_flags(self) -> Generator[str | etree._Element | Flags]:
+        yield from super().get_extra_flags()
+
         for unit in self.units:
-            flags.merge(unit.flags)
-        return flags
+            yield unit.flags
 
     def has_unit(self) -> bool:
         return all(unit.has_unit() for unit in self.units)
@@ -173,6 +177,7 @@ class MultiFormatMixin(TranslationFormat):
             super().add_unit(unit)
 
 
-class MultiCSVUtf8Format(MultiFormatMixin, CSVUtf8Format):
-    name = gettext_lazy("Multivalue CSV file (UTF-8)")
-    format_id = "csv-multi-utf-8"
+class MultiCSVFormat(MultiFormatMixin, CSVFormat):
+    name = gettext_lazy("Multivalue CSV file")
+    format_id = "csv-multi"
+    autoload: tuple[str, ...] = ()

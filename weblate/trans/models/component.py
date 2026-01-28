@@ -53,7 +53,7 @@ from weblate.trans.defines import (
 )
 from weblate.trans.exceptions import FileParseError, InvalidTemplateError
 from weblate.trans.fields import RegexField
-from weblate.trans.file_format_params import FILE_FORMATS_PARAMS
+from weblate.trans.file_format_params import FILE_FORMATS_PARAMS, get_encoding_param
 from weblate.trans.mixins import (
     CacheKeyMixin,
     ComponentCategoryMixin,
@@ -1802,12 +1802,19 @@ class Component(
                     and not issubclass(self.file_format_cls, BilingualUpdateMixin)
                 ) or (
                     self.template
-                    and self.file_format_cls.get_new_file_content() is None
+                    and self.file_format_cls.get_new_file_content(
+                        get_encoding_param(self.file_format_params)
+                    )
+                    is None
                 ):
                     raise ValidationError({"template": gettext("File does not exist.")})
                 LocalRepository.from_files(
                     self.full_path,
-                    {self.template: self.file_format_cls.get_new_file_content()}
+                    {
+                        self.template: self.file_format_cls.get_new_file_content(
+                            get_encoding_param(self.file_format_params)
+                        )
+                    }
                     if self.template
                     else {},
                 )
@@ -3390,15 +3397,16 @@ class Component(
             msg = gettext("Could not update repository: %s") % text
             raise ValidationError({"repo": msg}) from error
 
-        if (
-            issubclass(self.repository_class, GitMergeRequestBase)
-            and self.repo == self.push
-            and self.branch == self.push_branch
-        ):
-            msg = gettext(
-                "Pull and push branches cannot be the same when using merge requests."
-            )
-            raise ValidationError({"push_branch": msg})
+        if issubclass(self.repository_class, GitMergeRequestBase) and self.push:
+            if self.branch == self.push_branch:
+                msg = gettext(
+                    "Pull and push branches cannot be the same when using merge requests."
+                )
+                raise ValidationError({"push_branch": msg})
+
+            if not self.push_branch:
+                msg = gettext("Push branch cannot be empty when using merge requests.")
+                raise ValidationError({"push_branch": msg})
 
     def clean_file_format_params(self) -> None:
         for param in [

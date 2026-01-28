@@ -6,8 +6,11 @@ Weblate 5.16
 .. rubric:: New features
 
 * :ref:`check-multiple-capital` quality check.
+* Bulk accepting suggestions from a specific user in :ref:`suggestions`.
 * :setting:`HIDE_SHARED_GLOSSARY_COMPONENTS` to hide glossaries shared into other projects.
 * Added new management command :wladmin:`list_change_events`, which lists all possible change events, :ref:`addon-choice-events`.
+* Added Anthropic machinery integration, see :ref:`mt-anthropic`.
+* Encoding for :ref:`formats` can now be configured using :ref:`file_format_params` (e.g., ``csv_encoding``, ``properties_encoding``).
 
 .. rubric:: Improvements
 
@@ -16,15 +19,20 @@ Weblate 5.16
 * Regular repository maintenance is now performed in the background.
 * Repository cleanup now recovers failed merges or rebases.
 * Better visibility of :ref:`project-commit_policy` to translators.
+* Validation of VCS settings :ref:`push-changes` has been extended.
+* The default values for :ref:`project-translation_review` and :ref:`project-source_review` can be configured in settings.
 
 .. rubric:: Bug fixes
 
 * Adding plural strings with singular matching existing string is now prohibited for bilingual translations (see :ref:`bimono`).
 * Automatic :ref:`component-repoweb` URL for common code hosting sites.
+* File formats that only differed in encoding (CSV, GWT Properties, Java Properties, iOS Strings) have been merged into single formats.
+* Gracefully handle invalid check flags in :ref:`custom-checks`.
 
 .. rubric:: Compatibility
 
 * :ref:`check-regex` no longer marks matched portions as non-translatable to allow generic regular-expression-based checking of strings. Use :ref:`check-placeholders` for checking regular expression matched placeholders.
+* The default value for :setting:`WEBLATE_FORMATS` changed because of the removal of encoding-specific formats.
 
 .. rubric:: Upgrading
 

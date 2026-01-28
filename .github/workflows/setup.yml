@@ -35,7 +35,7 @@ jobs:
     - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       with:
         enable-cache: false
-        version: 0.9.26
+        version: 0.9.27
     - name: Setup Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
@@ -54,7 +54,7 @@ jobs:
         inputs: dist/*
     - name: Attest
       if: github.event_name == 'push'
-      uses: actions/attest-build-provenance@00014ed6ed5efc5b1ab7f7f34a39eb55d41aa4f8 # v3.1.0
+      uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
       with:
         subject-path: dist/*
     - uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
@@ -87,7 +87,7 @@ jobs:
     - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       with:
         enable-cache: false
-        version: 0.9.26
+        version: 0.9.27
     - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: dist
@@ -125,7 +125,7 @@ jobs:
     - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       with:
         enable-cache: false
-        version: 0.9.26
+        version: 0.9.27
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
@@ -173,7 +173,7 @@ jobs:
     - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
       with:
         enable-cache: false
-        version: 0.9.26
+        version: 0.9.27
     - run: uv publish --trusted-publishing always
 
   publish_github:
