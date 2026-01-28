@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import qrcode
 import qrcode.image.svg
 import social_django.utils
-import whirlpool
+from weblate.utils.whirlpool import whirlpool
 from asgiref.sync import async_to_sync
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -164,7 +164,7 @@ from weblate.utils import messages
 from weblate.utils.errors import add_breadcrumb, report_error
 from weblate.utils.ratelimit import check_rate_limit, session_ratelimit_post
 from weblate.utils.request import get_ip_address, get_user_agent
-from weblate.utils.requests import request as weblate_request
+from weblate.utils.requests import http_request
 from weblate.utils.stats import prefetch_stats
 from weblate.utils.token import get_token
 from weblate.utils.version import USER_AGENT
@@ -1686,7 +1686,7 @@ class Webfinger:
             f"Performing webfinger lookup for url {self.url} on domain {self.domain}, calling {webfinger_url}"
         )
 
-        wf_response = weblate_request("get", webfinger_url)
+        wf_response = http_request("get", webfinger_url)
         if wf_response.status_code != 200:
             LOGGER.info(
                 f"Webfinger request failed, status code = {wf_response.status_code}"
@@ -1936,7 +1936,7 @@ class AvatarImageMgr:
             avatar_image = cache.get(get_avatar_cache_key(address, 24))
             if avatar_image is None:
                 LOGGER.info(f"Requesting avatar on {avatar_link}")
-                avatar_image = weblate_request("get", avatar_link)
+                avatar_image = http_request("get", avatar_link)
                 for size in ALLOWED_SIZES:
                     self.store(get_avatar_cache_key(address, size), avatar_image, size)
             else:
