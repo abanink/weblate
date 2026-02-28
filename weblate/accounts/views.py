@@ -8,7 +8,8 @@ import base64
 import io
 import os
 import re
-import secrets
+import random
+#import secrets
 import string
 import time
 from base64 import b32encode
@@ -21,6 +22,10 @@ from urllib.parse import quote, urlparse, urlunparse
 import qrcode
 import qrcode.image.svg
 from asgiref.sync import async_to_sync
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME, get_backends
 from django.contrib.auth import login as auth_login
@@ -2083,10 +2088,14 @@ async def owa_server(request):
     LOGGER.info("Hit OWA endpoint")
 
     def generate_token(length=32):
+         # TODO this should be run through a whirlpool hash but "pip install whirlpool" failed compilation so I skipped that
         characters = string.ascii_letters + string.digits
-        return whirlpool.new(
-            "".join(secrets.choice(characters) for i in range(length)).encode("utf-8")
-        ).hexdigest()[:length]
+        return "".join(random.choice(characters) for i in range(length))
+    
+       # characters = string.ascii_letters + string.digits
+       # return whirlpool.new(
+       #     "".join(secrets.choice(characters) for i in range(length)).encode("utf-8")
+       # ).hexdigest()[:length]
 
     try:
         # raises InvalidSignature when signature could not be verified for some reason
