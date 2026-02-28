@@ -568,6 +568,7 @@ class ValidateOpenWebAuthentication:
 
             # This is used to explicitely set the user to authenticate
             # It is picked up by RemoteUserMiddleware to create and log in the user based on the trusted REMOTE_USER meta header in the request
+            # see https://docs.djangoproject.com/en/5.2/howto/auth-remote-user/
             request.META["REMOTE_USER"] = user_url
 
             return self.get_response(request)
