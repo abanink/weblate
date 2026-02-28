@@ -7,9 +7,10 @@ from __future__ import annotations
 import base64
 import io
 import os
-import re
 import random
-#import secrets
+import re
+
+# import secrets
 import string
 import time
 from base64 import b32encode
@@ -173,7 +174,6 @@ from weblate.utils.stats import prefetch_stats
 from weblate.utils.token import get_token
 from weblate.utils.version import USER_AGENT
 from weblate.utils.views import get_paginator, parse_path
-from weblate.utils.whirlpool import whirlpool
 from weblate.utils.zammad import ZammadError, submit_zammad_ticket
 
 if TYPE_CHECKING:
@@ -2088,14 +2088,14 @@ async def owa_server(request):
     LOGGER.info("Hit OWA endpoint")
 
     def generate_token(length=32):
-         # TODO this should be run through a whirlpool hash but "pip install whirlpool" failed compilation so I skipped that
+        # TODO this should be run through a whirlpool hash but "pip install whirlpool" failed compilation so I skipped that
         characters = string.ascii_letters + string.digits
         return "".join(random.choice(characters) for i in range(length))
-    
-       # characters = string.ascii_letters + string.digits
-       # return whirlpool.new(
-       #     "".join(secrets.choice(characters) for i in range(length)).encode("utf-8")
-       # ).hexdigest()[:length]
+
+    # characters = string.ascii_letters + string.digits
+    # return whirlpool.new(
+    #     "".join(secrets.choice(characters) for i in range(length)).encode("utf-8")
+    # ).hexdigest()[:length]
 
     try:
         # raises InvalidSignature when signature could not be verified for some reason
