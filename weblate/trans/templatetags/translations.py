@@ -53,8 +53,6 @@ from weblate.utils.random import get_random_identifier
 from weblate.utils.stats import (
     BaseStats,
     CategoryLanguage,
-    GhostCategoryLanguageStats,
-    GhostProjectLanguageStats,
     ProjectLanguage,
 )
 from weblate.utils.templatetags.icons import icon
@@ -76,6 +74,8 @@ if TYPE_CHECKING:
         ComponentList,
     )
     from weblate.utils.stats import (
+        GhostCategoryLanguageStats,
+        GhostProjectLanguageStats,
         GhostStats,
     )
 
@@ -176,6 +176,8 @@ class Formatter:
                 # Rearrange space highlighting
                 move_space = False
                 start_space = -1
+                start_nl = -1
+                append_end = True
                 if offset in self.tags:
                     for pos, tag in enumerate(self.tags[offset]):
                         if tag == SPACE_MIDDLE_2:
@@ -184,6 +186,9 @@ class Formatter:
                             break
                         if tag == SPACE_START:
                             start_space = pos
+                            break
+                        if tag == SPACE_NL_START:
+                            start_nl = pos
                             break
 
                 if start_space != -1:
@@ -205,11 +210,21 @@ class Formatter:
                     if start_space != -1 and last_middle is not None:
                         self.tags[tagoffset][pos] = SPACE_MIDDLE_1
 
+                elif start_nl != -1:
+                    # The line break is always one char wide, so we do not
+                    # need the complex logic used for generic whitespace
+                    start_tag = self.tags[offset].pop(start_nl)
+                    self.tags[end].insert(0, "<ins>")
+                    self.tags[end].insert(1, start_tag)
+                    self.tags[end].append("</ins>")
+                    append_end = False
+
                 else:
                     self.tags[offset].append("<ins>")
                 if move_space:
                     self.tags[offset].append(SPACE_START)
-                self.tags[end].append("</ins>")
+                if append_end:
+                    self.tags[end].append("</ins>")
                 if start_space != -1:
                     self.tags[end].append(SPACE_START)
 
@@ -1202,10 +1217,9 @@ def indicate_alerts(
     elif isinstance(obj, ProjectLanguage):
         project = obj.project
         project_language = obj
-    elif isinstance(obj, GhostProjectLanguageStats):
-        project = obj.project
-    elif isinstance(obj, GhostCategoryLanguageStats):
-        project = obj.category.project
+    # There is intentionally no project-level alerts for
+    # GhostProjectLanguageStats and GhostCategoryLanguageStats as these would
+    # be confusing (showing alert or admin icon on ghost containers).
 
     icons = format_html_join(
         "\n",
@@ -1684,3 +1698,8 @@ def get_git_export_example_url() -> str:
     )
     # Strip trailing info/refs part:
     return url[:-9]
+
+
+@register.filter(is_safe=True)
+def object_link(obj) -> str:
+    return format_html('<a href="{}">{}</a>', obj.get_absolute_url(), str(obj))

@@ -8,7 +8,9 @@ on:
   push:
     branches:
     - renovate/**
+    - dependabot/**
     - main
+    - stable
     paths:
     - .github/workflows/yarn-update.yml
     - scripts/yarn-update
@@ -35,74 +37,59 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      if: github.event_name != 'pull_request'
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+      if: github.event_name != 'pull_request' && github.repository_owner == 'WeblateOrg'
       with:
-        token: ${{ secrets.WEBLATE_CI_TOKEN }}
+        token: ${{ secrets.WEBLATE_CI_TOKEN }} # zizmor: ignore[secrets-outside-env]
         persist-credentials: true
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
+      if: github.event_name != 'pull_request' && github.repository_owner != 'WeblateOrg'
+      with:
+        persist-credentials: true
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd   # v6.0.2
       if: github.event_name == 'pull_request'
       with:
         persist-credentials: false
-    - uses: actions/cache@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+    - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: ~/.cache/pre-commit
         key: ${{ runner.os }}-pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
-    - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+    - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
       with:
         enable-cache: false
 
-        version: 0.9.27
+        version: 0.10.11
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
       with:
         python-version: '3.14'
+    - working-directory: ./client
+      run: |
+        yarn install --check-files
+        yarn build
     - name: Lockfile maintenance
       if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      working-directory: ./client
       run: |
-        for dir in scripts/yarn client ; do
-          if [ ! -d $dir ] ; then
-            echo "Skipping $dir"
-            continue
-          fi
-          pushd "$dir"
-          yarn upgrade
-          popd
-        done
-
-    - run: ./scripts/yarn-update
-      if: hashFiles('scripts/yarn-update') != ''
-
-    - run: |
-        if [ -d client ] ; then
-          cd client
-          yarn install --check-files
-          yarn build
-          cd ..
-        fi
+        yarn upgrade
+        yarn install
+        yarn build
 
     - name: Update SBOM
-      if: hashFiles('docs/specs/sbom/partial/javascript.json') != ''
       working-directory: ./client
       run: |
         npm sbom --omit dev --sbom-format cyclonedx --sbom-type application > ../docs/specs/sbom/partial/javascript.json
         ../scripts/reproducible-sbom.py ../docs/specs/sbom/partial/javascript.json
 
     - name: Merge SBOM
-      if: hashFiles('docs/specs/sbom/partial/python.json') != ''
       env:
         # renovate: datasource=github-releases depName=CycloneDX/cyclonedx-cli versioning=loose
-        CYCLONEDX_CLI_VERSION: v0.29.2
+        CYCLONEDX_CLI_VERSION: v0.30.0
       run: |
         curl -L "https://github.com/CycloneDX/cyclonedx-cli/releases/download/$CYCLONEDX_CLI_VERSION/cyclonedx-linux-x64" > /tmp/cyclonedx-linux-x64
         chmod +x /tmp/cyclonedx-linux-x64
         /tmp/cyclonedx-linux-x64 merge --input-files docs/specs/sbom/partial/* --output-file docs/specs/sbom/sbom.json
         ./scripts/reproducible-sbom.py docs/specs/sbom/sbom.json
-
-    - run: uv run --only-group pre-commit pre-commit run --all
-      continue-on-error: true
-
-    - run: git diff
 
     - name: Commit or create pull request
       uses: ./.github/actions/auto-commit
@@ -111,4 +98,4 @@ jobs:
         pr-branch: create-pull-request/yarn-update
         pr-labels: |
           dependencies
-        github-token: ${{ secrets.WEBLATE_CI_TOKEN }}
+        github-token: ${{ secrets.WEBLATE_CI_TOKEN }} # zizmor: ignore[secrets-outside-env]

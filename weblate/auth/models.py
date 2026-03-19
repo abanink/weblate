@@ -641,10 +641,12 @@ class User(AbstractBaseUser):
         """Compatibility API for third-party modules."""
         return self.full_name
 
-    def has_perms(self, perm_list, obj=None) -> bool:
+    def has_perms(self, perm_list: list[str], obj: models.Model | None = None) -> bool:
         return all(self.has_perm(perm, obj) for perm in perm_list)
 
-    def has_perm(self, perm: str, obj=None) -> PermissionResult | bool:
+    def has_perm(
+        self, perm: str, obj: models.Model | None = None
+    ) -> PermissionResult | bool:
         """Permission check."""
         # Weblate global scope permissions
         if perm in GLOBAL_PERM_NAMES:
@@ -827,6 +829,8 @@ class User(AbstractBaseUser):
                         clist.components.all() for clist in group.componentlists.all()
                     )
                 }
+                # Even if componentlist_values is empty, having a componentlist assignment
+                # means we need to stop processing here.
                 if group.componentlists.exists():
                     for component, project in componentlist_values:
                         components[component].append((permissions, languages))
@@ -919,7 +923,7 @@ class User(AbstractBaseUser):
     def get_author_name(self, address: str | None = None) -> str:
         """Return formatted author name with e-mail."""
         return format_address(
-            self.get_visible_name(), address or self.profile.get_commit_email()
+            self.profile.get_commit_name(), address or self.profile.get_commit_email()
         )
 
     def add_team(

@@ -103,6 +103,7 @@ class WeblateAccountsConf(AppConf):
 
     # Registration email filter
     REGISTRATION_EMAIL_MATCH = ".*"
+    REGISTRATION_ALLOW_DISPOSABLE_EMAILS = False
 
     # Captcha for registrations
     REGISTRATION_CAPTCHA = True
@@ -124,6 +125,8 @@ class WeblateAccountsConf(AppConf):
 
     PRIVATE_COMMIT_EMAIL_TEMPLATE = "{username}@users.noreply.{site_domain}"
     PRIVATE_COMMIT_EMAIL_OPT_IN = True
+    PRIVATE_COMMIT_NAME_TEMPLATE = "{site_title} user {user_id}"
+    PRIVATE_COMMIT_NAME_OPT_IN = True
 
     # Auth0 provider default image & title on login page
     SOCIAL_AUTH_AUTH0_IMAGE = "auth0.svg"
@@ -172,8 +175,9 @@ DOT_ATOM_RE = re.compile(
 )
 
 
-def format_private_email(username: str, user_id: int) -> str:
-    if not settings.PRIVATE_COMMIT_EMAIL_TEMPLATE:
+def format_private_commit_data(template: str, username: str, user_id: int) -> str:
+    """Format private commit data (email or name) using a template."""
+    if not template:
         return ""
     if username:
         if username.endswith(".") or ".." in username:
@@ -186,10 +190,18 @@ def format_private_email(username: str, user_id: int) -> str:
             username = ""
     if not username:
         username = f"user-{user_id}"
-    return settings.PRIVATE_COMMIT_EMAIL_TEMPLATE.format(
+
+    return template.format(
         username=username.lower(),
+        user_id=user_id,
         site_domain=settings.SITE_DOMAIN.rsplit(":", 1)[0],
+        site_title=settings.SITE_TITLE,
     )
+
+
+def get_default_contribute_personal_tm() -> bool:
+    """Return default value for personal TM contribution."""
+    return not settings.DEFAULT_AUTOCLEAN_TM
 
 
 class SubscriptionQuerySet(models.QuerySet["Subscription"]):
@@ -724,7 +736,7 @@ class Profile(models.Model):
     )
     contribute_personal_tm = models.BooleanField(
         verbose_name=gettext_lazy("Contribute to personal translation memory"),
-        default=True,
+        default=get_default_contribute_personal_tm,
         help_text=gettext_lazy(
             "Allow your translations to be added to your personal translation memory."
         ),
@@ -855,6 +867,17 @@ class Profile(models.Model):
         verbose_name=gettext_lazy("Commit e-mail"),
         blank=True,
         max_length=EMAIL_LENGTH,
+    )
+
+    class CommitNameChoices(models.IntegerChoices):
+        DEFAULT = 0, gettext_lazy("Use global default")
+        PUBLIC = 1, gettext_lazy("Public")
+        PRIVATE = 2, gettext_lazy("Private")
+
+    commit_name = models.IntegerField(
+        verbose_name=gettext_lazy("Commit name"),
+        default=CommitNameChoices.DEFAULT,
+        choices=CommitNameChoices.choices,
     )
 
     last_2fa = models.CharField(
@@ -1133,7 +1156,29 @@ class Profile(models.Model):
         return email
 
     def get_site_commit_email(self) -> str:
-        return format_private_email(self.user.username, self.user.pk)
+        return format_private_commit_data(
+            settings.PRIVATE_COMMIT_EMAIL_TEMPLATE, self.user.username, self.user.pk
+        )
+
+    def get_commit_name(self) -> str:
+        """Return the commit name to be used for version-control commits."""
+        visible_name = self.user.get_visible_name()
+        if (
+            self.user.is_bot
+            or self.commit_name == self.CommitNameChoices.PUBLIC
+            or (
+                self.commit_name == self.CommitNameChoices.DEFAULT
+                and settings.PRIVATE_COMMIT_NAME_OPT_IN
+            )
+        ):
+            return visible_name
+        return self.get_site_commit_name() or visible_name
+
+    def get_site_commit_name(self) -> str:
+        """Return the generated private commit name from the site template."""
+        return format_private_commit_data(
+            settings.PRIVATE_COMMIT_NAME_TEMPLATE, self.user.username, self.user.pk
+        )
 
     def _get_second_factors(self) -> Iterable[Device]:
         backend: type[Device]

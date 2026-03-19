@@ -553,6 +553,15 @@ $(function () {
   $window.resize(adjustColspan);
   $document.on("shown.bs.tab", adjustColspan);
 
+  /* Color theme management */
+  const theme = document.querySelector("body").getAttribute("data-theme");
+  if (
+    (theme === "auto") &
+    (window.matchMedia("(prefers-color-scheme: dark)").matches === true)
+  ) {
+    document.documentElement.setAttribute("data-bs-theme", "dark");
+  }
+
   /* AJAX loading of tabs/pills */
   $document.on(
     "show.bs.tab",
@@ -1257,7 +1266,7 @@ $(function () {
     values: (text, callback) => {
       $.ajax({
         type: "GET",
-        url: `/api/users/?username=${text}`,
+        url: `/api/users/?username=${text}&is_active=1`,
         dataType: "json",
         success: (data) => {
           const userMentionList = data.results.map((user) => ({
@@ -1650,14 +1659,6 @@ $(function () {
     }
   });
 
-  const theme = document.querySelector("body").getAttribute("data-theme");
-  if (
-    (theme === "auto") &
-    (window.matchMedia("(prefers-color-scheme: dark)").matches === true)
-  ) {
-    document.documentElement.setAttribute("data-bs-theme", "dark");
-  }
-
   /* Warn users that they do not want to use developer console in most cases */
   console.log(
     "%c%s",
@@ -1763,7 +1764,7 @@ $(function () {
       } else if (difference < 60 * 60 * 24) {
         const hours = Math.floor(difference / (60 * 60));
         if (hours === 1) {
-          value = gettext("a hour ago");
+          value = gettext("an hour ago");
         } else {
           value = interpolate(ngettext("%s hour ago", "%s hours ago", hours), [
             hours,
@@ -1774,7 +1775,6 @@ $(function () {
     if (value === "") {
       value = dateFormatter.format(new Date(timestamp));
     }
-    console.log(timestamp, value);
     timespan.textContent = value;
   });
 });

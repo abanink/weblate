@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal
 
 from django.db.models import Count, Prefetch, Q, Value
 from django.db.models.functions import MD5, Lower
+from django.utils.html import format_html
 from django.utils.translation import gettext, gettext_lazy, ngettext
 
 from weblate.checks.base import BatchCheckMixin, TargetCheck
@@ -131,10 +132,12 @@ class ConsistencyCheck(TargetCheck, BatchCheckMixin):
         return (
             units.filter(
                 reduce(
-                    lambda x, y: x
-                    | (
-                        Q(id_hash=y["id_hash"])
-                        & Q(translation__plural_id=y["translation__plural_id"])
+                    lambda x, y: (
+                        x
+                        | (
+                            Q(id_hash=y["id_hash"])
+                            & Q(translation__plural_id=y["translation__plural_id"])
+                        )
                     ),
                     matches,
                     Q(),
@@ -159,6 +162,7 @@ class ReusedCheck(TargetCheck, BatchCheckMixin):
     propagates = "target"
     batch_project_wide = True
     skip_suggestions = True
+    version_added = "4.18"
 
     def should_skip(self, unit: Unit):
         if unit.translation.plural.number <= 1 or not any(unit.get_target_plurals()):
@@ -186,10 +190,14 @@ class ReusedCheck(TargetCheck, BatchCheckMixin):
             .distinct()
         )
 
-        return ngettext(
-            "Other source string: %s", "Other source strings: %s", len(other_sources)
-        ) % format_html_join_comma(
-            "{}", ((gettext("“%s”") % source,) for source in other_sources)
+        return format_html(
+            "{} {}",
+            ngettext(
+                "Other source string:", "Other source strings:", len(other_sources)
+            ),
+            format_html_join_comma(
+                "{}", ((gettext("“%s”") % source,) for source in other_sources)
+            ),
         )
 
     def check_single(self, source: str, target: str, unit: Unit) -> bool:
@@ -223,11 +231,13 @@ class ReusedCheck(TargetCheck, BatchCheckMixin):
         result = (
             units.filter(
                 reduce(
-                    lambda x, y: x
-                    | (
-                        Q(target__lower__md5=MD5(Lower(Value(y["target"]))))
-                        & Q(target=y["target"])
-                        & Q(translation__plural_id=y["translation__plural_id"])
+                    lambda x, y: (
+                        x
+                        | (
+                            Q(target__lower__md5=MD5(Lower(Value(y["target"]))))
+                            & Q(target=y["target"])
+                            & Q(translation__plural_id=y["translation__plural_id"])
+                        )
                     ),
                     matches,
                     Q(),
@@ -278,11 +288,8 @@ class TranslatedCheck(TargetCheck, BatchCheckMixin):
         return gettext('Previous translation was "%s".') % target
 
     def should_skip_change(self, change: Change, unit: Unit):
-        # Skip automatic translation entries adding needs editing string
-        return (
-            change.action == ActionEvents.AUTO
-            and change.details.get("state", STATE_TRANSLATED) < STATE_TRANSLATED
-        )
+        # Skip translation entries adding needs editing string
+        return change.details.get("state", STATE_TRANSLATED) < STATE_TRANSLATED
 
     def should_break_changes(self, change: Change):
         # Stop changes processing on source string change or on
@@ -341,7 +348,7 @@ class TranslatedCheck(TargetCheck, BatchCheckMixin):
                 Prefetch(
                     "change_set",
                     queryset=Change.objects.filter(
-                        action__in=self.TRACK_ACTIONS,
+                        action__in=self.TRACK_ACTIONS
                     ).order(),
                     to_attr="recent_consistency_changes",
                 )

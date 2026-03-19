@@ -1119,6 +1119,29 @@ class DiscoveryTest(ViewTestCase):
             follow=True,
         )
         self.assertContains(response, "Please review and confirm")
+        # Discovery preview error
+        with patch(
+            "weblate.trans.discovery.regex_match",
+            side_effect=TimeoutError,
+        ):
+            response = self.client.post(
+                reverse("addons", kwargs=self.kw_component),
+                {
+                    "name": "weblate.discovery.discovery",
+                    "form": "1",
+                    "file_format": "po",
+                    "match": r"(?P<component>[^/]*)/(?P<language>[^/]*)\.po",
+                    "name_template": "{{ component|title }}",
+                    "language_regex": "^(?!xx).+$",
+                    "base_file_template": "",
+                    "remove": True,
+                },
+                follow=True,
+            )
+        self.assertContains(
+            response,
+            "The regular expression used to match discovered files is too complex and took too long to evaluate.",
+        )
         # Confirmation
         with override_settings(CREATE_GLOSSARIES=self.CREATE_GLOSSARIES):
             response = self.client.post(
@@ -1179,11 +1202,11 @@ class LanguageConsistencyTest(ViewTestCase):
             .first()
         )
         self.assertIn(
-            f"{ts_component.full_slug}: Added German for language consistency",
+            f"{ts_component.full_slug}: Add missing languages: Added German",
             activity_logs.details["result"],
         )
         self.assertIn(
-            f"{ts_component.full_slug}: Added Italian for language consistency",
+            f"{ts_component.full_slug}: Add missing languages: Added Italian",
             activity_logs.details["result"],
         )
 
@@ -1583,6 +1606,58 @@ class CDNJSAddonTest(ViewTestCase):
         )
         # The error should be there
         self.assertTrue(self.component.alert_set.filter(name="CDNAddonError").exists())
+
+    @tempdir_setting("LOCALIZE_CDN_PATH")
+    @override_settings(LOCALIZE_CDN_URL="http://localhost/")
+    def test_extract_refuses_outside_repository(self) -> None:
+        self.make_manager()
+        self.assertTrue(CDNJSAddon.can_install(component=self.component))
+        self.assertEqual(
+            Unit.objects.filter(translation__component=self.component).count(), 8
+        )
+
+        CDNJSAddon.create(
+            component=self.component,
+            configuration={
+                "threshold": 0,
+                "files": "../../../../../etc/hosts",
+                "cookie_name": "django_languages",
+                "css_selector": "*",
+            },
+        )
+
+        self.assertEqual(
+            Unit.objects.filter(translation__component=self.component).count(), 8
+        )
+        alert = self.component.alert_set.get(name="CDNAddonError")
+        self.assertIn("parent directory", alert.details["occurrences"][0]["error"])
+
+    @tempdir_setting("LOCALIZE_CDN_PATH")
+    @override_settings(
+        LOCALIZE_CDN_URL="http://localhost/", ALLOWED_ASSET_DOMAINS=[".allowed.com"]
+    )
+    def test_extract_refuses_disallowed_remote_domain(self) -> None:
+        self.make_manager()
+        self.assertTrue(CDNJSAddon.can_install(component=self.component))
+        self.assertEqual(
+            Unit.objects.filter(translation__component=self.component).count(), 8
+        )
+
+        CDNJSAddon.create(
+            component=self.component,
+            configuration={
+                "threshold": 0,
+                "files": "https://blocked.example.com/messages.html",
+                "cookie_name": "django_languages",
+                "css_selector": "*",
+            },
+        )
+
+        self.assertEqual(
+            Unit.objects.filter(translation__component=self.component).count(), 8
+        )
+        alert = self.component.alert_set.get(name="CDNAddonError")
+        self.assertIn("domain is not allowed", alert.details["occurrences"][0]["error"])
 
 
 class SiteWideAddonsTest(ViewTestCase):
@@ -2072,9 +2147,7 @@ class WebhooksAddonTest(BaseWebhookTests, ViewTestCase):
 
 class SlackWebhooksAddonsTest(BaseWebhookTests, ViewTestCase):
     WEBHOOK_CLS = SlackWebhookAddon
-    WEBHOOK_URL = (
-        "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
-    )
+    WEBHOOK_URL = "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"  # kingfisher:ignore
 
     addon_configuration: ClassVar[dict] = {
         "webhook_url": WEBHOOK_URL,
@@ -2111,7 +2184,8 @@ class FedoraMessagingAddonTestCase(BaseWebhookTests, ViewTestCase):
         return self.mock_class.call_count
 
     def reset_calls(self) -> None:
-        self.mock_class.call_count = 0
+        self.patcher.stop()
+        self.mock_class = self.patcher.start()
 
     def test_topic(self):
         for change in Change.objects.all():
@@ -2205,3 +2279,13 @@ class FedoraMessagingAddonTestCase(BaseWebhookTests, ViewTestCase):
             follow=True,
         )
         self.assertContains(response, "Installed 1 add-on")
+
+
+class TestCommand(ViewTestCase):
+    def test_list_addons(self) -> None:
+        output = StringIO()
+        call_command("list_addons", stdout=output)
+        self.assertIn(".. _addon-event-add-on-installation:", output.getvalue())
+
+        with self.assertRaises(FileNotFoundError):
+            call_command("list_addons", "-o", "missing_fileXXX.rst", stdout=StringIO())

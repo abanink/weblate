@@ -604,6 +604,12 @@ LICENSES = (
         False,
     ),
     (
+        "BOLA-1.1",
+        "Buena Onda License Agreement v1.1",
+        "https://spdx.org/licenses/BOLA-1.1.html",
+        False,
+    ),
+    (
         "BUSL-1.1",
         "Business Source License 1.1",
         "https://spdx.org/licenses/BUSL-1.1.html",
@@ -3154,6 +3160,12 @@ LICENSES = (
         False,
     ),
     (
+        "OSC-1.0",
+        "OSC License 1.0",
+        "https://spdx.org/licenses/OSC-1.0.html",
+        True,
+    ),
+    (
         "OSET-PL-2.1",
         "OSET Public License version 2.1",
         "https://spdx.org/licenses/OSET-PL-2.1.html",
@@ -3938,6 +3950,12 @@ LICENSES = (
         "Vim License",
         "https://spdx.org/licenses/Vim.html",
         True,
+    ),
+    (
+        "Vixie-Cron",
+        "Vixie Cron License",
+        "https://spdx.org/licenses/Vixie-Cron.html",
+        False,
     ),
     (
         "VOSTROM",

@@ -12,6 +12,7 @@ from itertools import chain
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
+import regex
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.utils.functional import cached_property
@@ -90,6 +91,9 @@ XML_ENTITY_MATCH = re.compile(
     """,
     re.VERBOSE,
 )
+XML_CDATA_MATCH = re.compile(r"<!\[CDATA\[(.*?)]]>")
+
+SINGLE_LETTER_MATCH = regex.compile(r"\p{L}")
 
 # Extracted from Sphinx sphinx/util/docutils.py
 RST_EXPLICIT_TITLE_RE = re.compile(r"^(.+?)\s*(?<!\x00)<(.*?)>$", re.DOTALL)
@@ -121,7 +125,7 @@ RST_LIST_START = ("- ", "* ", "+ ")
 
 def strip_entities(text):
     """Strip all HTML entities (we don't care about them)."""
-    return XML_ENTITY_MATCH.sub(" ", text)
+    return XML_CDATA_MATCH.sub(r"\1", XML_ENTITY_MATCH.sub(" ", text))
 
 
 class BBCodeCheck(TargetCheck):
@@ -131,6 +135,12 @@ class BBCodeCheck(TargetCheck):
     name = gettext_lazy("BBCode markup")
     description = gettext_lazy("BBCode in translation does not match source.")
     default_disabled = True
+    versions_changed = (
+        (
+            "5.10",
+            "This checks no longer relies on unreliable automatic detection, it now needs to be turned on using the ``bbcode-text`` flag.",
+        ),
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -284,6 +294,61 @@ class XMLTagsCheck(BaseXMLCheck):
                 continue
             ret.append((start, end, match.group()))
         return ret
+
+
+class XMLCharsAroundTagsCheck(BaseXMLCheck):
+    """Check that characters adjacent to target's XML tags are letters or non-letters according to the source."""
+
+    check_id = "xml-chars-around-tags"
+    name = gettext_lazy("Chars around XML tags")
+    description = gettext_lazy(
+        "Characters surrounding XML tags in translation do not align with source."
+    )
+
+    def check_single(self, source: str, target: str, unit: Unit) -> bool:
+        src_tags = list(XML_MATCH.finditer(source))
+        tgt_tags = list(XML_MATCH.finditer(target))
+
+        if len(src_tags) != len(tgt_tags):
+            return False
+
+        for i, tag in enumerate(src_tags):
+            src_start_idx = tag.start()
+            tgt_start_idx = tgt_tags[i].start()
+            src_end_idx = tag.end()
+            tgt_end_idx = tgt_tags[i].end()
+
+            # if string starts with tag, only check char following this tag
+            if src_start_idx == 0 or tgt_start_idx == 0:
+                if src_end_idx < len(source) and tgt_end_idx < len(target):
+                    src_next_char = source[src_end_idx]
+                    tgt_next_char = target[tgt_end_idx]
+                    if self.char_check(src_next_char, tgt_next_char):
+                        return True
+            # if string ends with tag, only check char preceding this tag
+            elif src_end_idx == len(source) or tgt_end_idx == len(target):
+                if src_start_idx > 0 and tgt_start_idx > 0:
+                    src_prev_char = source[src_start_idx - 1]
+                    tgt_prev_char = target[tgt_start_idx - 1]
+                    if self.char_check(src_prev_char, tgt_prev_char):
+                        return True
+            # if inline tag, check char preceding and following this tag
+            else:
+                src_prev_char = source[src_start_idx - 1]
+                tgt_prev_char = target[tgt_start_idx - 1]
+                src_next_char = source[src_end_idx]
+                tgt_next_char = target[tgt_end_idx]
+
+                if self.char_check(src_prev_char, tgt_prev_char):
+                    return True
+                if self.char_check(src_next_char, tgt_next_char):
+                    return True
+        return False
+
+    def char_check(self, src_char: str, tgt_char: str) -> bool:
+        src_letter = bool(SINGLE_LETTER_MATCH.search(src_char))
+        tgt_letter = bool(SINGLE_LETTER_MATCH.search(tgt_char))
+        return src_letter ^ tgt_letter
 
 
 class MarkdownBaseCheck(TargetCheck):
@@ -486,6 +551,7 @@ class RSTReferencesCheck(RSTBaseCheck):
     description = gettext_lazy(
         "Inconsistent reStructuredText markup in the translated message."
     )
+    version_added = "5.10"
 
     def get_missing_text(self, values: Iterable[str]) -> StrOrPromise:
         return self.get_values_text(
@@ -645,6 +711,7 @@ class RSTSyntaxCheck(RSTBaseCheck):
     check_id = "rst-syntax"
     name = gettext_lazy("reStructuredText syntax error")
     description = gettext_lazy("reStructuredText syntax error in the translation.")
+    version_added = "5.10"
 
     def check_single(
         self, source: str, target: str, unit: Unit

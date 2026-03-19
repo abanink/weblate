@@ -1,16 +1,133 @@
-Weblate 5.16
+Weblate 5.17
 ------------
 
 *Not yet released.*
 
 .. rubric:: New features
 
+.. rubric:: Improvements
+
+* Track origin of newly added source strings.
+* Improved LLM interfaces for better reliability.
+* Improved logic for adding monolingual plurals in :doc:`/formats/gettext`.
+* Improved error messages in some of the :ref:`api` endpoints.
+
+.. rubric:: Bug fixes
+
+* :ref:`addon-weblate.git.squash` better handle commits applied upstream.
+* :ref:`addon-weblate.cdn.cdnjs` validates parsed locations.
+* Removed unintended API endpoints for translation memory.
+* Improved API access control for pending tasks.
+* Faster category removal.
+
+.. rubric:: Compatibility
+
+* Dropped support for MySQL and MariaDB as the database engine.
+* Weblate now requires Django 6.0.
+* Weblate now requires Git 2.46 or newer.
+
+.. rubric:: Upgrading
+
+Please follow :ref:`generic-upgrade-instructions` in order to perform update.
+
+* There are several changes in :file:`settings_example.py`, most notably :setting:`ADMINS` syntax has changed in Django.
+
+.. rubric:: Contributors
+
+.. include:: changes/contributors/5.17.rst
+
+`All changes in detail <https://github.com/WeblateOrg/weblate/milestone/158?closed=1>`__.
+
+Weblate 5.16.2
+--------------
+
+*Released on March 6th 2026.*
+
+.. rubric:: New features
+
+* New setting :setting:`PUBLIC_ENGAGE` to make the engage page public even with :setting:`REQUIRE_LOGIN`.
+
+.. rubric:: Improvements
+
+* Improved matching in :doc:`/admin/memory`.
+* Show the number of strings waiting for review in listings.
+
+.. rubric:: Bug fixes
+
+* Avoid displaying confusing status icons for ghost languages on project or category level.
+* Fixed missing plural source strings when creating new bilingual plural units.
+* Crash on certain pages with nested categories.
+* Improved API validation when adding strings.
+* Disabled throttling for incoming webhooks.
+* Avoid displaying non-actionable ghost languages.
+* Fixed highlighting in the translation editor.
+
+.. rubric:: Upgrading
+
+Please follow :ref:`generic-upgrade-instructions` in order to perform update.
+
+.. rubric:: Contributors
+
+.. include:: changes/contributors/5.16.2.rst
+
+`All changes in detail <https://github.com/WeblateOrg/weblate/milestone/163?closed=1>`__.
+
+Weblate 5.16.1
+--------------
+
+*Released on February 26th 2026.*
+
+.. rubric:: New features
+
+* :doc:`/formats/asciidoc`, :doc:`/formats/xliff` with Apple extensions, and :doc:`/formats/wxl` are now supported file formats.
+* Added :setting:`REGISTRATION_ALLOW_DISPOSABLE_EMAILS` to optionally allow disposable e-mail domains during registration (Docker env: :envvar:`WEBLATE_REGISTRATION_ALLOW_DISPOSABLE_EMAILS`).
+
+.. rubric:: Improvements
+
+* Improved documentation for translation states to clarify the difference between :guilabel:`Needs editing`, :guilabel:`Needs rewriting`, and :guilabel:`Needs checking` states.
+* Improved initial import of translations for :doc:`/formats/markdown` and :doc:`/formats/html`.
+
+.. rubric:: Bug fixes
+
+* :ref:`addon-weblate.webhook.slack` properly delivers all events.
+* :ref:`check-punctuation-spacing` better handles XML markup.
+* :doc:`/formats/stringsdict` better handle some plurals.
+* Improved plurals handling for language variants.
+* Fixed API access control.
+
+  * Users can manage their own notification subscriptions via the API.
+  * Project administrators can manage teams in their projects via the API, according to access control rules.
+  * The add-ons listing in the API now correctly honors user permissions (:cve:`2026-27457` / :ghsa:`wppc-7cq7-cgfv`).
+
+* Fixed source column being cleared when translating monolingual :doc:`/formats/csv`.
+
+.. rubric:: Upgrading
+
+Please follow :ref:`generic-upgrade-instructions` in order to perform update.
+
+.. rubric:: Contributors
+
+.. include:: changes/contributors/5.16.1.rst
+
+`All changes in detail <https://github.com/WeblateOrg/weblate/milestone/161?closed=1>`__.
+
+Weblate 5.16
+------------
+
+*Released on February 16th 2026.*
+
+.. rubric:: New features
+
 * :ref:`check-multiple-capital` quality check.
+* :ref:`check-xml-chars-around-tags` reduce translation errors for strings with XML entities.
 * Bulk accepting suggestions from a specific user in :ref:`suggestions`.
+* Cloning suggestions into translation in :ref:`suggestions`.
 * :setting:`HIDE_SHARED_GLOSSARY_COMPONENTS` to hide glossaries shared into other projects.
 * Added new management command :wladmin:`list_change_events`, which lists all possible change events, :ref:`addon-choice-events`.
 * Added Anthropic machinery integration, see :ref:`mt-anthropic`.
 * Encoding for :ref:`formats` can now be configured using :ref:`file_format_params` (e.g., ``csv_encoding``, ``properties_encoding``).
+* Added support for anonymous commit names via :setting:`PRIVATE_COMMIT_NAME_TEMPLATE`.
+* Consolidating identical strings in :ref:`markdown`, :ref:`html`, and :ref:`txt` files using ``*merge_duplicates`` parameters in :ref:`file_format_params`.
 
 .. rubric:: Improvements
 
@@ -21,18 +138,25 @@ Weblate 5.16
 * Better visibility of :ref:`project-commit_policy` to translators.
 * Validation of VCS settings :ref:`push-changes` has been extended.
 * The default values for :ref:`project-translation_review` and :ref:`project-source_review` can be configured in settings.
+* The :setting:`PRIVATE_COMMIT_EMAIL_TEMPLATE` now supports the ``{user_id}`` and ``{site_title}`` variables.
+* The default value for personal translation memory contribution is now based on the :setting:`DEFAULT_AUTOCLEAN_TM` configuration.
 
 .. rubric:: Bug fixes
 
+* Argument injection in the management console (:cve:`2026-24126` / :ghsa:`33fm-6gp7-4p47`).
 * Adding plural strings with singular matching existing string is now prohibited for bilingual translations (see :ref:`bimono`).
 * Automatic :ref:`component-repoweb` URL for common code hosting sites.
-* File formats that only differed in encoding (CSV, GWT Properties, Java Properties, iOS Strings) have been merged into single formats.
+* Improved cache isolation for suggestion checks to avoid interference with the parent unit checks.
 * Gracefully handle invalid check flags in :ref:`custom-checks`.
+* :doc:`/formats/appstore` no longer rewrites unchanged files.
 
 .. rubric:: Compatibility
 
 * :ref:`check-regex` no longer marks matched portions as non-translatable to allow generic regular-expression-based checking of strings. Use :ref:`check-placeholders` for checking regular expression matched placeholders.
 * The default value for :setting:`WEBLATE_FORMATS` changed because of the removal of encoding-specific formats.
+* File formats that only differed in encoding (CSV, GWT Properties, Java Properties, iOS Strings) have been merged into single formats.
+* Fonts used by Weblate are now shipped in a standalone package.
+* Dropped deprecated compatibility wrappers some classes with typos.
 
 .. rubric:: Upgrading
 

@@ -7,12 +7,14 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from django.db import transaction
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.utils import timezone
+from django.utils.translation import activate
 
 from weblate.auth.models import Group, User
 from weblate.checks.models import Check
@@ -46,6 +48,7 @@ from weblate.utils.state import (
     STATE_APPROVED,
     STATE_FUZZY,
     STATE_NEEDS_CHECKING,
+    STATE_NEEDS_REWRITING,
     STATE_READONLY,
     STATE_TRANSLATED,
 )
@@ -53,6 +56,11 @@ from weblate.utils.version import GIT_VERSION
 
 
 class BaseTestCase(TestCase):
+    def setUp(self) -> None:
+        # Ensure we're using English
+        activate("en")
+        super().setUp()
+
     @classmethod
     def setUpTestData(cls) -> None:
         fixup_languages_seq()
@@ -69,6 +77,11 @@ class BaseTestCase(TestCase):
 
 
 class BaseLiveServerTestCase(StaticLiveServerTestCase):
+    def setUp(self) -> None:
+        # Ensure we're using English
+        activate("en")
+        super().setUp()
+
     @classmethod
     def setUpTestData(cls) -> None:
         fixup_languages_seq()
@@ -89,6 +102,7 @@ class RepoTestCase(BaseTestCase, RepoTestMixin):
 
     def setUp(self) -> None:
         self.clone_test_repos()
+        super().setUp()
 
 
 class ProjectTest(RepoTestCase):
@@ -217,7 +231,6 @@ class ProjectTest(RepoTestCase):
             {
                 "Administration",
                 "Automatic translation",
-                "Billing",
                 "Bulk editing",
                 "Glossary",
                 "Languages",
@@ -249,7 +262,6 @@ class ProjectTest(RepoTestCase):
             {
                 "Administration",
                 "Automatic translation",
-                "Billing",
                 "Bulk editing",
                 "Glossary",
                 "Languages",
@@ -633,6 +645,18 @@ class ComponentListTest(RepoTestCase):
         )
         self.assertEqual(clist.components.count(), 0)
 
+    def test_auto_timeout(self) -> None:
+        clist = ComponentList.objects.create(name="Name", slug="slug")
+        AutoComponentList.objects.create(
+            project_match="^.*$", component_match="^.*$", componentlist=clist
+        )
+        with patch(
+            "weblate.trans.models.componentlist.regex_match",
+            side_effect=TimeoutError,
+        ):
+            self.create_component()
+        self.assertEqual(clist.components.count(), 0)
+
     def test_source_review(self) -> None:
         component = self.create_json_intermediate()
 
@@ -658,6 +682,17 @@ class ComponentListTest(RepoTestCase):
         component.do_file_scan()
         translation_unit = unit.unit_set.get(translation__language__code="cs")
         self.assertEqual(translation_unit.state, STATE_READONLY)
+
+        # Set source back to translated - translation should be restored
+        unit.translate(None, "Hello, world!\n", STATE_TRANSLATED)
+        translation_unit = unit.unit_set.get(translation__language__code="cs")
+        self.assertNotEqual(translation_unit.state, STATE_READONLY)
+
+        # Verify state survives commit + file scan roundtrip
+        component.commit_pending("test", None)
+        component.do_file_scan()
+        translation_unit = unit.unit_set.get(translation__language__code="cs")
+        self.assertNotEqual(translation_unit.state, STATE_READONLY)
 
 
 class ModelTestCase(RepoTestCase):
@@ -807,6 +842,33 @@ class UnitTest(ModelTestCase):
         unit.pk = True
         unit.source = "My test source"
         self.assertEqual(unit.get_max_length(), 10000)
+
+    def test_batch_update_defers_change_and_pending_change(self) -> None:
+        """Change objects are deferred to update_changes list when is_batch_update=True."""
+        user = create_test_user()
+        unit = Unit.objects.filter(
+            translation__language_code="cs", source="Hello, world!\n"
+        )[0]
+        PendingUnitChange.objects.filter(unit=unit).delete()
+        initial_count = Change.objects.count()
+
+        unit.is_batch_update = True
+        unit.translate(user, "Nazdar svete!\n", STATE_TRANSLATED)
+
+        # Change and PendingUnitChange should NOT be in DB yet
+        self.assertEqual(Change.objects.count(), initial_count)
+        self.assertFalse(PendingUnitChange.objects.filter(unit=unit).exists())
+
+        # But should be in the deferred list on the translation
+        self.assertEqual(len(unit.translation.update_changes), 1)
+        self.assertEqual(len(unit.translation.pending_unit_changes), 1)
+
+        # After flush, it should be in DB and the list cleared
+        unit.translation.store_update_changes()
+        self.assertEqual(Change.objects.count(), initial_count + 1)
+        self.assertEqual(len(unit.translation.update_changes), 0)
+        self.assertTrue(PendingUnitChange.objects.filter(unit=unit).exists())
+        self.assertEqual(len(unit.translation.pending_unit_changes), 0)
 
 
 class AnnouncementTest(ModelTestCase):
@@ -1113,3 +1175,39 @@ class AutomaticallyTranslatedFromFileTest(RepoTestCase):
 
         car_unit = translation.unit_set.get(source="Car")
         self.assertTrue(car_unit.automatically_translated)
+
+
+class FuzzySubstatePreservationTest(RepoTestCase):
+    """Test that fuzzy sub-states are preserved across file syncs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.user = create_test_user()
+
+    def _test_fuzzy_substate_preserved_after_sync(self, substate) -> None:
+        component = self.create_component()
+        translation = component.translation_set.get(language_code="cs")
+        unit = translation.unit_set.get(source="Hello, world!\n")
+
+        unit.translate(self.user, "Ahoj světe!\n", substate)
+        self.assertEqual(unit.state, substate)
+
+        translation.commit_pending("test", None)
+
+        unit.refresh_from_db()
+        self.assertEqual(unit.state, substate)
+        self.assertNotIn("disk_state", unit.details)
+
+        # Trigger check_sync to simulate repository parsing due to another change
+        translation = component.translation_set.get(language_code="cs")
+        translation.check_sync(force=True)
+
+        # The fuzzy sub-state should be preserved, not changed to STATE_FUZZY
+        unit.refresh_from_db()
+        self.assertEqual(unit.state, substate)
+
+    def test_needs_rewriting_preserved_after_sync(self) -> None:
+        self._test_fuzzy_substate_preserved_after_sync(STATE_NEEDS_REWRITING)
+
+    def test_needs_checking_preserved_after_sync(self) -> None:
+        self._test_fuzzy_substate_preserved_after_sync(STATE_NEEDS_CHECKING)

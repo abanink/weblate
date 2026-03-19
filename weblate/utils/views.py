@@ -35,27 +35,18 @@ from weblate.lang.models import Language
 from weblate.trans.models import Category, Component, Project, Translation, Unit
 from weblate.utils import messages
 from weblate.utils.errors import report_error
-from weblate.utils.stats import (
-    CategoryLanguage,
-    ProjectLanguage,
-    prefetch_stats,
-)
+from weblate.utils.stats import CategoryLanguage, ProjectLanguage, prefetch_stats
 from weblate.vcs.git import LocalRepository
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from django.db.models import Model
-    from django.http import (
-        HttpRequest,
-        HttpResponseBase,
-    )
+    from django.http import HttpRequest, HttpResponseBase
 
     from weblate.auth.models import AuthenticatedHttpRequest
     from weblate.trans.mixins import BaseURLMixin
-    from weblate.utils.stats import (
-        BaseStats,
-    )
+    from weblate.utils.stats import BaseStats
 
 
 class UnsupportedPathObjectError(Http404):
@@ -72,6 +63,10 @@ def key_name(instance):
 
 def key_translated(instance):
     return instance.stats.translated_percent
+
+
+def key_unreviewed(instance):
+    return instance.stats.waiting_review
 
 
 def key_untranslated(instance):
@@ -105,6 +100,7 @@ def key_comments(instance):
 SORT_KEYS = {
     "name": key_name,
     "translated": key_translated,
+    "unreviewed": key_unreviewed,
     "untranslated": key_untranslated,
     "untranslated_words": key_untranslated_words,
     "untranslated_chars": key_untranslated_chars,
@@ -165,10 +161,10 @@ def get_paginator(
     *,
     page_limit: int | None = None,
     stats: bool = False,
+    sort_by: str | None = None,
 ):
     """Return paginator and current page."""
     page, limit = get_page_limit(request, page_limit or settings.DEFAULT_PAGE_LIMIT)
-    sort_by = request.GET.get("sort_by")
     stats_fetched = False
     if sort_by:
         # All but ordering by name needs stats
@@ -409,7 +405,7 @@ def parse_path_units(
         unit_set = access_units.filter(translation__language=obj).prefetch()
         context["language"] = obj
     elif obj is None:
-        unit_set = access_units
+        unit_set = access_units.prefetch()
     else:
         msg = f"Unsupported result: {obj}"
         raise TypeError(msg)
@@ -595,7 +591,7 @@ def download_translation_file(
             )
         else:
             extension = ".zip"
-            filename = translation.get_filename()
+            filename = translation.get_filename()  # type: ignore[assignment]
             if not filename:
                 msg = "No file to download"
                 raise Http404(msg)

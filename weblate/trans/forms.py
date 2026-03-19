@@ -115,11 +115,12 @@ if TYPE_CHECKING:
 
     from weblate.accounts.models import Profile
     from weblate.auth.models import AuthenticatedHttpRequest
-    from weblate.trans.mixins import BaseURLMixin, URLMixin
+    from weblate.trans.mixins import URLMixin
     from weblate.trans.models import (
         Translation,
     )
     from weblate.trans.models.translation import NewUnitParams
+    from weblate.utils.stats import CategoryLanguage, ProjectLanguage
 
 BUTTON_TEMPLATE = """
 <button type="button" class="btn btn-outline-primary {0}" title="{1}" {2}>{3}</button>
@@ -352,7 +353,7 @@ class PluralTextarea(forms.Textarea):
                 lang_label,
             )
         plural = translation.plural
-        placeables_set = set()
+        placeables_set: set[str] = set()
         for text in plurals:
             placeables_set.update(hl[2] for hl in highlight_string(text, unit))
         placeables = list(placeables_set)
@@ -813,7 +814,14 @@ class SearchForm(forms.Form):
         request: AuthenticatedHttpRequest,
         language: Language | None = None,
         show_builder=True,
-        obj: type[Model | BaseURLMixin] | None = None,
+        obj: Project
+        | Translation
+        | Component
+        | ProjectLanguage
+        | Category
+        | CategoryLanguage
+        | Language
+        | None = None,
         **kwargs,
     ) -> None:
         """Generate choices for other components in the same project."""
@@ -924,18 +932,18 @@ class MergeForm(UnitForm):
         translation = unit.translation
         project = translation.component.project
         try:
-            self.cleaned_data["merge_unit"] = merge_unit = Unit.objects.get(
-                pk=self.cleaned_data["merge"],
-                translation__component__project=project,
-                translation__language=translation.language,
-            )
+            filter_kwargs: dict[str, Any] = {
+                "pk": self.cleaned_data["merge"],
+                "translation__component__project": project,
+                "translation__language": translation.language,
+            }
+            if not translation.is_source:
+                filter_kwargs["source"] = unit.source
+            self.cleaned_data["merge_unit"] = Unit.objects.get(**filter_kwargs)
         except Unit.DoesNotExist as error:
             raise ValidationError(
                 gettext("Could not find the merged string.")
             ) from error
-        # Compare in Python to ensure case sensitiveness on MySQL
-        if not translation.is_source and unit.source != merge_unit.source:
-            raise ValidationError(gettext("Could not find the merged string."))
         return self.cleaned_data
 
 
@@ -1105,7 +1113,7 @@ class AutoForm(forms.Form):
                 raise ValidationError(gettext("Component not found!"))
             try:
                 result = self.components.get(slug=component, project=self.project)
-            except Component.DoesNotExist as error:
+            except (Component.DoesNotExist, Component.MultipleObjectsReturned) as error:
                 raise ValidationError(gettext("Component not found!")) from error
         else:
             try:
@@ -1210,7 +1218,7 @@ class FullLanguageForm(forms.Form):
     lang = forms.MultipleChoiceField(
         label=gettext_lazy("Languages"), choices=[], widget=forms.SelectMultiple
     )
-    project: Project
+    obj: Category | Project
 
     def __init__(self, user: User, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -1226,6 +1234,7 @@ class RestrictedLanguageForm(forms.Form):
     lang = forms.ChoiceField(
         label=gettext_lazy("Language"), choices=[], widget=forms.Select
     )
+    obj: Category | Project
 
     def __init__(self, user: User, *args, **kwargs) -> None:
         super().__init__(user, *args, **kwargs)
@@ -1235,7 +1244,8 @@ class RestrictedLanguageForm(forms.Form):
         ]
 
     def get_lang_objects(self) -> QuerySet[Language]:
-        return super().get_lang_objects().filter_for_add(self.project)
+        project = self.obj.project if isinstance(self.obj, Category) else self.obj
+        return super().get_lang_objects().filter_for_add(project)
 
     def clean_lang(self):
         # Compatibility with NewLanguageOwnerForm
@@ -1248,7 +1258,7 @@ class NewComponentLanguageOwnerForm(FullLanguageForm):
 
     def __init__(self, user: User, component: Component, *args, **kwargs) -> None:
         self.component = component
-        self.project = component.project
+        self.obj = component.project
         super().__init__(user, *args, **kwargs)
 
 
@@ -1256,12 +1266,12 @@ class NewComponentLanguageForm(RestrictedLanguageForm, NewComponentLanguageOwner
     """Form for requesting a new language."""
 
 
-class NewProjectLanguageOwnerForm(FullLanguageForm):
-    """Form for adding a new language to all components in a project."""
+class NewProjectOrCategoryLanguageOwnerForm(FullLanguageForm):
+    """Form for adding a new language to all components in a project or a category."""
 
     def get_lang_objects(self) -> QuerySet[Language]:
         # Get all child components
-        components = self.project.components_user_can_add_new_language(self.user)
+        components = self.obj.components_user_can_add_new_language(self.user)
         components_count = components.count()
 
         # Count source and target languages
@@ -1286,23 +1296,25 @@ class NewProjectLanguageOwnerForm(FullLanguageForm):
         # Exclude already existing languages from the list
         return Language.objects.exclude(id__in=languages_in_all_components)
 
-    def __init__(self, user: User, project: Project, *args, **kwargs) -> None:
-        self.project = project
+    def __init__(self, user: User, obj: Category | Project, *args, **kwargs) -> None:
+        self.obj = obj
         super().__init__(user, *args, **kwargs)
 
 
-class NewProjectLanguageForm(RestrictedLanguageForm, NewProjectLanguageOwnerForm):
+class NewProjectOrCategoryLanguageForm(
+    RestrictedLanguageForm, NewProjectOrCategoryLanguageOwnerForm
+):
     pass
 
 
-def get_new_project_language_form(
-    request: AuthenticatedHttpRequest, project: Project
-) -> type[NewProjectLanguageForm | NewProjectLanguageOwnerForm]:
-    if not request.user.has_perm("translation.add", project):
+def get_new_project_or_category_language_form(
+    request: AuthenticatedHttpRequest, obj: Category | Project
+) -> type[NewProjectOrCategoryLanguageForm | NewProjectOrCategoryLanguageOwnerForm]:
+    if not request.user.has_perm("translation.add", obj):
         raise PermissionDenied
-    if request.user.has_perm("translation.add_more", project):
-        return NewProjectLanguageOwnerForm
-    return NewProjectLanguageForm
+    if request.user.has_perm("translation.add_more", obj):
+        return NewProjectOrCategoryLanguageOwnerForm
+    return NewProjectOrCategoryLanguageForm
 
 
 def get_new_component_language_form(
@@ -1325,7 +1337,7 @@ class ContextForm(FieldDocsMixin, forms.ModelForm):
             "explanation": MarkdownTextarea,
         }
 
-    doc_links: ClassVar[dict[str, str]] = {
+    doc_links: ClassVar[dict[str, tuple[str, str]]] = {
         "explanation": ("admin/translating", "additional-explanation"),
         "labels": ("devel/translations", "labels"),
         "extra_flags": ("admin/translating", "additional-flags"),
@@ -2064,8 +2076,9 @@ class ComponentScratchCreateForm(ComponentProjectForm):
         label=gettext_lazy("File format"),
         initial="po-mono",
         choices=FILE_FORMATS.get_choices(
-            cond=lambda x: bool(x.empty_file_template)
-            or issubclass(x, BilingualUpdateMixin)
+            cond=lambda x: (
+                bool(x.empty_file_template) or issubclass(x, BilingualUpdateMixin)
+            )
         ),
     )
     file_format_params = FormParamsField()
@@ -2361,15 +2374,17 @@ class ProjectSettingsForm(SettingsBaseForm, ProjectDocsMixin, ProjectAntispamMix
             if unlicensed:
                 raise ValidationError(
                     {
-                        "access_control": gettext(
-                            "You must specify a license for these components "
-                            "to make them publicly accessible: %s"
-                        )
-                        % format_html_join_comma(
-                            '<a href="{}">{}</a>',
-                            (
-                                (component.get_absolute_url(), component.name)
-                                for component in unlicensed
+                        "access_control": format_html(
+                            "{} {}",
+                            gettext(
+                                "You must specify a license for these components to make them publicly accessible:"
+                            ),
+                            format_html_join_comma(
+                                '<a href="{}">{}</a>',
+                                (
+                                    (component.get_absolute_url(), component.name)
+                                    for component in unlicensed
+                                ),
                             ),
                         )
                     }
@@ -2918,7 +2933,17 @@ class BulkEditForm(forms.Form):
     )
 
     def __init__(
-        self, user: User | None, obj: URLMixin | None, *args, **kwargs
+        self,
+        user: User | None,
+        obj: Project
+        | Translation
+        | Component
+        | ProjectLanguage
+        | Category
+        | CategoryLanguage
+        | None,
+        *args,
+        **kwargs,
     ) -> None:
         project = kwargs.pop("project", None)
         kwargs["auto_id"] = "id_bulk_%s"

@@ -405,7 +405,14 @@ class ComponentTest(RepoTestCase):
 
     def test_create_tbx(self) -> None:
         component = self.create_tbx()
-        self.verify_component(component, 2, "cs", 4, unit="address bar")
+        self.verify_component(component, 2, "cs", 5, unit="address bar")
+
+        translation = component.translation_set.get(language_code="cs")
+        unit = translation.unit_set.get(source="application")
+        self.assertEqual(
+            unit.source_unit.explanation,
+            "a computer program designed for a specific task or use",
+        )
 
     def test_link(self) -> None:
         component = self.create_link()
@@ -521,7 +528,7 @@ class ComponentTest(RepoTestCase):
         ):
             component.clean()
         self.assertIn(
-            "Push branch cannot be empty when using merge requests",
+            "Push branch cannot be empty when using pull/merge requests",
             str(cm.exception),
         )
 
@@ -533,7 +540,7 @@ class ComponentTest(RepoTestCase):
         ):
             component.clean()
         self.assertIn(
-            "Pull and push branches cannot be the same when using merge requests",
+            "Pull and push branches cannot be the same when using pull/merge requests",
             str(cm.exception),
         )
 
@@ -868,6 +875,19 @@ class ComponentValidationTest(RepoTestCase):
     def test_validation_language_re(self) -> None:
         self.component.language_regex = "[-"
         with self.assertRaises(ValidationError):
+            self.component.full_clean()
+
+    def test_validation_language_re_timeout(self) -> None:
+        with (
+            patch(
+                "weblate.trans.models.component.regex_match",
+                side_effect=TimeoutError,
+            ),
+            self.assertRaisesMessage(
+                ValidationError,
+                "The regular expression is too complex and took too long to evaluate.",
+            ),
+        ):
             self.component.full_clean()
 
     def test_validation_newlang(self) -> None:

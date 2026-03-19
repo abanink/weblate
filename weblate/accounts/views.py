@@ -17,6 +17,7 @@ from base64 import b32encode
 from binascii import unhexlify
 from collections import defaultdict
 from datetime import datetime, timedelta
+from time import monotonic
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import quote, urlparse, urlunparse
 
@@ -80,7 +81,7 @@ from django_otp_webauthn.views import (
     CompleteCredentialAuthenticationView,
 )
 from PIL import Image, UnidentifiedImageError
-from requests.exceptions import JSONDecodeError
+from requests.exceptions import HTTPError, JSONDecodeError
 from rest_framework.authtoken.models import Token
 from social_core.actions import do_auth
 from social_core.backends.base import BaseAuth
@@ -143,7 +144,9 @@ from weblate.accounts.notifications import (
 )
 from weblate.accounts.pipeline import EmailAlreadyAssociated, UsernameAlreadyAssociated
 from weblate.accounts.utils import (
+    SECOND_FACTOR_VERIFY_SECONDS,
     SESSION_SECOND_FACTOR_SOCIAL,
+    SESSION_SECOND_FACTOR_TIMESTAMP,
     SESSION_SECOND_FACTOR_TOTP,
     SESSION_SECOND_FACTOR_USER,
     SESSION_WEBAUTHN_AUDIT,
@@ -291,7 +294,7 @@ def mail_admins_contact(
     )
 
     if not to and settings.ADMINS:
-        to = [a[1] for a in settings.ADMINS]
+        to = list(settings.ADMINS)
     elif not settings.ADMINS:
         messages.error(request, gettext("Could not send message to administrator."))
         LOGGER.error("ADMINS not configured, cannot send message")
@@ -823,7 +826,11 @@ def user_contributions(request: AuthenticatedHttpRequest, user: str):
             "page_user": page_user,
             "page_profile": page_user.profile,
             "page_user_translations": translation_prefetch_tasks(
-                prefetch_stats(get_paginator(request, user_translations))
+                prefetch_stats(
+                    get_paginator(
+                        request, user_translations, sort_by=request.GET.get("sort_by")
+                    )
+                )
             ),
         },
     )
@@ -1072,7 +1079,30 @@ def password(request: AuthenticatedHttpRequest):
     """Password change / set form."""
     do_change = True
     change_form = None
-    usable = request.user.has_usable_password()
+    user = request.user
+    usable = user.has_usable_password()
+
+    if user.profile.has_2fa and (
+        SESSION_SECOND_FACTOR_TIMESTAMP not in request.session
+        or request.session[SESSION_SECOND_FACTOR_TIMESTAMP]
+        + SECOND_FACTOR_VERIFY_SECONDS
+        < monotonic()
+    ):
+        messages.info(
+            request,
+            gettext(
+                "Please confirm your identity using a second factor before proceeding."
+            ),
+        )
+        request.session[SESSION_SECOND_FACTOR_USER] = (
+            user.id,
+            "weblate.accounts.auth.WeblateUserBackend",
+        )
+        login_params: dict[str, str] = {"next": reverse("password")}
+        login_url = reverse(
+            "2fa-login", kwargs={"backend": user.profile.get_second_factor_type()}
+        )
+        return HttpResponseRedirect(f"{login_url}?{urlencode(login_params)}")
 
     if "email" not in get_auth_keys() and not usable:
         messages.error(
@@ -1450,6 +1480,10 @@ def handle_missing_parameter(
         return auth_fail(request, " ".join(error_messages))
     if error.parameter in {"email", "user", "expires"}:
         return auth_redirect_token(request)
+    if error.parameter == "RelayState.idp":
+        return auth_fail(
+            request, gettext("Could not parse RelayState from SAML Identity Provider.")
+        )
     if error.parameter in {"state", "code", "RelayState"}:
         return auth_redirect_state(request)
     if error.parameter == "disabled":
@@ -1538,7 +1572,7 @@ def social_complete(request: AuthenticatedHttpRequest, backend: str):
                 "The supplied user identity is already in use for another account."
             ),
         )
-    except (AuthUnreachableProvider, AuthConnectionError):
+    except (AuthUnreachableProvider, AuthConnectionError, HTTPError):
         return registration_fail(
             request,
             gettext("The authentication provider could not be reached."),
@@ -1642,7 +1676,9 @@ class UserList(ListView):
         if form.is_valid():
             search = form.cleaned_data.get("q", "")
             if search:
-                users = users.search(search, parser=form.fields["q"].parser)
+                users = users.search(
+                    search, parser=form.fields["q"].parser, user=self.request.user
+                )
         else:
             users = users.order()
 
@@ -2301,6 +2337,7 @@ class SecondFactorMixin(View):
         user = self.get_user()
         user.profile.log_2fa(self.request, device)
         del self.request.session[SESSION_SECOND_FACTOR_USER]
+        self.request.session[SESSION_SECOND_FACTOR_TIMESTAMP] = int(monotonic())
 
         if not self.request.session.get(SESSION_SECOND_FACTOR_SOCIAL):
             # Keep login on social pipeline if we got here from it

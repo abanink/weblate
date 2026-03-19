@@ -10,7 +10,7 @@ import os
 from glob import glob
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, NoReturn
+from typing import IO, TYPE_CHECKING, NoReturn
 
 from django.utils.functional import cached_property
 from django.utils.translation import gettext, gettext_lazy
@@ -50,6 +50,7 @@ class TextItem(BaseItem):
         self.line = line
         self.text = text
         self.flags = flags
+        self.needs_save: bool = False
 
     @cached_property
     def location(self) -> str:
@@ -171,7 +172,7 @@ class TextUnit(TranslationUnit):
     @cached_property
     def target(self):
         """Return target string from a ttkit unit."""
-        if self.unit is None:
+        if not self.has_unit():
             return ""
         return self.unit.text
 
@@ -189,6 +190,7 @@ class TextUnit(TranslationUnit):
         """Set translation unit target."""
         self._invalidate_target()
         self.unit.text = target
+        self.unit.needs_save = True
 
     def set_state(self, state) -> None:
         """Set fuzzy /approved flag on translated unit."""
@@ -210,7 +212,7 @@ class AppStoreFormat(TranslationFormat):
 
     def load(
         self,
-        storefile: str | BinaryIO,
+        storefile: str | IO[bytes],
         template_store: TranslationFormat | None,
     ) -> AppStoreParser:
         return AppStoreParser(storefile)
@@ -243,6 +245,8 @@ class AppStoreFormat(TranslationFormat):
     def save(self) -> None:
         """Save underlying store to disk."""
         for unit in self.store.units:
+            if not unit.needs_save:
+                continue
             filename = self.store.get_filename(unit.filename)
             if not unit.text:
                 if os.path.exists(filename):
@@ -255,10 +259,6 @@ class AppStoreFormat(TranslationFormat):
 
     def get_filenames(self):
         return [self.store.get_filename(unit.filename) for unit in self.store.units]
-
-    @classmethod
-    def get_class(cls) -> None:
-        return None
 
     @classmethod
     def is_valid_base_for_new(

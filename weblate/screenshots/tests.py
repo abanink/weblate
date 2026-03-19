@@ -16,6 +16,7 @@ from django.core.files import File
 from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils import timezone
+from PIL import Image
 from rest_framework.test import APITestCase
 
 from weblate.auth.models import Group
@@ -27,12 +28,11 @@ from weblate.trans.models import Change, Project
 from weblate.trans.tests.test_models import RepoTestCase
 from weblate.trans.tests.test_views import FixtureTestCase
 from weblate.trans.tests.utils import create_test_user, get_test_file
-from weblate.utils.db import TransactionsTestMixin
 
 TEST_SCREENSHOT = get_test_file("screenshot.png")
 
 
-class ViewTest(TransactionsTestMixin, FixtureTestCase):
+class ViewTest(FixtureTestCase):
     def test_list_empty(self) -> None:
         response = self.client.get(reverse("screenshots", kwargs=self.kw_component))
         self.assertContains(response, "Screenshots")
@@ -224,8 +224,15 @@ class ViewTest(TransactionsTestMixin, FixtureTestCase):
 
     def test_ocr_backend(self) -> None:
         # Extract strings
-        with get_tesseract(Language.objects.get(code="en")) as api:
-            result = list(ocr_get_strings(api, TEST_SCREENSHOT, 72))
+        with (
+            Image.open(TEST_SCREENSHOT) as image,
+            get_tesseract(Language.objects.get(code="en")) as api,
+        ):
+            result = list(
+                ocr_get_strings(
+                    api, image=image, filename=TEST_SCREENSHOT, resolution=72
+                )
+            )
 
         # Reverse logic would make sense here, but we want to use same order as in views.py
         matches = list(

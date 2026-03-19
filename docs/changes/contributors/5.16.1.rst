@@ -1,0 +1,15 @@
+
+Code contributions
+    .. only:: not gettext
+
+       Michal Čihař, Simon Urli, Karen Konou, Kartik Ohri, Hendrik Leethaus
+
+Translations contributions
+    .. only:: not gettext
+
+       Heimen Stoffels, Michal Čihař, delvani, Yaron Shahrabani, ℂ𝕠𝕠𝕠𝕝 (𝕘𝕚𝕥𝕙𝕦𝕓.𝕔𝕠𝕞/ℂ𝕠𝕠𝕠𝕝), Priit Jõerüüt, Zahid Rizky Fakhri, Pierfrancesco Passerini, Massimo Pissarello, Romhányi-Kakucska Viktor, Mickaël Binos, Milo Ivir, Blueberry, 大王叫我来巡山, VfBFan, Besnik Bleta, Nikolay Korotkiy, Pavel Borecki, Matthaiks, Agnieszka C, Emin Tufan Çetin, Agustina Giselle, Fjuro, RViktor, ojppe, eulalio, Pavel Miniutka, Kristoffer Grundström, Aindriú Mac Giolla Eoin, reducedradius, Максим Горпиніч, Руслан Пузич, Francisco Serrador, Kyotaro Iijima, Petr Kadlec, தமிழ்நேரம், Dick Groskamp, PICOPress, justcontributor, Valentin Ljuba, Daniel Nylander, Arantxa, Marino Díaz, Artemka
+
+Documentation contributions
+    .. only:: not gettext
+
+       Michal Čihař, michael-smt, Kartik Ohri, Hendrik Leethaus

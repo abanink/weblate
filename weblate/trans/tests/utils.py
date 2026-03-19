@@ -79,12 +79,12 @@ def create_test_user() -> User:
     )
 
 
-def create_another_user() -> User:
+def create_another_user(suffix: str = "") -> User:
     return User.objects.create(
-        username="jane",
-        email="jane.doe@example.org",
+        username=f"jane{suffix}",
+        email=f"jane.doe{suffix}@example.org",
         password=TESTPASSWORD,
-        full_name="Jane Doe",
+        full_name=f"Jane Doe{suffix}",
     )
 
 
@@ -336,8 +336,8 @@ class RepoTestMixin:
             **kwargs,
         )
 
-    def create_json(self) -> Component:
-        return self._create_component("json", "json/*.json")
+    def create_json(self, **kwargs) -> Component:
+        return self._create_component("json", "json/*.json", **kwargs)
 
     def create_json_mono(self, suffix="mono", **kwargs) -> Component:
         return self._create_component(
@@ -431,22 +431,38 @@ class RepoTestMixin:
 
     def create_html(self) -> Component:
         return self._create_component(
-            "html", "html/*.html", "html/en.html", edit_template=False
+            "html",
+            "html/*.html",
+            "html/en.html",
+            edit_template=False,
+            manage_units=False,
         )
 
     def create_idml(self) -> Component:
         return self._create_component(
-            "idml", "idml/*.idml", "idml/en.idml", edit_template=False
+            "idml",
+            "idml/*.idml",
+            "idml/en.idml",
+            edit_template=False,
+            manage_units=False,
         )
 
     def create_odt(self) -> Component:
         return self._create_component(
-            "odf", "odt/*.odt", "odt/en.odt", edit_template=False
+            "odf",
+            "odt/*.odt",
+            "odt/en.odt",
+            edit_template=False,
+            manage_units=False,
         )
 
     def create_winrc(self) -> Component:
         return self._create_component(
-            "rc", "winrc/*.rc", "winrc/en-US.rc", edit_template=False
+            "rc",
+            "winrc/*.rc",
+            "winrc/en-US.rc",
+            edit_template=False,
+            manage_units=False,
         )
 
     def create_tbx(self, **kwargs) -> Component:

@@ -20,7 +20,7 @@ from django.shortcuts import redirect
 from django.urls import is_valid_path, reverse
 from django.urls.exceptions import NoReverseMatch
 from django.utils.http import MAX_URL_LENGTH, escape_leading_slashes
-from django.utils.translation import gettext_lazy
+from django.utils.translation import gettext
 from social_core.backends.oauth import OAuthAuth
 from social_core.backends.open_id import OpenIdAuth
 from social_django.utils import load_strategy
@@ -258,7 +258,7 @@ class RedirectMiddleware:
             except UnsupportedPathObjectError:
                 return None
             except Http404:
-                project = self.fixup_project(path[0], request)
+                project = self.fixup_project(path[0], request)  # type: ignore[assignment]
                 if project is None:
                     return None
                 path[0] = project.slug
@@ -287,9 +287,8 @@ class RedirectMiddleware:
                         messages.add_message(
                             request,
                             messages.INFO,
-                            gettext_lazy(
-                                "%s translation is currently not available, "
-                                "but can be added."
+                            gettext(
+                                "%s translation is currently not available, but can be added."
                             )
                             % language_name,
                         )

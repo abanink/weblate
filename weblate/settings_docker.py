@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
+from email.utils import formataddr
 from html import escape
 from logging.handlers import SysLogHandler
 from pathlib import Path
@@ -51,19 +52,15 @@ SITE_URL = f"{'https' if ENABLE_HTTPS else 'http'}://{SITE_DOMAIN}"
 
 DEBUG = get_env_bool("WEBLATE_DEBUG", False)
 
-ADMINS = (
-    (
-        get_env_str("WEBLATE_ADMIN_NAME", "Weblate Admin"),
-        get_env_str("WEBLATE_ADMIN_EMAIL", "weblate@example.com"),
-    ),
-)
+ADMIN_NAME = get_env_str("WEBLATE_ADMIN_NAME", "Weblate Admin")
+ADMIN_EMAIL = get_env_str("WEBLATE_ADMIN_EMAIL", "weblate@example.com")
+ADMINS = (formataddr((ADMIN_NAME, ADMIN_EMAIL)),)
 
 MANAGERS = ADMINS
 
 if get_env_bool("WEBLATE_DATABASES", True):
     DATABASES = {
         "default": {
-            # Use 'postgresql' or 'mysql'.
             "ENGINE": "django.db.backends.postgresql",
             # Database name.
             "NAME": get_env_str(
@@ -423,8 +420,8 @@ if WEBLATE_SAML_IDP:
     # Identity Provider
     SOCIAL_AUTH_SAML_ENABLED_IDPS = {"weblate": WEBLATE_SAML_IDP}
     SOCIAL_AUTH_SAML_SUPPORT_CONTACT = SOCIAL_AUTH_SAML_TECHNICAL_CONTACT = {
-        "givenName": ADMINS[0][0],
-        "emailAddress": ADMINS[0][1],
+        "givenName": ADMIN_NAME,
+        "emailAddress": ADMIN_EMAIL,
     }
     SOCIAL_AUTH_SAML_ORG_INFO = {
         "en-US": {
@@ -704,6 +701,9 @@ VCS_ALLOW_SCHEMES = set(get_env_list("WEBLATE_VCS_ALLOW_SCHEMES", ["https", "ssh
 
 # Email registration filter
 REGISTRATION_EMAIL_MATCH = get_env_str("WEBLATE_REGISTRATION_EMAIL_MATCH", ".*")
+REGISTRATION_ALLOW_DISPOSABLE_EMAILS = get_env_bool(
+    "WEBLATE_REGISTRATION_ALLOW_DISPOSABLE_EMAILS", False
+)
 
 private_commit_email_template_str = get_env_str("WEBLATE_PRIVATE_COMMIT_EMAIL_TEMPLATE")
 if private_commit_email_template_str is not None:
@@ -711,8 +711,16 @@ if private_commit_email_template_str is not None:
 del private_commit_email_template_str
 PRIVATE_COMMIT_EMAIL_OPT_IN = get_env_bool("WEBLATE_PRIVATE_COMMIT_EMAIL_OPT_IN", True)
 
+private_commit_name_template_str = get_env_str("WEBLATE_PRIVATE_COMMIT_NAME_TEMPLATE")
+if private_commit_name_template_str is not None:
+    PRIVATE_COMMIT_NAME_TEMPLATE = private_commit_name_template_str
+del private_commit_name_template_str
+PRIVATE_COMMIT_NAME_OPT_IN = get_env_bool("WEBLATE_PRIVATE_COMMIT_NAME_OPT_IN", True)
+
 # Shortcut for login required setting
 REQUIRE_LOGIN = get_env_bool("WEBLATE_REQUIRE_LOGIN")
+
+PUBLIC_ENGAGE = get_env_bool("WEBLATE_PUBLIC_ENGAGE")
 
 # Middleware
 MIDDLEWARE = [
@@ -1038,9 +1046,6 @@ LOGOUT_URL = f"{URL_PREFIX}/accounts/logout/"
 # Default location for login
 LOGIN_REDIRECT_URL = f"{URL_PREFIX}/"
 
-# Opt-in for Django 6.0 default
-FORMS_URLFIELD_ASSUME_HTTPS = True
-
 # Anonymous user name
 ANONYMOUS_USER_NAME = "anonymous"
 
@@ -1155,6 +1160,7 @@ CHECK_LIST = [
     "weblate.checks.render.MaxSizeCheck",
     "weblate.checks.markup.XMLValidityCheck",
     "weblate.checks.markup.XMLTagsCheck",
+    "weblate.checks.markup.XMLCharsAroundTagsCheck",
     "weblate.checks.markup.MarkdownRefLinkCheck",
     "weblate.checks.markup.MarkdownLinkCheck",
     "weblate.checks.markup.MarkdownSyntaxCheck",

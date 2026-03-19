@@ -15,7 +15,6 @@ from weblate.trans.actions import ActionEvents
 from weblate.trans.models import Change, Project, Unit
 from weblate.trans.tests.test_views import ViewTestCase
 from weblate.trans.util import PLURAL_SEPARATOR
-from weblate.utils.db import using_postgresql
 from weblate.utils.search import SearchQueryError, parse_query
 from weblate.utils.state import (
     FUZZY_STATES,
@@ -130,11 +129,10 @@ class UnitQueryParserTest(SearchTestCase):
         with self.assertRaises(SearchQueryError):
             self.assert_query('source:r"^(hello"', Q(source__trgm_regex="^(hello"))
         # Not supported regex on PostgreSQL
-        if using_postgresql():
-            with self.assertRaises(SearchQueryError):
-                self.assert_query(
-                    'source:r"^(?i)hello"', Q(source__trgm_regex="^(?i)hello")
-                )
+        with self.assertRaises(SearchQueryError):
+            self.assert_query(
+                'source:r"^(?i)hello"', Q(source__trgm_regex="^(?i)hello")
+            )
         self.assert_query('source:r"(?i)^hello"', Q(source__trgm_regex="(?i)^hello"))
 
     def test_logic(self) -> None:
@@ -428,28 +426,6 @@ class UnitQueryParserTest(SearchTestCase):
             "suggestion_author:nijel", Q(suggestion__user__username__iexact="nijel")
         )
 
-    def test_checks(self) -> None:
-        self.assert_query(
-            "check:ellipsis",
-            Q(check__name__iexact="ellipsis") & Q(check__dismissed=False),
-        )
-        self.assert_query(
-            "dismissed_check:ellipsis",
-            Q(check__name__iexact="ellipsis") & Q(check__dismissed=True),
-        )
-
-    def test_labels(self) -> None:
-        self.assert_query(
-            "label:'test label'", Q(source_unit__labels__name__iexact="test label")
-        )
-
-    def test_screenshot(self) -> None:
-        self.assert_query(
-            "screenshot:'test screenshot'",
-            Q(source_unit__screenshots__name__iexact="test screenshot")
-            | Q(screenshots__name__iexact="test screenshot"),
-        )
-
     def test_priority(self) -> None:
         self.assert_query("priority:10", Q(priority=10))
         self.assert_query("priority:>=10", Q(priority__gte=10))
@@ -680,23 +656,30 @@ class UserQueryParserTest(SearchTestCase):
         )
 
     def test_contributes(self) -> None:
+        user = User.objects.create(is_superuser=True)
         self.assert_query(
             "contributes:test",
-            Q(change__project__slug__iexact="test"),
+            Q(change__project__slug__iexact="test")
+            & Q(change__project__in=user.allowed_projects),
+            user=user,
         )
         self.assert_query(
             "contributes:test/test",
-            Q(change__component_id__in=[]),
+            Q(change__component_id__in=[])
+            & Q(change__project__in=user.allowed_projects),
+            user=user,
         )
         self.assert_query(
             "contributes:test change_time:>'90 days ago'",
             Q(change__project__slug__iexact="test")
+            & Q(change__project__in=user.allowed_projects)
             & Q(
                 change__timestamp__gte=datetime.now(tz=UTC).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
                 - timedelta(days=90)
             ),
+            user=user,
         )
 
 
@@ -737,10 +720,7 @@ class SearchTest(ViewTestCase, SearchTestCase):
         glossary = self.project.glossaries[0].translation_set.get(language_code="cs")
         glossary.add_unit(None, "", "hello", "ahoj", author=self.user)
 
-        if using_postgresql():
-            expected = "[[:<:]](hello)[[:>:]]"
-        else:
-            expected = r"(^|[ \t\n\r\f\v])(hello)($|[ \t\n\r\f\v])"
+        expected = "[[:<:]](hello)[[:>:]]"
         self.assert_query(
             "has:glossary",
             Q(source__iregex=expected),

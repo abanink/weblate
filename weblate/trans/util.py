@@ -11,7 +11,7 @@ import re
 import sys
 from operator import itemgetter
 from types import GeneratorType
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import django.shortcuts
@@ -33,11 +33,12 @@ if TYPE_CHECKING:
 
     from django.db.models import Model
     from django.shortcuts import SupportsGetAbsoluteUrl
+    from translate.storage.placeables import StringElem
 
     from weblate.auth.models import User
     from weblate.auth.results import PermissionResult
     from weblate.lang.models import Language
-    from weblate.trans.models import Project, Translation, Unit
+    from weblate.trans.models import Project, Translation
 
 
 def detect_strxfrm() -> bool:
@@ -126,24 +127,6 @@ def is_repo_link(val: str) -> bool:
     return val.startswith("weblate://")
 
 
-def get_distinct_translations(units: Iterable[Unit]) -> list[Unit]:
-    """
-    Return list of distinct translations.
-
-    It should be possible to use distinct('target') since Django 1.4, but it is not
-    supported with MySQL, so let's emulate that based on presumption we won't get too
-    many results.
-    """
-    targets = {}
-    result = []
-    for unit in units:
-        if unit.target in targets:
-            continue
-        targets[unit.target] = 1
-        result.append(unit)
-    return result
-
-
 def translation_percent(
     translated: int, total: int, zero_complete: bool = True
 ) -> float:
@@ -152,13 +135,13 @@ def translation_percent(
         return 100.0 if zero_complete else 0.0
     if total is None:
         return 0.0
-    perc = (1000 * translated // total) / 10.0
+    promile = 1000 * translated // total
     # Avoid displaying misleading rounded 0.0% or 100.0%
-    if perc == 0.0 and translated != 0:
+    if promile == 0 and translated != 0:
         return 0.1
-    if perc == 100.0 and translated < total:
+    if promile == 1000 and translated < total:
         return 99.9
-    return perc
+    return promile / 10
 
 
 def get_clean_env(
@@ -200,7 +183,7 @@ def get_clean_env(
     for var in variables:
         if var in os.environ:
             environ[var] = os.environ[var]
-    # Extend path to include virtualenv, avoid insert already existing ones to
+    # Extend path to include Python environment, avoid inserting already existing ones to
     # not break existing ordering (for example PATH injection used in tests)
     venv_path = os.path.join(sys.exec_prefix, "bin")
     if venv_path not in environ["PATH"]:
@@ -298,10 +281,7 @@ def path_separator(path: str) -> str:
     return path
 
 
-T = TypeVar("T")
-
-
-def sort_unicode(choices: list[T], key: Callable[[T], str]) -> list[T]:
+def sort_unicode[T](choices: Iterable[T], key: Callable[[T], str]) -> list[T]:
     """Unicode aware sorting if available."""
 
     def sort_strxfrm(item: T) -> str:
@@ -333,7 +313,7 @@ def redirect_next(
     return HttpResponseRedirect(next_url)
 
 
-def xliff_string_to_rich(string: str):
+def xliff_string_to_rich(string: str | list[str]) -> list[StringElem]:
     """
     Convert XLIFF string to StringElement.
 
@@ -345,7 +325,7 @@ def xliff_string_to_rich(string: str):
     return [parse_xliff(string)]
 
 
-def rich_to_xliff_string(string_elements):
+def rich_to_xliff_string(string_elements: list[StringElem]) -> str:
     """
     Convert StringElement to XLIFF string.
 

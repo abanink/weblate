@@ -71,6 +71,7 @@ Defaults to `[*]` which will allow all domains.
 This is currently used in the following places:
 
 * Screenshot uploads, see :ref:`screenshots`
+* Remote HTML downloads for the :ref:`addon-weblate.cdn.cdnjs` add-on
 
 .. seealso::
 
@@ -1468,14 +1469,53 @@ PRIVATE_COMMIT_EMAIL_TEMPLATE
 
 .. versionadded:: 4.15
 
-Template to generate private commit e-mail for an user. Defaults to ``"{username}@users.noreply.{site_domain}"``.
+Template to generate a private commit e-mail for a user. Defaults to ``"{username}@users.noreply.{site_domain}"``.
+
+It can contain ``{user_id}``, ``{username}``, ``{site_title}``, and ``{site_domain}``.
 
 Set to blank string to disable.
 
 .. note::
 
-   Using different commit e-mail is opt-in for users unless configured by
-   :setting:`PRIVATE_COMMIT_EMAIL_OPT_IN`. Users can configure commit e-mail in
+   Using a different commit e-mail is opt-in for users unless configured by
+   :setting:`PRIVATE_COMMIT_EMAIL_OPT_IN`. Users can configure their commit e-mail in
+   the :ref:`profile`.
+
+.. setting:: PRIVATE_COMMIT_NAME_OPT_IN
+
+PRIVATE_COMMIT_NAME_OPT_IN
+--------------------------
+
+.. versionadded:: 5.16
+
+Configures whether the private commit name is opt-in or opt-out (by default it is opt-in).
+
+.. hint::
+
+   This setting only applies to users which have not explicitly chosen a commit name.
+
+.. seealso::
+
+   * :ref:`profile`
+   * :setting:`PRIVATE_COMMIT_NAME_TEMPLATE`
+
+.. setting:: PRIVATE_COMMIT_NAME_TEMPLATE
+
+PRIVATE_COMMIT_NAME_TEMPLATE
+----------------------------
+
+.. versionadded:: 5.16
+
+Template to generate a private commit name for a user. Defaults to ``"{site_title} user {user_id}"``.
+
+It can contain ``{user_id}``, ``{username}``, ``{site_title}``, and ``{site_domain}``.
+
+Set to blank string to disable.
+
+.. note::
+
+   Using a different commit name is opt-in for users unless configured by
+   :setting:`PRIVATE_COMMIT_NAME_OPT_IN`. Users can configure their commit name in
    the :ref:`profile`.
 
 .. setting:: PROJECT_BACKUP_KEEP_COUNT
@@ -1571,6 +1611,19 @@ Defines a regular expression to limit what can be entered as :ref:`project-web`.
    * :ref:`project-web`
    * :setting:`PROJECT_WEB_RESTRICT_HOST`
    * :setting:`PROJECT_WEB_RESTRICT_NUMERIC`
+
+.. setting:: PUBLIC_ENGAGE
+
+PUBLIC_ENGAGE
+-------------
+
+.. versionadded:: 5.16.2
+
+Allows public engage page even with :setting:`REQUIRE_LOGIN`.
+
+.. seealso::
+
+   * :ref:`promotion`
 
 .. setting:: RATELIMIT_NOTIFICATION_LIMITS
 
@@ -1705,6 +1758,21 @@ You can use it to restrict registration to a single e-mail domain:
 .. code-block:: python
 
     REGISTRATION_EMAIL_MATCH = r"^.*@weblate\.org$"
+
+.. setting:: REGISTRATION_ALLOW_DISPOSABLE_EMAILS
+
+REGISTRATION_ALLOW_DISPOSABLE_EMAILS
+-------------------------------------
+
+.. versionadded:: 5.16.1
+
+Allow registration with disposable e-mail domains. When enabled, the
+disposable domain blocklist is bypassed. Default is ``False``.
+
+.. seealso::
+
+   - :setting:`REGISTRATION_EMAIL_MATCH`
+   - :envvar:`WEBLATE_REGISTRATION_ALLOW_DISPOSABLE_EMAILS`
 
 .. setting:: REGISTRATION_OPEN
 

@@ -681,6 +681,19 @@ Generic settings
 
    Configures :std:setting:`REGISTRATION_REBIND`.
 
+.. envvar:: WEBLATE_REGISTRATION_ALLOW_DISPOSABLE_EMAILS
+
+   .. versionadded:: 5.16.1
+
+   Configures :setting:`REGISTRATION_ALLOW_DISPOSABLE_EMAILS`.
+
+   **Example:**
+
+   .. code-block:: yaml
+
+      environment:
+        WEBLATE_REGISTRATION_ALLOW_DISPOSABLE_EMAILS: 1
+
 .. envvar:: WEBLATE_TIME_ZONE
 
     Configures the used time zone in Weblate, see :std:setting:`django:TIME_ZONE`.
@@ -798,6 +811,10 @@ Generic settings
 
         environment:
           WEBLATE_REQUIRE_LOGIN: 1
+
+.. envvar:: WEBLATE_PUBLIC_ENGAGE
+
+   Enables :setting:`PUBLIC_ENGAGE`.
 
 .. envvar:: WEBLATE_GOOGLE_ANALYTICS_ID
 
@@ -1029,6 +1046,18 @@ Generic settings
    .. versionadded:: 4.15
 
    Configures :setting:`PRIVATE_COMMIT_EMAIL_OPT_IN`.
+
+.. envvar:: WEBLATE_PRIVATE_COMMIT_NAME_TEMPLATE
+
+   .. versionadded:: 5.16
+
+   Configures :setting:`PRIVATE_COMMIT_NAME_TEMPLATE`.
+
+.. envvar:: WEBLATE_PRIVATE_COMMIT_NAME_OPT_IN
+
+   .. versionadded:: 5.16
+
+   Configures :setting:`PRIVATE_COMMIT_NAME_OPT_IN`.
 
 .. envvar:: WEBLATE_UNUSED_ALERT_DAYS
 
@@ -1636,13 +1665,6 @@ both Weblate and PostgreSQL containers.
    Set to false to disables environment based configuration of the database
    connection. Use :ref:`docker-settings-override` to configure the database
    connection manually.
-
-MySQL or MariaDB server
-+++++++++++++++++++++++
-
-Neither MySQL nor MariaDB can not be configured via environment variables. See
-:ref:`mysql` for info on using those with Weblate. Use :envvar:`WEBLATE_DATABASES`
-to configure the database connection manually.
 
 Database backup settings
 ++++++++++++++++++++++++
