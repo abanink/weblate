@@ -2120,7 +2120,7 @@ class VerifiedRemoteUser:
 
 @async_to_sync
 async def owa_server(request):
-    ret_response = {"success": "false"}
+    ret_response = {"success": False}
     LOGGER.info("Hit OWA endpoint")
 
     def generate_token(length=32):
@@ -2154,7 +2154,7 @@ async def owa_server(request):
         LOGGER.debug(f"Address: {address} - Avatar link: {avatar_link}")
         avatar_image_mgr.fetch(address, avatar_link)
 
-        ret_response["success"] = "true"
+        ret_response["success"] = True 
         ret_response["encrypted_token"] = encrypted_token
 
     except InvalidSignature:
