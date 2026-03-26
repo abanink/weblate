@@ -14,6 +14,9 @@ from django.dispatch.dispatcher import receiver
 
 from weblate.auth.models import User
 
+from weblate.logger import LOGGER
+from weblate.utils.requests import http_request
+
 if TYPE_CHECKING:
     from weblate.auth.models import AuthenticatedHttpRequest
 
@@ -57,3 +60,58 @@ def disable_anon_user_password_save(sender, instance, **kwargs) -> None:
     if instance.is_anonymous and instance.has_usable_password():
         msg = "Anonymous user can not have usable password!"
         raise ValueError(msg)
+
+
+# Note: to activate the OpenWebAuth Backend, the administrator must add this to weblate/settings.py:
+#AUTHENTICATION_BACKENDS = (
+#    ...
+#    "weblate.accounts.auth.OpenWebAuthBackend",
+#)
+
+# https://docs.djangoproject.com/en/6.0/ref/contrib/auth/#django.contrib.auth.backends.RemoteUserBackend
+# https://docs.djangoproject.com/en/6.0/howto/auth-remote-user/
+class OpenWebAuthBackend(RemoteUserBackend, WeblateUserBackend):
+    def configure_user(self, request, user, created):
+        LOGGER.info(f"OpenWebAuthBackend.configure_user called for user {user}")
+
+        # disabled for testing; before releasing, re-activate this
+        #if not created:
+        #    LOGGER.info("User existed before - skipping")
+        #    return user
+        
+        LOGGER.info(f"user info: username: {user.get_username()} / full name: {user.get_full_name()} / short: {user.get_short_name()}")
+
+        # if the user was created, set minimal info like a usable (but unknown) password and email address (fetched as OpenWebAuth client)
+        LOGGER.info(f"Configuring new user now, username = {user.username}")
+        
+    #    server_domain = settings.SITE_DOMAIN
+    #    user_domain = user.username.rpartition('@')[2]
+    #    if user_domain is None:
+    #        LOGGER.debug(f"Cannot determine domain from username {user.username}")
+    #        return user
+       
+        # for email fetching: request on the remote user's domain for /userinfo?zid=sys@<this server domain>&rel=email with Accept-Content = application/json
+        # sys@ prefix for our site actor handle because remote software expects a handle like me@example.com, and takes the part after @ as the domain
+        #
+        # The remote domain should answer with the email address in JSON format if the user approved sharing his email address
+        # {
+        #    "email": "<user's email address"
+        #}
+       # request_url = f"https://{user_domain}/userinfo?zid=sys@{server_domain}&rel=email"
+       # LOGGER.info(f"Request url = {request_url}")
+        #user_info_response = http_request("get", request_url)
+        LOGGER.info(f"[email retrieval via userinfo endpoint is DEACTIVATED]")
+        
+        #LOGGER.info(f"Response from remote server: {user_info_response}") 
+
+        # set email to channel handle
+        # not setting an email will at least cause avatars not to be correct 
+        LOGGER.info(f"setting email to {user.username}")
+        user.email = user.username
+
+        # Set unusable password
+        user.set_unusable_password()
+        user.save()
+        LOGGER.info("marked password as unusable")
+
+        return user
