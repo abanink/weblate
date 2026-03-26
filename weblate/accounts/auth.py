@@ -70,14 +70,14 @@ def disable_anon_user_password_save(sender, instance, **kwargs) -> None:
 
 # https://docs.djangoproject.com/en/6.0/ref/contrib/auth/#django.contrib.auth.backends.RemoteUserBackend
 # https://docs.djangoproject.com/en/6.0/howto/auth-remote-user/
-class OpenWebAuthBackend(RemoteUserBackend, WeblateUserBackend):
+class OpenWebAuthBackend(RemoteUserBackend):
     def configure_user(self, request, user, created):
-        LOGGER.info(f"OpenWebAuthBackend.configure_user called for user {user}")
+        LOGGER.info(f"OpenWebAuthBackend.configure_user called for user {user}, created = {created}")
 
         # disabled for testing; before releasing, re-activate this
-        #if not created:
-        #    LOGGER.info("User existed before - skipping")
-        #    return user
+        if not created:
+            LOGGER.info("User existed before - skipping user configuration")
+            return user
         
         LOGGER.info(f"user info: username: {user.get_username()} / full name: {user.get_full_name()} / short: {user.get_short_name()}")
 
