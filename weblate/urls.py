@@ -1135,3 +1135,9 @@ if not URL_PREFIX:
     urlpatterns = real_patterns
 else:
     urlpatterns = [path(URL_PREFIX, include(real_patterns))]
+
+# OpenWebAuth: /owa must exist on the webservice root
+if "django_auth_openwebauth" in settings.INSTALLED_APPS:
+    urlpatterns.append(
+        path("", include("django_auth_openwebauth.urls")),
+    )
